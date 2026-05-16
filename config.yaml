@@ -1,11 +1,15 @@
 # Versioned directories (used with config.get_dir_path())
 versions:
-  osm_data: "20260416"
+  osm_data: "20260515"
   model_output: "20260422_by_shared_label"
   snapshot_osm: "20260417"
   snapshot_overture: "20260423"
   conflation: "20260423"
   source_coop: "2026-04-23-v0"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
+  # Ghost POI dataset reconstructed from OSM history (one row per
+  # detected previous-state event). Pinned to the same value as
+  # ``osm_data`` since it is derived from the same history parquets.
+  ghost_osm: "20260515"
 
 # Settings for downloading data
 download:
@@ -188,6 +192,11 @@ directories:
       partitioned: conflated_partitioned
       pmtiles: conflated.pmtiles
       summary_by_label: summary_by_label.csv
+  ghost_osm:
+    versioned: true
+    path: ~/data/openpois/ghost_osm
+    files:
+      ghosts: ghosts.parquet
   testing:
     versioned: false
     path: ~/data/openpois/testing
@@ -222,6 +231,23 @@ conflation:
     ymin: 47.50
     xmax: -122.25
     ymax: 47.70
+  # Change-detection feature: use OSM history to penalize Overture POIs
+  # that co-locate with a "ghost" — a previous state of an OSM element
+  # (primary-tag deletion, lifecycle-prefix addition, or substantial
+  # rename). Disabled by default for clean A/B testing.
+  change_detection:
+    enabled: false
+    # Minimum composite score for an Overture × ghost shadow match.
+    # Same scale as the main matcher's min_match_score.
+    min_shadow_match_score: 0.50
+    # rapidfuzz.fuzz.token_set_ratio threshold below which an OSM name
+    # change is considered a "substantial rename" rather than a typo
+    # fix. Range 0-100. Lower = stricter (fewer events emitted).
+    name_change_similarity_threshold: 50
+    # Fallback delta for ghosts whose shared_label isn't in the fitted
+    # model's per-group params. Equals sigmoid(logit_delta_0) for the
+    # current 20260422_by_shared_label fit (logit_delta_0 = -2.72).
+    default_delta: 0.062
 
 # Settings for publishing snapshots to Source Cooperative
 # (https://source.coop/henryspatialanalysis/openpois). Source Coop is

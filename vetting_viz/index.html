@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>openpois — change-detection vetting</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+        crossorigin="">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header>
+    <h1>change-detection vetting</h1>
+    <div class="header-actions">
+      <label class="file-picker">
+        <span>Load CSV</span>
+        <input type="file" id="csv-input" accept=".csv,text/csv">
+      </label>
+      <button id="export-btn" disabled>Export CSV</button>
+    </div>
+  </header>
+
+  <main>
+    <aside id="sidebar">
+      <section>
+        <h2>Stats</h2>
+        <dl id="stats">
+          <dt>Visible / total</dt><dd id="stat-total">—</dd>
+          <dt>Unvetted</dt><dd id="stat-unvetted" class="stat-unvetted">—</dd>
+          <dt>True drop</dt><dd id="stat-true" class="stat-true">—</dd>
+          <dt>False drop</dt><dd id="stat-false" class="stat-false">—</dd>
+        </dl>
+      </section>
+
+      <section>
+        <h2>Filter by POI type</h2>
+        <div class="filter-controls">
+          <button id="type-all" class="link-btn">all</button>
+          <button id="type-none" class="link-btn">none</button>
+        </div>
+        <div id="type-filter" class="filter-list"></div>
+      </section>
+
+      <section>
+        <h2>Filter by status</h2>
+        <div id="status-filter" class="filter-list">
+          <label><input type="checkbox" value="Unvetted" checked> Unvetted</label>
+          <label><input type="checkbox" value="True drop" checked> True drop</label>
+          <label><input type="checkbox" value="False drop" checked> False drop</label>
+        </div>
+      </section>
+
+      <p class="hint">Click a point to open its details and toggle the vetting status. Changes stay in the browser tab — click <em>Export CSV</em> to save your work.</p>
+    </aside>
+
+    <div id="map-container">
+      <div id="map"></div>
+      <div id="empty-overlay" class="empty-overlay">Load a CSV to begin.</div>
+    </div>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+          crossorigin=""></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

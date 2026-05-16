@@ -230,6 +230,28 @@ def download_history_pbf(
 # -----------------------------------------------------------------------------
 
 
+def _extract_poi_ids(
+    tag_filtered_pbf: Path,
+    ids_path: Path,
+) -> Path:
+    """Write a sorted list of unique ``<type><id>`` strings (e.g.
+    ``n12345``, ``w67890``) for every element seen in a tag-filtered
+    history PBF.
+
+    Used as the input to ``osmium getid`` in the second filter pass.
+    """
+    seen: set[tuple[str, int]] = set()
+    fp = osmium.FileProcessor(str(tag_filtered_pbf))
+    for obj in fp:
+        kind = "n" if obj.is_node() else ("w" if obj.is_way() else "r")
+        seen.add((kind, int(obj.id)))
+    ids_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(ids_path, "w") as f:
+        for kind, oid in sorted(seen):
+            f.write(f"{kind}{oid}\n")
+    return ids_path
+
+
 def filter_history_pbf(
     input_pbf: Path,
     output_pbf: Path,
@@ -237,28 +259,41 @@ def filter_history_pbf(
     overwrite: bool = False,
 ) -> Path:
     """
-    Runs osmium tags-filter --omit-referenced on a full-history PBF.
+    Two-pass POI extraction from a full-history PBF.
 
-    --omit-referenced is required for history files: multi-pass filtering
-    (the default mode used by filter_pbf in osm_snapshot.py) fails on
-    .osh.pbf. --omit-referenced does a single pass and emits only the
-    matching objects themselves; referenced node coordinates are not
-    retained. This is fine for the change-rate pipeline because we never
-    resolve way geometry downstream.
+    A single ``osmium tags-filter`` pass drops every version whose tags
+    don't match the filter expression — including **deletion versions**,
+    which carry no tags. That's a significant loss for the change-rate
+    pipeline: we never see ``visible: true → false`` transitions.
 
-    The ``--output-format=osh.pbf`` flag keeps the output in history format.
+    To recover deletions while still narrowing to POI elements, we run
+    two osmium-tool passes:
+
+    1. ``osmium tags-filter --omit-referenced`` on the raw history PBF
+       produces an intermediate file (``<output_stem>-tagfilt.osh.pbf``)
+       containing only versions whose tags match. We use this only to
+       enumerate the set of element IDs that have ever carried a POI
+       tag.
+    2. ``osmium getid --with-history`` on the **raw** history PBF, given
+       that ID list, produces the final filtered history PBF —
+       preserving *every* version (including invisible deletion
+       versions) of every POI-tagged element.
+
+    The intermediate tag-filter file and the IDs list are removed after
+    pass 2 completes successfully.
 
     Args:
         input_pbf: Path to the raw history PBF.
-        output_pbf: Path to write the filtered history PBF.
-        osm_keys: OSM tag keys to retain (e.g., ['amenity', 'shop']).
-        overwrite: If False and output_pbf exists, skip filtering.
+        output_pbf: Path to write the final two-pass filtered PBF.
+        osm_keys: OSM tag keys identifying POIs.
+        overwrite: If False and ``output_pbf`` exists, skip filtering.
 
     Returns:
         Path to the filtered PBF file.
 
     Raises:
-        subprocess.CalledProcessError: If osmium exits with non-zero status.
+        subprocess.CalledProcessError: If osmium exits with non-zero
+            status on either pass.
     """
     output_pbf = Path(output_pbf)
     if output_pbf.exists() and not overwrite:
@@ -271,16 +306,49 @@ def filter_history_pbf(
     output_pbf.parent.mkdir(parents=True, exist_ok=True)
     osmium_bin = _resolve_osmium()
     key_args = [f"nwr/{key}" for key in osm_keys]
-    cmd = [
+
+    # Intermediate paths under the same directory as the final output.
+    stem = output_pbf.stem  # e.g. "us-pois"
+    tagfilt_pbf = output_pbf.with_name(f"{stem}-tagfilt.osh.pbf")
+    ids_path = output_pbf.with_name(f"{stem}-ids.txt")
+
+    # Pass 1: tag filter to identify POI elements.
+    cmd_tagfilt = [
         osmium_bin, "tags-filter",
         "--omit-referenced",
         "--overwrite",
         "--output-format=osh.pbf",
-        "-o", str(output_pbf),
+        "-o", str(tagfilt_pbf),
         str(input_pbf),
     ] + key_args
-    print(f"Running: {' '.join(cmd)}")
-    subprocess.run(cmd, check=True)
+    print(f"Running: {' '.join(cmd_tagfilt)}")
+    subprocess.run(cmd_tagfilt, check=True)
+
+    # Extract IDs from the intermediate.
+    print(f"Extracting element IDs from {tagfilt_pbf} ...")
+    _extract_poi_ids(tagfilt_pbf, ids_path)
+
+    # Pass 2: getid --with-history pulls every version (including
+    # deletions) of those elements from the RAW history PBF.
+    cmd_getid = [
+        osmium_bin, "getid",
+        "--with-history",
+        "--overwrite",
+        "--output-format=osh.pbf",
+        "-i", str(ids_path),
+        "-o", str(output_pbf),
+        str(input_pbf),
+    ]
+    print(f"Running: {' '.join(cmd_getid)}")
+    subprocess.run(cmd_getid, check=True)
+
+    # Clean up intermediates so versioned dirs don't accumulate them.
+    try:
+        tagfilt_pbf.unlink()
+        ids_path.unlink()
+    except OSError:
+        pass
+
     print(f"Filtered history PBF written to {output_pbf}")
     return output_pbf
 
