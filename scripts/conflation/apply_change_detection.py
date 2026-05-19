@@ -72,6 +72,26 @@ def main() -> None:
             "Use when the baseline was produced with --test."
         ),
     )
+    parser.add_argument(
+        "--min-prior-name-score",
+        type = float,
+        default = None,
+        help = (
+            "Override config's min_prior_name_match_score. Higher "
+            "values require a stricter Overture-name vs ghost-prior-"
+            "name token_set_ratio match before a penalty fires. "
+            "Default config value implements decision rule A "
+            "(name-match required)."
+        ),
+    )
+    parser.add_argument(
+        "--no-survivor-filter",
+        action = "store_true",
+        help = (
+            "Disable the current-OSM-survivor post-filter for this "
+            "run. Used for ablation against the vetted set."
+        ),
+    )
     args = parser.parse_args()
 
     config = Config("~/repos/openpois/config.yaml")
@@ -93,6 +113,17 @@ def main() -> None:
     cd_cfg = config.get("conflation", "change_detection")
     min_match_score = float(cd_cfg["min_shadow_match_score"])
     default_delta = float(cd_cfg["default_delta"])
+    min_prior_name_match_score = float(
+        cd_cfg.get("min_prior_name_match_score", 0)
+    )
+    if args.min_prior_name_score is not None:
+        min_prior_name_match_score = float(args.min_prior_name_score)
+
+    survivor_filter = cd_cfg.get("suppress_if_current_survivor") or {}
+    if args.no_survivor_filter:
+        survivor_filter = dict(survivor_filter)
+        survivor_filter["enabled"] = False
+        print("Current-OSM-survivor filter disabled for this run.")
 
     max_radius_m = float(config.get("conflation", "max_radius_m"))
     default_radius_m = float(
@@ -105,6 +136,12 @@ def main() -> None:
         config.get("conflation", "identifier_weight")
     )
 
+    # R1 needs the rated snapshot; no other auxiliary inputs are
+    # needed by the simplified pipeline.
+    rated_snapshot_path = config.get_file_path(
+        "snapshot_osm", "rated_snapshot",
+    )
+
     test_bbox = (
         config.get("conflation", "test_bbox") if args.test else None
     )
@@ -113,10 +150,12 @@ def main() -> None:
     print(f"Ghosts:   {ghosts_path}")
     print(f"Fitted params: {fitted_params_path}")
     print(f"Output:   {output_path}")
+    print(f"Rated snapshot (survivor filter): {rated_snapshot_path}")
     print(
         f"min_match_score={min_match_score} "
         f"max_radius_m={max_radius_m} "
-        f"default_delta={default_delta}"
+        f"default_delta={default_delta} "
+        f"min_prior_name_match_score={min_prior_name_match_score}"
     )
     if args.test:
         print(f"Test bbox: {test_bbox}")
@@ -136,6 +175,9 @@ def main() -> None:
         identifier_weight = identifier_weight,
         default_delta = default_delta,
         test_bbox = test_bbox,
+        rated_snapshot_path = rated_snapshot_path,
+        survivor_filter = survivor_filter,
+        min_prior_name_match_score = min_prior_name_match_score,
     )
     elapsed = time.time() - t0
 
@@ -147,8 +189,12 @@ def main() -> None:
     )
     print(f"  Ghosts considered:          {summary['n_ghosts']:,}")
     print(
-        f"  Shadow matches:             "
+        f"  Shadow matches (final):     "
         f"{summary['n_shadow_matches']:,}"
+    )
+    print(
+        f"  Dropped by survivor filter: "
+        f"{summary['n_survivor_dropped']}"
     )
     print(
         f"  Mean penalty factor (Δ/old): "

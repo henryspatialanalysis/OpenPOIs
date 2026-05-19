@@ -248,6 +248,31 @@ conflation:
     # model's per-group params. Equals sigmoid(logit_delta_0) for the
     # current 20260422_by_shared_label fit (logit_delta_0 = -2.72).
     default_delta: 0.062
+    # Hard gate on Overture-name vs ghost-prior-name token_set_ratio
+    # (0-100), applied *before* the composite-score-based shadow
+    # matcher. The default 0 keeps the loose matcher: any spatial +
+    # type + composite match above ``min_shadow_match_score`` will
+    # fire, even when Overture's name doesn't lexically match the
+    # OSM ghost. This is intentional. A higher value would only
+    # fire when Overture is showing the *same name* OSM closed,
+    # which we explored in May 2026 (decision rule A) and rejected
+    # because it loses the bulk of real closures where Overture has
+    # already updated to a different current name at a churned
+    # address (Sleep Train → Roosevelt Square etc.). Knob retained
+    # for future data-quality-only modes; leave at 0 for production
+    # change detection.
+    min_prior_name_match_score: 0
+    suppress_if_current_survivor:
+      # Belt-and-suspenders post-filter: drop the penalty if a
+      # *current* OSM POI within radius_m has name token_set_ratio
+      # >= threshold against the Overture name. Catches cases where
+      # the POI is still in OSM under different geometry (e.g.,
+      # node remapped to a building way) and the primary matcher
+      # missed it. Kept enabled because it's cheap and orthogonal
+      # to min_prior_name_match_score.
+      enabled: true
+      radius_m: 50
+      name_similarity_threshold: 70
 
 # Settings for publishing snapshots to Source Cooperative
 # (https://source.coop/henryspatialanalysis/openpois). Source Coop is
