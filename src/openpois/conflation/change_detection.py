@@ -30,6 +30,7 @@ import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 from rapidfuzz import fuzz
+from sklearn.neighbors import BallTree
 
 from openpois.conflation.ghost_osm import _is_token_subset_or_superset
 from openpois.conflation.match import (
@@ -240,6 +241,9 @@ def find_shadow_matches(
     ].reset_index(drop = True)
 
 
+_EARTH_RADIUS_M = 6_371_000.0
+
+
 def apply_current_survivor_filter(
     matches: pd.DataFrame,
     unmatched_overture: gpd.GeoDataFrame,
@@ -248,21 +252,39 @@ def apply_current_survivor_filter(
     radius_m: float,
     name_similarity_threshold: float,
     test_bbox: dict | None = None,
-    duckdb_memory_limit: str = "6GB",
+    query_chunk_size: int = 50_000,
     verbose: bool = True,
 ) -> tuple[pd.DataFrame, int]:
     """Drop shadow matches where the POI is still present in the live
     OSM snapshot under a different geometry / spelling.
 
-    For each match, spatial-joins the Overture POI's centroid against
-    the rated OSM snapshot for any feature within ``radius_m``. If any
-    such feature's ``name`` token_set_ratio against the Overture name
-    is ≥ ``name_similarity_threshold``, the match is dropped — the POI
-    isn't gone, the primary matcher just missed it.
+    For each Overture row in ``matches``, find the live rated-snapshot
+    POIs within ``radius_m`` and check whether any name token-set-
+    matches the Overture name at ≥ ``name_similarity_threshold``. If
+    so, drop the match — the primary matcher just missed it.
 
-    Returns ``(kept_matches, n_dropped)``. The DuckDB spatial join is
-    bounded by ``test_bbox`` when given so the Seattle A/B path stays
-    fast.
+    Scales to nationwide via:
+
+    - A single BallTree over rated-snapshot centroids (haversine
+      metric) instead of a DuckDB cross-join. Build is O(M log M),
+      query is O(log M) per match. The earlier DuckDB
+      ``ST_Distance_Sphere`` implementation also returned distances
+      that were ~50% off in the v1.4.1 pin we use today (the
+      bundled formula is buggy — NYC → LA registers as ~4,900 km
+      versus the correct ~3,940 km), which silently broke the 50 m
+      gate. BallTree haversine here is the reference implementation.
+    - DuckDB is still used for the *load*: it computes centroids in
+      SQL and emits just ``(lon, lat, name)``, avoiding the ~8 GB
+      peak from materializing 8.7 M shapely Points via GeoPandas.
+      The optional ``test_bbox`` pushes down into that SQL for the
+      Seattle path.
+    - Snapshot rows with empty names are dropped before the tree
+      build — they can't satisfy the name gate anyway, and this
+      typically halves the tree size on real OSM data.
+    - The match side is queried in chunks of ``query_chunk_size`` so
+      peak memory stays bounded regardless of match count.
+
+    Returns ``(kept_matches, n_dropped)``.
     """
     if matches.empty:
         return matches.copy(), 0
@@ -275,80 +297,132 @@ def apply_current_survivor_filter(
             f"{radius_m}m, name>={name_similarity_threshold}"
         )
 
-    ov_lons = unmatched_overture.geometry.x.to_numpy()
-    ov_lats = unmatched_overture.geometry.y.to_numpy()
-    bbox = test_bbox or {
-        "xmin": float(np.min(ov_lons[ov_idx_arr])) - 0.01,
-        "ymin": float(np.min(ov_lats[ov_idx_arr])) - 0.01,
-        "xmax": float(np.max(ov_lons[ov_idx_arr])) + 0.01,
-        "ymax": float(np.max(ov_lats[ov_idx_arr])) + 0.01,
-    }
-
+    # ---------------- snapshot load + centroid extraction ----------
+    # DuckDB extracts (lon, lat, name) directly from the parquet,
+    # computing centroids server-side in C and emitting three thin
+    # columns. This avoids materializing 8.7M shapely Point objects
+    # (which costs ~8 GB peak when going through GeoPandas) and lets
+    # us push the bbox filter into the SQL for the Seattle path.
+    # Filters out unnamed rows up front — they can't satisfy the
+    # name gate anyway, typically halves the tree size.
+    if verbose:
+        print(
+            f"    Loading rated snapshot centroids from "
+            f"{rated_snapshot_path} ..."
+        )
+    bbox_clause = ""
+    if test_bbox is not None:
+        bbox_clause = (
+            "AND lon BETWEEN "
+            f"{test_bbox['xmin']} AND {test_bbox['xmax']} "
+            "AND lat BETWEEN "
+            f"{test_bbox['ymin']} AND {test_bbox['ymax']}"
+        )
     con = duckdb.connect()
-    con.execute(f"SET memory_limit = '{duckdb_memory_limit}'")
-    con.execute("INSTALL spatial; LOAD spatial;")
-    ov_subset = pd.DataFrame({
-        "match_idx": np.arange(len(matches)),
-        "ov_name": _to_str_array(
-            unmatched_overture["name"]
-        )[ov_idx_arr],
-        "ov_lon": ov_lons[ov_idx_arr],
-        "ov_lat": ov_lats[ov_idx_arr],
-    })
-    ov_subset.to_parquet("/tmp/cd_r1_ov.parquet")
+    try:
+        con.execute("INSTALL spatial; LOAD spatial;")
+        snap = con.execute(f"""
+            WITH centroids AS (
+                SELECT
+                    ST_X(ST_Centroid(geometry)) AS lon,
+                    ST_Y(ST_Centroid(geometry)) AS lat,
+                    COALESCE(name, '') AS name
+                FROM read_parquet('{rated_snapshot_path}')
+            )
+            SELECT lon, lat, name
+            FROM centroids
+            WHERE name <> ''
+              AND lon IS NOT NULL
+              AND lat IS NOT NULL
+              {bbox_clause}
+        """).fetch_df()
+    finally:
+        con.close()
 
-    nearby = con.execute(f"""
-        SELECT ov.match_idx, ov.ov_name,
-               s.name AS osm_name,
-               ST_Distance_Sphere(
-                   ST_Point(ov.ov_lon, ov.ov_lat),
-                   ST_Centroid(s.geometry)
-               ) AS dist_m
-        FROM read_parquet('/tmp/cd_r1_ov.parquet') ov
-        JOIN read_parquet('{rated_snapshot_path}') s
-          ON ST_Distance_Sphere(
-                 ST_Point(ov.ov_lon, ov.ov_lat),
-                 ST_Centroid(s.geometry)
-             ) <= {radius_m}
-         AND ST_X(ST_Centroid(s.geometry))
-             BETWEEN {bbox['xmin']} AND {bbox['xmax']}
-         AND ST_Y(ST_Centroid(s.geometry))
-             BETWEEN {bbox['ymin']} AND {bbox['ymax']}
-    """).fetch_df()
-    con.close()
+    snap_lons = snap["lon"].to_numpy()
+    snap_lats = snap["lat"].to_numpy()
+    snap_names = snap["name"].to_numpy()
+    del snap
+    gc.collect()
 
     if verbose:
         print(
-            f"    {len(nearby):,} nearby-OSM candidate rows; "
-            f"computing token_set_ratio ..."
+            f"    Snapshot rows in scope (named, non-NaN, in bbox): "
+            f"{len(snap_lons):,}"
         )
 
-    if not len(nearby):
+    if len(snap_lons) == 0:
         return matches.copy(), 0
 
-    nearby["sim"] = [
-        fuzz.token_set_ratio(str(a), str(b))
-        for a, b in zip(
-            nearby["ov_name"].astype(str),
-            nearby["osm_name"].astype(str),
+    # ---------------- BallTree build ------------------------------
+    if verbose:
+        print(
+            f"    Building BallTree on {len(snap_lons):,} points "
+            f"(haversine, ~140 MB at 8.7 M points) ..."
         )
-    ]
-    suppress_idx = (
-        nearby[nearby["sim"] >= name_similarity_threshold]
-        ["match_idx"]
-        .unique()
-    )
+    snap_coords_rad = np.column_stack([
+        np.deg2rad(snap_lats), np.deg2rad(snap_lons),
+    ])
+    tree = BallTree(snap_coords_rad, metric = "haversine")
+    del snap_coords_rad
+    gc.collect()
+
+    # ---------------- per-match query + name check ----------------
+    ov_lons = unmatched_overture.geometry.x.to_numpy()[ov_idx_arr]
+    ov_lats = unmatched_overture.geometry.y.to_numpy()[ov_idx_arr]
+    ov_names = _to_str_array(unmatched_overture["name"])[ov_idx_arr]
+    radius_rad = radius_m / _EARTH_RADIUS_M
+
+    suppress_idx_set: set[int] = set()
+    n_pairs_scored = 0
+    n_chunks = (len(matches) + query_chunk_size - 1) // query_chunk_size
+    if verbose:
+        print(
+            f"    Querying for {len(matches):,} matches in "
+            f"{n_chunks} chunk(s) of up to {query_chunk_size:,} ..."
+        )
+
+    for start in range(0, len(matches), query_chunk_size):
+        end = min(start + query_chunk_size, len(matches))
+        chunk_coords = np.column_stack([
+            np.deg2rad(ov_lats[start:end]),
+            np.deg2rad(ov_lons[start:end]),
+        ])
+        neighbor_idx_per_match = tree.query_radius(
+            chunk_coords, r = radius_rad,
+        )
+
+        for local_i, idx_arr in enumerate(neighbor_idx_per_match):
+            if len(idx_arr) == 0:
+                continue
+            ov_name = ov_names[start + local_i]
+            if not ov_name:
+                continue
+            global_i = start + local_i
+            for snap_i in idx_arr:
+                snap_name = snap_names[snap_i]
+                if not snap_name:
+                    continue
+                n_pairs_scored += 1
+                sim = fuzz.token_set_ratio(ov_name, snap_name)
+                if sim >= name_similarity_threshold:
+                    suppress_idx_set.add(global_i)
+                    break  # short-circuit; one hit is enough
 
     if verbose:
-        print(f"    R1 suppressed: {len(suppress_idx)}")
+        print(
+            f"    Scored {n_pairs_scored:,} name-similarity pairs; "
+            f"R1 suppressed: {len(suppress_idx_set)}"
+        )
 
-    if not len(suppress_idx):
+    if not suppress_idx_set:
         return matches.copy(), 0
 
+    suppress_idx_arr = np.fromiter(suppress_idx_set, dtype = int)
     keep_mask = np.ones(len(matches), dtype = bool)
-    keep_mask[suppress_idx] = False
+    keep_mask[suppress_idx_arr] = False
     kept = matches.loc[keep_mask].reset_index(drop = True)
-    return kept, int(len(suppress_idx))
+    return kept, int(len(suppress_idx_set))
 
 
 def apply_shadow_match(
