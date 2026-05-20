@@ -274,7 +274,23 @@ if __name__ == "__main__":
             "a debug/baseline option."
         ),
     )
+    parser.add_argument(
+        "--output-suffix",
+        default = "",
+        help = (
+            "If set, inserts ``_<suffix>`` before .parquet in the "
+            "output filename (e.g. --output-suffix=baseline writes "
+            "conflated_baseline.parquet). Used by the change-detection "
+            "A/B testing workflow."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.output_suffix:
+        OUTPUT_PATH = OUTPUT_PATH.with_name(
+            f"{OUTPUT_PATH.stem}_{args.output_suffix}"
+            f"{OUTPUT_PATH.suffix}"
+        )
     t0 = time.time()
 
     test_bbox = TEST_BBOX if args.test else None
