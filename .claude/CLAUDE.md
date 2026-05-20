@@ -54,6 +54,7 @@ Style: Black (format-on-save in VSCode). Lint: flake8 + pylint, configured in `p
 - [docs/package-versioning.md](docs/package-versioning.md) — semver bumps for the Python package + Vue site + Sphinx docs (distinct from data versioning)
 - [docs/partitioning-strategy.md](docs/partitioning-strategy.md) — Hive layout of the partitioned Parquet (`shared_label` for conflated, `primary_tag` for OSM), query patterns, when each layout applies
 - [docs/turnover-model-methodology.md](docs/turnover-model-methodology.md) — statistical derivation of the POI turnover model with ZIE extension
+- [docs/change-detection.md](docs/change-detection.md) — OSM-history-derived ghost POIs, shadow matching, and the per-`shared_label` δ penalty applied to Overture. Canonical entry point is `make conflate`, which runs the three-step `build_ghosts` → `conflate.py --output-suffix=baseline` → `apply_change_detection.py` pipeline so all national runs include the CD penalty by default.
 
 ## Running to-do
 

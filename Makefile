@@ -49,6 +49,66 @@ site_preview:
 	@cp -r docs/_build/html site/dist/docs
 	@python -m http.server 4173 --directory site/dist;
 
+# -----------------------------------------------------------------------------
+# Conflation pipeline (canonical entry point for all national runs)
+#
+# `make conflate` runs the three steps that produce the published
+# conflated.parquet:
+#
+#   1. build_ghosts.py            - reconstruct "ghost" POI dataset
+#                                    from OSM history (deletions,
+#                                    primary-tag removals, lifecycle
+#                                    prefixes, substantial renames).
+#   2. conflate.py                 - OSM x Overture matching as before,
+#                                    written to conflated_baseline.parquet
+#                                    so the pre-CD result is archived.
+#   3. apply_change_detection.py   - penalize Overture POIs that shadow-
+#                                    match a ghost; emits the canonical
+#                                    conflated.parquet that downstream
+#                                    summarize / format_for_upload /
+#                                    prepare_pmtiles / publish steps
+#                                    consume.
+#
+# Each sub-step tees a per-run log under ~/data/openpois/logs/.
+#
+# Pass TEST=1 to scope to the Seattle bbox:
+#     make conflate            # full CONUS
+#     make conflate TEST=1     # Seattle bbox dry run
+#
+# Sub-targets (build_ghosts / conflate_baseline / apply_cd) are exposed
+# for partial re-runs when one stage is being iterated on.
+
+TEST ?=
+TEST_FLAG := $(if $(TEST),--test,)
+LOG_DIR := $(HOME)/data/openpois/logs
+LOG_TS := $(shell date +%Y%m%d_%H%M%S)
+
+.PHONY: conflate build_ghosts conflate_baseline apply_cd
+
+build_ghosts:
+	@mkdir -p $(LOG_DIR)
+	@$(CONDA_PYTHON) -u scripts/conflation/build_ghosts.py \
+		2>&1 | tee $(LOG_DIR)/build_ghosts_$(LOG_TS).log
+
+conflate_baseline:
+	@mkdir -p $(LOG_DIR)
+	@$(CONDA_PYTHON) -u scripts/conflation/conflate.py \
+		--output-suffix=baseline $(TEST_FLAG) \
+		2>&1 | tee $(LOG_DIR)/conflate_baseline_$(LOG_TS).log
+
+apply_cd:
+	@mkdir -p $(LOG_DIR)
+	@$(CONDA_PYTHON) -u scripts/conflation/apply_change_detection.py \
+		--baseline-suffix=baseline --output-suffix="" $(TEST_FLAG) \
+		2>&1 | tee $(LOG_DIR)/apply_cd_$(LOG_TS).log
+
+conflate: build_ghosts conflate_baseline apply_cd
+	@echo
+	@echo "Conflation pipeline complete."
+	@echo "  Canonical output: ~/data/openpois/conflation/<version>/conflated.parquet"
+	@echo "  (no-CD archive:   conflated_baseline.parquet)"
+	@echo "  Logs under: $(LOG_DIR)/{build_ghosts,conflate_baseline,apply_cd}_$(LOG_TS).log"
+
 # Convenience target to print all of the available targets in this file
 # From https://stackoverflow.com/questions/4219255
 .PHONY: list

@@ -12,6 +12,7 @@ upload for web consumption.
 
 - Rated OSM snapshot (`osm_snapshot_rated.parquet`) at `versions.snapshot_osm` — produced by [skills/full-data-pull](../full-data-pull/SKILL.md) step 3.
 - Overture snapshot (`overture_snapshot.parquet`) at `versions.snapshot_overture`.
+- OSM history parquets (`osm_versions.parquet`, `osm_changes.parquet`) at `versions.osm_data` — produced by [skills/model-history-pipeline](../model-history-pipeline/SKILL.md). Required by the change-detection step in stage 4.
 - **Fresh Source Cooperative temp credentials** in `.env.json` at the repo root. Tokens expire in ~1 hour.
 
 > ⚠️ **Credential refresh check.** Source Cooperative uses short-lived AWS
@@ -37,12 +38,27 @@ upload for web consumption.
 
 3. **Sync taxonomy if crosswalks changed** — run the [sync-taxonomy](../sync-taxonomy/SKILL.md) skill. It regenerates `site/public/taxonomy.html` and `site/src/taxonomy.generated.js`, and detects drift in the hand-maintained display labels.
 
-4. **Run conflation** — ~22M POIs; peak RSS ~10 GB projected (actual peak prints at each phase via the `log_rss` lines in stdout; record the result here after each full run):
+4. **Run the conflation pipeline.** The canonical entry point is `make conflate`, which orchestrates three sub-steps so every national run gets the OSM-history change-detection penalty automatically (see [docs/change-detection.md](../../../docs/change-detection.md) for the design and tunables):
+   1. `build_ghosts.py` — reconstruct ghost POIs from OSM history (`ghosts.parquet` under `versions.ghost_osm`).
+   2. `conflate.py --output-suffix=baseline` — OSM × Overture matching, writes `conflated_baseline.parquet` (no-CD archive).
+   3. `apply_change_detection.py` — shadow-match unmatched Overture against the ghosts and apply the per-`shared_label` δ penalty; writes the canonical `conflated.parquet`.
+
    ```bash
-   python scripts/conflation/conflate.py            # full run
-   python scripts/conflation/conflate.py --test     # Seattle bbox dry run
+   make conflate            # full CONUS, ~22M POIs, peak RSS ~10 GB (matching)
+                            #                    + ~5 GB (CD step) projected
+   make conflate TEST=1     # Seattle bbox dry run
+
+   # Sub-targets for partial re-runs:
+   make build_ghosts        # ghosts only
+   make conflate_baseline   # matching only (writes conflated_baseline.parquet)
+   make apply_cd            # CD pass only (reads baseline, writes conflated.parquet)
    ```
-   Outputs: `conflated.parquet`, `match_diagnostics.parquet`.
+
+   Outputs:
+   - `conflated.parquet` — canonical output that downstream steps consume (CD applied).
+   - `conflated_baseline.parquet` — same shape but without the CD penalty; kept on disk for spot-checks.
+   - `ghosts.parquet` under `versions.ghost_osm` — see [docs/change-detection.md](../../../docs/change-detection.md).
+   - `match_diagnostics.parquet`.
 
 5. **Match-rate sanity check**:
    ```bash
@@ -103,6 +119,8 @@ upload for web consumption.
 - Matching: [src/openpois/conflation/match.py](../../../src/openpois/conflation/match.py)
 - Merging: [src/openpois/conflation/merge.py](../../../src/openpois/conflation/merge.py)
 - Taxonomy assignment: [src/openpois/conflation/taxonomy.py](../../../src/openpois/conflation/taxonomy.py)
+- Change-detection (ghost emission + shadow matching + R1): [src/openpois/conflation/ghost_osm.py](../../../src/openpois/conflation/ghost_osm.py), [src/openpois/conflation/change_detection.py](../../../src/openpois/conflation/change_detection.py)
 - Publish orchestration: [scripts/publish/upload_to_source_coop.py](../../../scripts/publish/upload_to_source_coop.py)
 - Source Coop S3 adapter: [src/openpois/io/source_coop.py](../../../src/openpois/io/source_coop.py)
 - Conflation algorithm docs: [scripts/conflation/README.md](../../../scripts/conflation/README.md)
+- Change-detection design: [docs/change-detection.md](../../../docs/change-detection.md)
