@@ -1,7 +1,12 @@
 import VectorTileLayer from 'ol/layer/VectorTile'
 import { PMTilesVectorSource } from 'ol-pmtiles'
 import { Style, Circle, Fill, Stroke } from 'ol/style'
-import { confidenceColor, discretizeConf } from '../utils.js'
+import {
+  confidenceColor,
+  discretizeConf,
+  zoomTierFromResolution,
+  POI_DOT_BY_ZOOM,
+} from '../utils.js'
 import { OSM_PMTILES_URL } from '../constants.js'
 
 // OSM filter keys that drive feature visibility. A feature is visible when at
@@ -39,7 +44,7 @@ export function updateOsmFilters(filtersObj) {
   if (layer) layer.changed()
 }
 
-function osmTileStyle(feature) {
+function osmTileStyle(feature, resolution) {
   if (enabledKeys.size === 0) return null
 
   // Visibility: feature must have at least one enabled key set.
@@ -54,17 +59,20 @@ function osmTileStyle(feature) {
 
   const conf = feature.get('conf_mean')
   const bucket = discretizeConf(conf)
-  if (!styleCache[bucket]) {
+  const tier = zoomTierFromResolution(resolution)
+  const key = `${bucket}|${tier}`
+  if (!styleCache[key]) {
     const color = confidenceColor(conf == null || isNaN(conf) ? null : conf)
-    styleCache[bucket] = new Style({
+    const { radius, stroke } = POI_DOT_BY_ZOOM[tier]
+    styleCache[key] = new Style({
       image: new Circle({
-        radius: 5,
+        radius,
         fill: new Fill({ color }),
-        stroke: new Stroke({ color: '#fff', width: 1 }),
+        stroke: new Stroke({ color: '#fff', width: stroke }),
       }),
     })
   }
-  return styleCache[bucket]
+  return styleCache[key]
 }
 
 /**

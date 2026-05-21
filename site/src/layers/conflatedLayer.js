@@ -1,7 +1,12 @@
 import VectorTileLayer from 'ol/layer/VectorTile'
 import { PMTilesVectorSource } from 'ol-pmtiles'
 import { Style, Circle, Fill, Stroke } from 'ol/style'
-import { confidenceColor, discretizeConf } from '../utils.js'
+import {
+  confidenceColor,
+  discretizeConf,
+  zoomTierFromResolution,
+  POI_DOT_BY_ZOOM,
+} from '../utils.js'
 import { CONFLATED_PMTILES_URL } from '../constants.js'
 
 let layer = null
@@ -40,7 +45,7 @@ export function updateConflatedFilters(filtersObj) {
   if (layer) layer.changed()
 }
 
-function conflatedTileStyle(feature) {
+function conflatedTileStyle(feature, resolution) {
   if (enabledLabels !== null) {
     const label = feature.get('shared_label')
     if (!enabledLabels.has(label)) return null
@@ -48,17 +53,20 @@ function conflatedTileStyle(feature) {
 
   const conf = feature.get('conf_mean')
   const bucket = discretizeConf(conf)
-  if (!styleCache[bucket]) {
+  const tier = zoomTierFromResolution(resolution)
+  const key = `${bucket}|${tier}`
+  if (!styleCache[key]) {
     const color = confidenceColor(conf == null || isNaN(conf) ? null : conf)
-    styleCache[bucket] = new Style({
+    const { radius, stroke } = POI_DOT_BY_ZOOM[tier]
+    styleCache[key] = new Style({
       image: new Circle({
-        radius: 5,
+        radius,
         fill: new Fill({ color }),
-        stroke: new Stroke({ color: '#fff', width: 1 }),
+        stroke: new Stroke({ color: '#fff', width: stroke }),
       }),
     })
   }
-  return styleCache[bucket]
+  return styleCache[key]
 }
 
 /**

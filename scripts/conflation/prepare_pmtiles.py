@@ -1,10 +1,11 @@
 """
 Build conflated.pmtiles from the conflated POI dataset.
 
-Output is a single-zoom PMTiles archive (z14) keyed by the config's
-``upload.pmtiles`` block. OpenLayers over-zooms z15-20 natively, and the site
-never renders below z14, so tiling extra zoom levels would just waste disk and
-wall time.
+Output is a multi-zoom PMTiles archive (z10-z14 by default) keyed by the
+config's ``publish.pmtiles`` block. ``drop-densest-as-needed`` silently
+drops features at lower zooms to keep each tile under ~500 KB; the site
+scales the point radius down at lower zooms to match. OpenLayers
+over-zooms z15+ natively as lossless geometric scale-ups of the z14 tile.
 
 Intermediate FlatGeobuf is staged next to the output and deleted on success.
 """
