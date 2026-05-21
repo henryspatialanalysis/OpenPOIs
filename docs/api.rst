@@ -54,11 +54,14 @@ io
 openpois.io.osm_history_pbf
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Download Geofabrik full-history PBFs (US + Puerto Rico), filter to POI tags
-with ``osmium tags-filter``, time-window with ``osmium time-filter``, and parse
-with pyosmium into per-version and per-change Parquet tables suitable for the
-change-rate model. Uses an OAuth cookie jar against Geofabrik's internal
-server.
+Download Geofabrik full-history PBFs (US + inhabited territories: Puerto
+Rico, US Virgin Islands, plus Guam / NMI / American Samoa via the
+``american-oceania`` extract), filter to POI tags with ``osmium tags-filter``,
+time-window with ``osmium time-filter``, and parse with pyosmium into
+per-version and per-change Parquet tables suitable for the change-rate
+model. Uses an OAuth cookie jar against Geofabrik's internal server.
+Per-extract failure tolerance: missing-on-server (HTTP 404) territory PBFs
+are skipped with a warning rather than aborting the run.
 
 .. automodule:: openpois.io.osm_history_pbf
    :members:

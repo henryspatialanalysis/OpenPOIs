@@ -5,7 +5,7 @@ description: Use when the user wants to refresh the independent POI snapshots (O
 
 # Full data pull
 
-Downloads the snapshot sources (50 US states + DC + PR) and applies the rating model to OSM so conflation can run.
+Downloads the snapshot sources (50 US states + DC + 5 inhabited territories: PR, VI, GU, MP, AS) and applies the rating model to OSM so conflation can run.
 
 ## Prerequisites
 
