@@ -322,11 +322,13 @@ publish:
     osm_snapshot_date: "2026-04-17"   # YYYY-MM-DD Geofabrik download date
     overture_release: "2026-04-15.0"  # Overture Maps release ID, https://docs.overturemaps.org/release-calendar/
     model_commit: null                # null → use current git HEAD; set a short SHA to pin
-  # PMTiles generation — single-zoom archive at z14 for both OSM and conflated.
-  # Site's View.minZoom is 14; OpenLayers over-zooms past z14 natively so
-  # z15-20 render as lossless geometric scale-ups of the z14 tile.
+  # PMTiles generation — multi-zoom archive z10–z14 for both OSM and conflated.
+  # Site's View.minZoom is 10 (full-metro view). z10–z14 are served directly
+  # from the PMTiles; z15+ render as lossless OL over-zooms of the z14 tile.
+  # drop-densest-as-needed silently drops features at lower zooms to keep
+  # each tile under ~500 KB; per-zoom point radius scales down on the site.
   pmtiles:
-    min_zoom: 14
+    min_zoom: 10
     max_zoom: 14
     drop_strategy: "drop-densest-as-needed"
     osm_layer_name: "osm_pois"
