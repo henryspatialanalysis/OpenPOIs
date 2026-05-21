@@ -18,13 +18,17 @@ import pandas as pd
 import pyarrow.parquet as pq
 import pytest
 
+import requests
+
 from openpois.io.osm_history_pbf import (
     CHANGES_SCHEMA,
     VERSIONS_SCHEMA,
+    HistoryExtract,
     _concat_history,
     _diff_tag_sets,
     _tag_set_for_version,
     download_history_pbf,
+    download_osm_history,
     filter_history_pbf,
     parse_history_pbf,
     time_filter_history_pbf,
@@ -553,11 +557,8 @@ class TestConcatHistory:
         ])
 
         _concat_history(
-            us_versions_path=us_v,
-            pr_versions_path=pr_v,
+            intermediates=[(us_v, us_c), (pr_v, pr_c)],
             out_versions_path=out_v,
-            us_changes_path=us_c,
-            pr_changes_path=pr_c,
             out_changes_path=out_c,
         )
 
@@ -597,9 +598,8 @@ class TestConcatHistory:
         ])
         _write_changes(pr_c, [])
         _concat_history(
-            us_versions_path=us_v, pr_versions_path=pr_v,
+            intermediates=[(us_v, us_c), (pr_v, pr_c)],
             out_versions_path=out_v,
-            us_changes_path=us_c, pr_changes_path=pr_c,
             out_changes_path=out_c,
         )
         v = pd.read_parquet(out_v)
@@ -633,10 +633,202 @@ class TestConcatHistory:
              "id": 2, "version": 1, "type": "node"},
         ])
         _concat_history(
-            us_versions_path=us_v, pr_versions_path=pr_v,
+            intermediates=[(us_v, us_c), (pr_v, pr_c)],
             out_versions_path=out_v,
-            us_changes_path=us_c, pr_changes_path=pr_c,
             out_changes_path=out_c,
         )
         assert len(pd.read_parquet(out_v)) == 2
         assert len(pd.read_parquet(out_c)) == 2
+
+    def test_n_way_dedup_drops_against_any_prior_extract(self, tmp_path):
+        # Regression: with N >= 3 extracts, each subsequent extract must
+        # dedup against ALL prior extracts, not just the first. Here the
+        # third extract carries an id seen in extract #2 (not #1).
+        us_v, pr_v, ter_v = (tmp_path / f"{n}_v.parquet" for n in ("us", "pr", "ter"))
+        us_c, pr_c, ter_c = (tmp_path / f"{n}_c.parquet" for n in ("us", "pr", "ter"))
+        out_v = tmp_path / "out_v.parquet"
+        out_c = tmp_path / "out_c.parquet"
+        _write_versions(us_v, [
+            {"id": 1, "version": 1, "changeset": 1, "timestamp": "t",
+             "user": "u", "uid": 1, "type": "node"},
+        ])
+        _write_versions(pr_v, [
+            {"id": 2, "version": 1, "changeset": 2, "timestamp": "t",
+             "user": "u", "uid": 1, "type": "node"},
+        ])
+        # Territory extract: id=2 dupes PR (must be dropped), id=3 is new.
+        _write_versions(ter_v, [
+            {"id": 2, "version": 1, "changeset": 2, "timestamp": "t",
+             "user": "u", "uid": 1, "type": "node"},
+            {"id": 3, "version": 1, "changeset": 3, "timestamp": "t",
+             "user": "u", "uid": 1, "type": "node"},
+        ])
+        _write_changes(us_c, [
+            {"key": "amenity", "value": "a", "change": "Added",
+             "id": 1, "version": 1, "type": "node"},
+        ])
+        _write_changes(pr_c, [
+            {"key": "amenity", "value": "b", "change": "Added",
+             "id": 2, "version": 1, "type": "node"},
+        ])
+        _write_changes(ter_c, [
+            {"key": "amenity", "value": "b", "change": "Added",
+             "id": 2, "version": 1, "type": "node"},  # dropped
+            {"key": "shop", "value": "c", "change": "Added",
+             "id": 3, "version": 1, "type": "node"},  # kept
+        ])
+        _concat_history(
+            intermediates=[(us_v, us_c), (pr_v, pr_c), (ter_v, ter_c)],
+            out_versions_path=out_v,
+            out_changes_path=out_c,
+        )
+        v = pd.read_parquet(out_v)
+        c = pd.read_parquet(out_c)
+        assert sorted(zip(v["type"], v["id"])) == [
+            ("node", 1), ("node", 2), ("node", 3)
+        ]
+        # The id=2 row must NOT be duplicated; it was kept from PR and
+        # dropped from the territory extract.
+        assert c.groupby(["type", "id", "version", "key"]).size().max() == 1
+        assert sorted(zip(c["type"], c["id"])) == [
+            ("node", 1), ("node", 2), ("node", 3)
+        ]
+
+
+def _make_history_extract(name, tmp_path, url="https://example.invalid/x.osh.pbf"):
+    """Build a HistoryExtract with unique scratch paths under tmp_path."""
+    return HistoryExtract(
+        name=name,
+        url=url,
+        raw_pbf_path=tmp_path / f"{name}.osh.pbf",
+        filtered_pbf_path=tmp_path / f"{name}-pois.osh.pbf",
+        time_filtered_pbf_path=tmp_path / f"{name}-pois-timefilt.osh.pbf",
+        versions_path=tmp_path / f"{name}_versions.parquet",
+        changes_path=tmp_path / f"{name}_changes.parquet",
+    )
+
+
+def _fake_intermediate_writer(rows_by_name):
+    """Return a side_effect for _download_filter_timefilter_parse that writes
+    minimal versions/changes parquets for each named extract."""
+    def _side_effect(**kwargs):
+        # Recover the extract name from the parquet path stem.
+        versions_path = kwargs["versions_path"]
+        changes_path = kwargs["changes_path"]
+        name = versions_path.stem.removesuffix("_versions")
+        rows = rows_by_name.get(name, [])
+        _write_versions(versions_path, rows)
+        _write_changes(changes_path, [
+            {"key": "amenity", "value": "x", "change": "Added",
+             "id": r["id"], "version": r["version"], "type": r["type"]}
+            for r in rows
+        ])
+        return (versions_path, changes_path)
+    return _side_effect
+
+
+class TestDownloadOsmHistoryOrchestrator:
+    """Cover the orchestrator's input validation and per-extract 404
+    tolerance — the new opinionated behavior on the territory branch."""
+
+    def test_rejects_duplicate_extract_names(self, tmp_path):
+        extracts = [
+            _make_history_extract("us", tmp_path),
+            _make_history_extract("us", tmp_path / "dup"),
+        ]
+        with pytest.raises(ValueError, match="unique"):
+            download_osm_history(
+                extracts=extracts,
+                output_versions_path=tmp_path / "out_v.parquet",
+                output_changes_path=tmp_path / "out_c.parquet",
+                filter_keys=["amenity"],
+                start_date=datetime.date(2024, 1, 1),
+                end_date=datetime.date(2024, 6, 30),
+            )
+
+    def test_rejects_empty_extracts_list(self, tmp_path):
+        with pytest.raises(ValueError, match="at least one"):
+            download_osm_history(
+                extracts=[],
+                output_versions_path=tmp_path / "out_v.parquet",
+                output_changes_path=tmp_path / "out_c.parquet",
+                filter_keys=["amenity"],
+                start_date=datetime.date(2024, 1, 1),
+                end_date=datetime.date(2024, 6, 30),
+            )
+
+    @patch("openpois.io.osm_history_pbf._download_filter_timefilter_parse")
+    def test_skips_one_extract_on_404_and_concats_rest(self, mock_proc, tmp_path):
+        # Three extracts; the middle one 404s. Other two should succeed.
+        extracts = [
+            _make_history_extract("us", tmp_path),
+            _make_history_extract("missing", tmp_path),
+            _make_history_extract("usvi", tmp_path),
+        ]
+        rows_by_name = {
+            "us": [{"id": 1, "version": 1, "changeset": 1, "timestamp": "t",
+                    "user": "u", "uid": 1, "type": "node"}],
+            "usvi": [{"id": 2, "version": 1, "changeset": 2, "timestamp": "t",
+                      "user": "u", "uid": 1, "type": "node"}],
+        }
+        writer = _fake_intermediate_writer(rows_by_name)
+
+        # 404 only for "missing"; otherwise write parquets.
+        not_found_response = MagicMock()
+        not_found_response.status_code = 404
+        not_found_err = requests.HTTPError(response=not_found_response)
+
+        def side_effect(**kwargs):
+            if "missing" in str(kwargs["raw_pbf_path"]):
+                raise not_found_err
+            return writer(**kwargs)
+        mock_proc.side_effect = side_effect
+
+        out_v = tmp_path / "out_v.parquet"
+        out_c = tmp_path / "out_c.parquet"
+        download_osm_history(
+            extracts=extracts,
+            output_versions_path=out_v,
+            output_changes_path=out_c,
+            filter_keys=["amenity"],
+            start_date=datetime.date(2024, 1, 1),
+            end_date=datetime.date(2024, 6, 30),
+        )
+        # Only us + usvi rows should reach the final concat.
+        v = pd.read_parquet(out_v)
+        assert sorted(zip(v["type"], v["id"])) == [("node", 1), ("node", 2)]
+
+    @patch("openpois.io.osm_history_pbf._download_filter_timefilter_parse")
+    def test_non_404_http_error_propagates(self, mock_proc, tmp_path):
+        extracts = [_make_history_extract("us", tmp_path)]
+        server_err_response = MagicMock()
+        server_err_response.status_code = 503
+        mock_proc.side_effect = requests.HTTPError(response=server_err_response)
+        with pytest.raises(requests.HTTPError):
+            download_osm_history(
+                extracts=extracts,
+                output_versions_path=tmp_path / "out_v.parquet",
+                output_changes_path=tmp_path / "out_c.parquet",
+                filter_keys=["amenity"],
+                start_date=datetime.date(2024, 1, 1),
+                end_date=datetime.date(2024, 6, 30),
+            )
+
+    @patch("openpois.io.osm_history_pbf._download_filter_timefilter_parse")
+    def test_all_extracts_404_raises_value_error(self, mock_proc, tmp_path):
+        extracts = [
+            _make_history_extract("us", tmp_path),
+            _make_history_extract("pr", tmp_path),
+        ]
+        not_found_response = MagicMock()
+        not_found_response.status_code = 404
+        mock_proc.side_effect = requests.HTTPError(response=not_found_response)
+        with pytest.raises(ValueError, match="All history extracts failed"):
+            download_osm_history(
+                extracts=extracts,
+                output_versions_path=tmp_path / "out_v.parquet",
+                output_changes_path=tmp_path / "out_c.parquet",
+                filter_keys=["amenity"],
+                start_date=datetime.date(2024, 1, 1),
+                end_date=datetime.date(2024, 6, 30),
+            )

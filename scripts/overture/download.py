@@ -1,13 +1,15 @@
 """
-Download the current US+PR Overture Maps Places snapshot as a GeoParquet file.
+Download the current US + territories Overture Maps Places snapshot as a
+GeoParquet file.
 
 Queries Overture Maps GeoParquet files on public S3 using DuckDB's httpfs and
 spatial extensions. Iterates the release's ``part-*.parquet`` files, writing a
 bounded-memory DuckDB COPY per part into a ``.parts/<release>/`` directory.
-Once every part is present, a single DuckDB COPY applies the exact US+PR
-polygon filter and writes the final GeoParquet without materializing rows in
-Python. Interrupted runs resume by skipping parts whose intermediates already
-exist. No authentication required — Overture Maps data is publicly accessible.
+Once every part is present, a single DuckDB COPY applies the exact
+US + territories polygon filter and writes the final GeoParquet without
+materializing rows in Python. Interrupted runs resume by skipping parts whose
+intermediates already exist. No authentication required — Overture Maps data
+is publicly accessible.
 
 Auto-detects the latest available Overture release from S3 unless a specific
 release_date is pinned in config.yaml.
@@ -26,7 +28,7 @@ Config keys used (config.yaml):
     directories.snapshot_overture            — output directory
 
 Output file:
-    overture_snapshot.parquet — GeoParquet with US+PR POIs
+    overture_snapshot.parquet — GeoParquet with US + territories POIs
         Columns: overture_id, overture_name, taxonomy_l0, taxonomy_l1,
         taxonomy_l2, brand_name, confidence, geometry, source
 """

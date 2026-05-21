@@ -83,9 +83,10 @@ saving snippet CSVs to the ``testing/`` directory for column inspection.
 Pipeline 2: OSM Historical Change-Rate Model
 --------------------------------------------
 
-This pipeline downloads OpenStreetMap full-history PBFs (US + Puerto Rico)
-and fits a Poisson change-rate model to estimate how quickly different POI
-categories become outdated.
+This pipeline downloads OpenStreetMap full-history PBFs (US + inhabited
+territories: Puerto Rico, US Virgin Islands, plus Guam / NMI / American
+Samoa via the ``american-oceania`` extract) and fits a Poisson change-rate
+model to estimate how quickly different POI categories become outdated.
 
 **Step 1 — Download full-history PBFs**
 
@@ -94,11 +95,15 @@ categories become outdated.
    python scripts/osm_data/download_history.py
 
 Requires the Geofabrik OAuth cookie jar described in *Prerequisites* above.
-Downloads the US-mainland and Puerto Rico full-history extracts, filters
-each with ``osmium tags-filter`` (POI tag keys only) and ``osmium
-time-filter`` (the ``download.osm.start_date`` / ``end_date`` window), then
-parses with pyosmium into per-version and per-change Parquet tables.
-Outputs: ``osm_versions.parquet`` and ``osm_changes.parquet``.
+Downloads each Geofabrik full-history extract in turn, filters each with
+``osmium tags-filter`` (POI tag keys only) and ``osmium time-filter`` (the
+``download.osm.start_date`` / ``end_date`` window), then parses with
+pyosmium into per-extract Parquet tables and concatenates with iterative
+``(type, id)`` dedup. If a territory's history PBF is missing on the server
+(HTTP 404), the loader logs a warning and continues; that territory's
+snapshot/Overture coverage is unaffected and the rater falls back to the
+global-mean delta. Outputs: ``osm_versions.parquet`` and
+``osm_changes.parquet``.
 
 See :mod:`openpois.io.osm_history_pbf`.
 

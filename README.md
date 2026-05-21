@@ -1,7 +1,9 @@
 # OpenPOIs
 
-A unified, confidence-scored open dataset of U.S. points of interest, built
-from [OpenStreetMap](https://www.openstreetmap.org) and
+A unified, confidence-scored open dataset of U.S. points of interest —
+covering the 50 states, DC, and the 5 inhabited U.S. territories (Puerto
+Rico, US Virgin Islands, Guam, Northern Mariana Islands, American Samoa) —
+built from [OpenStreetMap](https://www.openstreetmap.org) and
 [Overture Maps](https://overturemaps.org).
 
 ![OpenPOIs interactive map](docs/_static/hero.png)
@@ -22,7 +24,8 @@ OpenPOIs conflates points of interest from OpenStreetMap and Overture Maps
 into a single unified dataset, then attaches a per-POI confidence score
 estimating the probability that the place still exists. Confidence comes from
 a Bayesian turnover model fit on OSM tag-edit history. The published dataset
-covers the United States and is refreshed monthly, following the Overture Maps monthly release cycle.
+covers the United States and its 5 inhabited territories, and is refreshed
+monthly, following the Overture Maps monthly release cycle.
 
 This repository contains the Python library used to produce the data, the
 end-to-end pipelines that download and conflate sources, and the Vue

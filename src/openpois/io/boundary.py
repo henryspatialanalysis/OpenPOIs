@@ -5,27 +5,34 @@
 
 """
 This module provides a single source of truth for the spatial extent used by
-POI snapshot downloads: the 50 US states + DC + Puerto Rico.
+POI snapshot downloads: the 50 US states + DC + the 5 inhabited US
+territories (Puerto Rico, US Virgin Islands, Guam, Northern Mariana Islands,
+American Samoa).
 
 It is broken into the following functions:
 
 - download_us_pr_boundary: Downloads and unzips the Census cartographic
     boundary state shapefile. Skips the download if the file already exists.
-- load_us_pr_boundary: Reads the shapefile and filters to the 50 states
-    + DC + Puerto Rico.
-- us_pr_unary_polygon: Dissolves the filtered states into a single
+- load_us_pr_boundary: Reads the shapefile and filters to the 56 US
+    statistical areas (50 states + DC + 5 territories).
+- us_pr_unary_polygon: Dissolves the filtered areas into a single
     (multi)polygon and applies an outward buffer to include near-coastal
-    POIs. Internal state borders disappear on dissolve, so the buffer only
+    POIs. Internal borders disappear on dissolve, so the buffer only
     expands the coastline (plus tiny strips of the Canada/Mexico land
     border, which contain effectively no POIs).
 - us_pr_bboxes: Returns coarse bounding boxes covering the buffered
-    polygon. Splits the Alaskan antimeridian into two bboxes so callers
-    that can't filter on a polygon directly (e.g., DuckDB predicate
-    pushdown on Overture's `bbox` struct) can still use bounding-box
-    prefilters without missing the Near Islands (~172 E).
+    polygon. Splits at longitude 0 into a negative-longitude bbox (CONUS,
+    AK mainland, HI, PR, USVI, American Samoa) and a positive-longitude
+    bbox (Alaskan Near Islands ~+172 E, Guam ~+144 E, Northern Mariana
+    Islands ~+145 E) so callers that can't filter on a polygon directly
+    (e.g., DuckDB predicate pushdown on Overture's `bbox` struct) can
+    still use bounding-box prefilters without missing the western-Pacific
+    territories or the Aleutian Near Islands.
 
-The Census 1:20M cartographic boundary file is used because it has clean
-``STUSPS`` state codes, includes PR, and is tiny (~1 MB zipped).
+The Census 1:5M cartographic boundary file is used because it has clean
+``STUSPS`` codes, includes all 5 inhabited territories, and is small
+(~1.3 MB zipped). The 1:20M variant is too aggressive a generalisation to
+include territories.
 """
 from __future__ import annotations
 
@@ -36,17 +43,19 @@ import geopandas as gpd
 import requests
 
 # EPSG:6933 = World Equal-Area Cylindrical. Preserves area globally with
-# <1% distortion at latitudes relevant to the US + PR, so buffering by N
+# <1% distortion at latitudes relevant to the US + territories, so buffering by N
 # metres in this CRS gives a true N-metre buffer everywhere we care about.
 _EQUAL_AREA_CRS = "EPSG:6933"
 
-# STUSPS codes for the 50 states + DC + Puerto Rico.
+# STUSPS codes for the 50 states + DC + 5 inhabited US territories:
+# PR = Puerto Rico, VI = US Virgin Islands, GU = Guam,
+# MP = Northern Mariana Islands, AS = American Samoa.
 _US_STATE_CODES = frozenset({
     "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", "HI",
     "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN",
     "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH",
     "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA",
-    "WV", "WI", "WY", "PR",
+    "WV", "WI", "WY", "PR", "VI", "GU", "MP", "AS",
 })
 
 
@@ -58,8 +67,8 @@ _US_STATE_CODES = frozenset({
 def download_us_pr_boundary(
     source_url: str,
     cache_dir: Path,
-    zip_name: str = "cb_2023_us_state_20m.zip",
-    shp_name: str = "cb_2023_us_state_20m.shp",
+    zip_name: str = "cb_2023_us_state_5m.zip",
+    shp_name: str = "cb_2023_us_state_5m.shp",
     overwrite: bool = False,
 ) -> Path:
     """
@@ -91,7 +100,7 @@ def download_us_pr_boundary(
     if shp_path.exists() and not overwrite:
         return shp_path
 
-    print(f"Downloading US+PR boundary from {source_url}...")
+    print(f"Downloading US + territories boundary from {source_url}...")
     resp = requests.get(source_url, stream = True, timeout = 120)
     resp.raise_for_status()
     with open(zip_path, "wb") as f:
@@ -119,19 +128,21 @@ def load_us_pr_boundary(
     shp_path: Path,
 ) -> gpd.GeoDataFrame:
     """
-    Reads the state shapefile and returns the 50 states + DC + Puerto Rico.
+    Reads the state shapefile and returns the 50 states + DC + 5 inhabited
+    US territories.
 
     Args:
         shp_path: Path to the unzipped Census state shapefile (``.shp``).
 
     Returns:
-        GeoDataFrame in EPSG:4326 containing 52 rows (50 states + DC + PR),
-        with the Census shapefile's columns preserved (``STUSPS``, ``NAME``,
-        ``GEOID``, etc.) plus the ``geometry`` column.
+        GeoDataFrame in EPSG:4326 containing 56 rows (50 states + DC + PR
+        + VI + GU + MP + AS), with the Census shapefile's columns preserved
+        (``STUSPS``, ``NAME``, ``GEOID``, etc.) plus the ``geometry`` column.
 
     Raises:
-        ValueError: If fewer than 52 rows match ``_US_STATE_CODES`` (suggests
-            the source file is wrong or corrupted).
+        ValueError: If fewer than 56 rows match ``_US_STATE_CODES`` (suggests
+            the source file is wrong or corrupted, e.g. the 1:20M variant
+            that omits territories).
     """
     gdf = gpd.read_file(shp_path)
     if gdf.crs is None or gdf.crs.to_epsg() != 4326:
@@ -139,8 +150,8 @@ def load_us_pr_boundary(
     gdf = gdf.loc[gdf["STUSPS"].isin(_US_STATE_CODES)].copy()
     if len(gdf) != len(_US_STATE_CODES):
         raise ValueError(
-            f"Expected {len(_US_STATE_CODES)} rows after filtering to US+PR, "
-            f"got {len(gdf)}. Missing codes: "
+            f"Expected {len(_US_STATE_CODES)} rows after filtering to "
+            f"US + DC + territories, got {len(gdf)}. Missing codes: "
             f"{sorted(_US_STATE_CODES - set(gdf['STUSPS']))}"
         )
     return gdf.reset_index(drop = True)
@@ -152,9 +163,9 @@ def us_pr_unary_polygon(
 ) -> gpd.GeoDataFrame:
     """
     Returns a single-row GeoDataFrame containing the dissolved, buffered
-    US+PR polygon in EPSG:4326.
+    US + DC + territories polygon in EPSG:4326.
 
-    Dissolving removes all internal state borders, so the resulting polygon's
+    Dissolving removes all internal borders, so the resulting polygon's
     exterior is either coastline/water or international land border (Canada,
     Mexico). A uniform outward buffer therefore effectively buffers only the
     coastline — the Canada/Mexico land border is a tiny fraction of the total
@@ -162,7 +173,8 @@ def us_pr_unary_polygon(
 
     The buffer is applied in EPSG:6933 (World Equal-Area Cylindrical) to keep
     the distance metric accurate across the very different latitudes of
-    CONUS, Alaska, Hawaii, and Puerto Rico.
+    CONUS, Alaska, Hawaii, the Caribbean territories, and the western
+    Pacific territories.
 
     Args:
         shp_path: Path to the unzipped Census state shapefile.
@@ -191,19 +203,22 @@ def us_pr_bboxes(
     coastline_buffer_m: float = 100.0,
 ) -> list[dict]:
     """
-    Returns coarse bounding boxes covering the buffered US+PR polygon.
+    Returns coarse bounding boxes covering the buffered US + territories
+    polygon.
 
-    Two bboxes are returned to handle the Alaskan antimeridian: the western
-    Aleutian "Near Islands" have positive longitudes near +172 E while the
-    rest of Alaska sits at negative longitudes. ``gpd.total_bounds`` on a
-    multipolygon that crosses the antimeridian reports ``(~-180, ..., ~180)``
-    which is useless as a coarse prefilter.
+    Two bboxes are returned to handle the antimeridian. The negative-longitude
+    bbox covers CONUS, AK mainland, HI, PR, USVI, and American Samoa
+    (~-170 W). The positive-longitude bbox covers the western Aleutian "Near
+    Islands" (~+172 E), Guam (~+144 E), and the Northern Mariana Islands
+    (~+145 E). ``gpd.total_bounds`` on a multipolygon that crosses the
+    antimeridian reports ``(~-180, ..., ~180)`` which is useless as a coarse
+    prefilter.
 
-    This function separates the western Aleutians (positive longitudes) from
-    the rest of the polygon using an x-split at longitude 0 and computes a
-    bbox for each part. Callers that can only apply bbox predicates (e.g.,
-    DuckDB predicate pushdown on Overture's ``bbox`` struct) should OR the
-    returned bboxes together.
+    This function separates the positive-longitude parts from the rest of
+    the polygon using an x-split at longitude 0 (via per-part centroid) and
+    computes a bbox for each side. Callers that can only apply bbox
+    predicates (e.g., DuckDB predicate pushdown on Overture's ``bbox``
+    struct) should OR the returned bboxes together.
 
     Args:
         shp_path: Path to the unzipped Census state shapefile.
@@ -263,8 +278,8 @@ def get_us_pr_boundary(
     source_url: str,
     cache_dir: Path,
     coastline_buffer_m: float = 100.0,
-    zip_name: str = "cb_2023_us_state_20m.zip",
-    shp_name: str = "cb_2023_us_state_20m.shp",
+    zip_name: str = "cb_2023_us_state_5m.zip",
+    shp_name: str = "cb_2023_us_state_5m.shp",
 ) -> tuple[gpd.GeoDataFrame, list[dict]]:
     """
     Convenience wrapper: downloads the boundary file if needed and returns

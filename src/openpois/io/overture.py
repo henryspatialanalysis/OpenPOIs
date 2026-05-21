@@ -5,29 +5,32 @@
 
 """
 This module downloads a current/latest Overture Maps Places snapshot for the
-US + Puerto Rico, filtered to a set of taxonomy categories.
+US + DC + 5 inhabited US territories, filtered to a set of taxonomy categories.
 
-Download strategy: a wide single-query scan of the full US+PR footprint
-crashed DuckDB on memory-constrained hosts (it materialized 6M+ rows before
-the spatial filter). This module instead iterates the 16 ``part-*.parquet``
-files that make up a release, queries each one with a bounded DuckDB session,
-and writes a plain parquet intermediate per part. Intermediates survive across
-invocations, so a crashed run can be resumed by re-running the script.
+Download strategy: a wide single-query scan of the full US + territories
+footprint crashed DuckDB on memory-constrained hosts (it materialized 6M+
+rows before the spatial filter). This module instead iterates the 16
+``part-*.parquet`` files that make up a release, queries each one with a
+bounded DuckDB session, and writes a plain parquet intermediate per part.
+Intermediates survive across invocations, so a crashed run can be resumed
+by re-running the script.
 
 After every part is present on local disk, a single DuckDB ``COPY`` applies
-the exact US+PR polygon filter (reading the boundary via the spatial
-extension), builds the ``geometry`` column with ``ST_Point``, and writes the
-final GeoParquet without ever materializing rows in Python. The output file
-is valid GeoParquet (readable by ``gpd.read_parquet`` with CRS preserved).
+the exact US + territories polygon filter (reading the boundary via the
+spatial extension), builds the ``geometry`` column with ``ST_Point``, and
+writes the final GeoParquet without ever materializing rows in Python. The
+output file is valid GeoParquet (readable by ``gpd.read_parquet`` with CRS
+preserved).
 
 Spatial filter strategy (two-stage, all inside DuckDB):
 
 1. Per-part ``WHERE`` uses predicate pushdown on Overture's ``bbox`` struct
-   column, OR-ing across one or more coarse bboxes. Multiple bboxes are
-   required to capture the Alaskan Near Islands (+172 E) without scanning
-   longitudes the main US bbox would miss.
+   column, OR-ing across one or more coarse bboxes. Two bboxes are required
+   to capture the western-Pacific territories (Guam, NMI) and the Alaskan
+   Near Islands at positive longitudes alongside the rest of the footprint
+   at negative longitudes.
 2. The final ``COPY`` does an exact ``ST_Within`` check against the dissolved
-   US+PR polygon to drop Canadian and Mexican border slivers.
+   US + territories polygon to drop Canadian and Mexican border slivers.
 
 Data source: s3://overturemaps-us-west-2/release/ (public, no auth required).
 
@@ -341,8 +344,8 @@ def _finalize_snapshot_in_duckdb(
     temp_directory: Path,
 ) -> None:
     """
-    Apply the exact US+PR polygon filter inside DuckDB and write the final
-    GeoParquet.
+    Apply the exact US + territories polygon filter inside DuckDB and
+    write the final GeoParquet.
 
     Reads all per-part intermediates, builds ``Point`` geometries from
     longitude/latitude, joins against the boundary polygon (read natively as
@@ -430,8 +433,8 @@ def download_overture_snapshot(
     (under ``output_path.parent / ".parts" / <release_date> /``); the loop is
     resumable — if an intermediate already exists, the part is skipped on the
     next run. After every part is present, a single DuckDB ``COPY`` applies
-    the exact US+PR polygon filter and writes the final GeoParquet without
-    materializing rows in Python.
+    the exact US + territories polygon filter and writes the final
+    GeoParquet without materializing rows in Python.
 
     Args:
         output_path: Path to write the output GeoParquet file.
@@ -446,8 +449,8 @@ def download_overture_snapshot(
             'geographic_entities'.
             See: https://docs.overturemaps.org/guides/places/taxonomy/
         boundary_gdf: Single-row GeoDataFrame in EPSG:4326 containing the
-            dissolved, buffered US+PR polygon. Used as the exact spatial
-            filter; obtain it from ``openpois.io.boundary``.
+            dissolved, buffered US + territories polygon. Used as the exact
+            spatial filter; obtain it from ``openpois.io.boundary``.
         coarse_bboxes: List of bbox dicts (keys ``xmin, ymin, xmax, ymax``)
             used as the DuckDB predicate-pushdown prefilter. Typically
             obtained from ``openpois.io.boundary.us_pr_bboxes``.
@@ -546,7 +549,7 @@ def download_overture_snapshot(
     boundary_gdf[["geometry"]].to_parquet(boundary_tmp)
 
     parts_glob = (parts_dir / "part-*.parquet").as_posix()
-    print("Applying US+PR polygon filter and writing final GeoParquet...")
+    print("Applying US + territories polygon filter and writing final GeoParquet...")
     _finalize_snapshot_in_duckdb(
         parts_glob = parts_glob,
         boundary_path = boundary_tmp,

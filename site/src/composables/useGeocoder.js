@@ -19,7 +19,9 @@ async function search(query) {
         const params = new URLSearchParams({
           api_key: import.meta.env.VITE_STADIA_API_KEY,
           text: query,
-          'boundary.country': 'US',
+          // Match the dataset's geographic scope: 50 states + DC + the
+          // 5 inhabited US territories (PR, VI, GU, MP, AS).
+          'boundary.country': 'US,PR,VI,GU,MP,AS',
           size: '5',
         })
         const resp = await fetch(`${STADIA_GEOCODING_URL}?${params}`)
