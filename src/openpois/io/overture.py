@@ -270,7 +270,9 @@ def _download_one_part(
     between parts.
 
     Output schema: source, overture_id, release_date, taxonomy_l0/l1/l2,
-    overture_name, brand_name, confidence, longitude, latitude. No geometry
+    overture_categories_alternate, overture_name, brand_name, confidence,
+    overture_addr_street/city/state/postcode/country, overture_websites,
+    overture_phones, overture_socials, longitude, latitude. No geometry
     column — geometry is built in the final merge step.
     """
     intermediate_path.parent.mkdir(parents = True, exist_ok = True)
@@ -287,9 +289,18 @@ def _download_one_part(
                 taxonomy.hierarchy[1] AS taxonomy_l0,
                 taxonomy.hierarchy[2] AS taxonomy_l1,
                 taxonomy.hierarchy[3] AS taxonomy_l2,
+                categories.alternate AS overture_categories_alternate,
                 names.primary AS overture_name,
                 brand.names.primary AS brand_name,
                 confidence,
+                addresses[1].freeform AS overture_addr_street,
+                addresses[1].locality AS overture_addr_city,
+                addresses[1].region   AS overture_addr_state,
+                addresses[1].postcode AS overture_addr_postcode,
+                addresses[1].country  AS overture_addr_country,
+                websites AS overture_websites,
+                phones   AS overture_phones,
+                socials  AS overture_socials,
                 ST_X(geometry) AS longitude,
                 ST_Y(geometry) AS latitude
             FROM read_parquet('{part_s3_uri}', hive_partitioning = 1)
@@ -359,9 +370,18 @@ def _finalize_snapshot_in_duckdb(
                 p.taxonomy_l0,
                 p.taxonomy_l1,
                 p.taxonomy_l2,
+                p.overture_categories_alternate,
                 p.overture_name,
                 p.brand_name,
                 p.confidence,
+                p.overture_addr_street,
+                p.overture_addr_city,
+                p.overture_addr_state,
+                p.overture_addr_postcode,
+                p.overture_addr_country,
+                p.overture_websites,
+                p.overture_phones,
+                p.overture_socials,
                 ST_Point(p.longitude, p.latitude) AS geometry
             FROM read_parquet('{parts_glob}', union_by_name = true) p, boundary b
             WHERE ST_Within(ST_Point(p.longitude, p.latitude), b.geom)

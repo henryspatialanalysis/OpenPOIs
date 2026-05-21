@@ -173,10 +173,22 @@ OVERTURE_MATCH_COLS = [
 OSM_MERGE_COLS = [
     "osm_id", "osm_type", "name", "brand",
     "conf_mean", "conf_lower", "conf_upper", "geometry",
+    # Address subfields
+    "addr:housenumber", "addr:street", "addr:unit",
+    "addr:city", "addr:state", "addr:postcode", "addr:country",
+    # Contact + hours + access
+    "phone", "website", "opening_hours", "access",
 ]
 OVERTURE_MERGE_COLS = [
     "overture_id", "overture_name", "brand_name",
     "confidence", "geometry",
+    # Address subfields (no housenumber / unit on the Overture side)
+    "overture_addr_street", "overture_addr_city",
+    "overture_addr_state", "overture_addr_postcode",
+    "overture_addr_country",
+    # Contact arrays + alternates
+    "overture_websites", "overture_phones", "overture_socials",
+    "overture_categories_alternate",
 ]
 
 
