@@ -100,7 +100,9 @@ def write_partitioned_dataset(
         partition_dir = output_dir / f"geohash_prefix={prefix}"
         partition_dir.mkdir()
         group.sort_values("geohash_sort")[cols].to_parquet(
-            partition_dir / "part-0.parquet"
+            partition_dir / "part-0.parquet",
+            write_covering_bbox = True,
+            row_group_size = 100_000,
         )
         if (i + 1) % 100 == 0:
             print(f"  {i + 1}/{n_partitions} partitions written...")
@@ -218,7 +220,9 @@ def write_label_partitioned_dataset(
         partition_dir = output_dir / f"{partition_col}={safe_value}"
         partition_dir.mkdir()
         group.sort_values(sort_col)[cols].to_parquet(
-            partition_dir / "part-0.parquet"
+            partition_dir / "part-0.parquet",
+            write_covering_bbox = True,
+            row_group_size = 100_000,
         )
         if (i + 1) % 25 == 0:
             print(f"  {i + 1}/{n_partitions} partitions written...")
