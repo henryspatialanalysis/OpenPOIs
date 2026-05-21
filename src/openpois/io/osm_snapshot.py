@@ -4,9 +4,9 @@
 #   -------------------------------------------------------------
 
 """
-This module downloads a current/latest POI snapshot for the US + Puerto Rico
-from OpenStreetMap using Geofabrik PBF extracts, osmium-tool CLI
-pre-filtering, and pyosmium parsing.
+This module downloads a current/latest POI snapshot for the US + inhabited
+US territories from OpenStreetMap using Geofabrik PBF extracts, osmium-tool
+CLI pre-filtering, and pyosmium parsing.
 
 It is broken into the following functions:
 
@@ -14,19 +14,25 @@ It is broken into the following functions:
 - filter_pbf: Runs osmium tags-filter to produce a reduced POI-only PBF.
 - parse_pbf_to_geodataframe: Parses the filtered PBF with pyosmium into a
     GeoDataFrame of nodes (Points) and ways (Polygons or Points).
-- download_osm_snapshot: End-to-end orchestrator. Downloads and parses both
-    the mainland US extract and the Puerto Rico extract, then concatenates
-    the results.
+- download_osm_snapshot: End-to-end orchestrator. Downloads and parses each
+    Geofabrik extract in the provided list, then concatenates the results.
 
-Data sources:
+Data sources (Geofabrik extracts; full set passed via the ``extracts``
+argument to ``download_osm_snapshot``):
     - US mainland (all 50 states incl. AK + HI, ~11 GB):
       https://download.geofabrik.de/north-america/us-latest.osm.pbf
     - Puerto Rico (separate extract, ~tens of MB):
       https://download.geofabrik.de/north-america/us/puerto-rico-latest.osm.pbf
+    - US Virgin Islands (separate extract, small):
+      https://download.geofabrik.de/north-america/us/us-virgin-islands-latest.osm.pbf
+    - American Oceania (covers Guam, Northern Mariana Islands, American
+      Samoa, and uninhabited US Pacific possessions; ~5 MB):
+      https://download.geofabrik.de/australia-oceania/american-oceania-latest.osm.pbf
 
 Geofabrik extracts are cut along administrative boundaries, so no polygon
-post-filter is applied here — the two extracts together cover exactly the
-US + PR footprint.
+post-filter is applied here — the listed extracts together cover the US +
+inhabited territories footprint (with a small bonus of uninhabited Pacific
+possessions, which contain near-zero POIs).
 
 osmium-tool CLI must be installed (conda install -c conda-forge osmium-tool).
 
@@ -41,6 +47,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import NamedTuple
 
 import geopandas as gpd
 import osmium
@@ -50,6 +57,23 @@ import pyarrow.parquet as pq
 import requests
 
 from openpois.io._osm_poi_handler import POIRecordBuilder
+
+
+class SnapshotExtract(NamedTuple):
+    """One Geofabrik extract to be downloaded, filtered, and parsed.
+
+    Attributes:
+        name: Short label used for logging and intermediate filenames
+            (e.g. ``"us"``, ``"pr"``, ``"usvi"``, ``"american_oceania"``).
+            Must be unique within the list passed to ``download_osm_snapshot``.
+        url: Geofabrik ``*-latest.osm.pbf`` URL.
+        raw_pbf_path: Local path to store the downloaded raw PBF.
+        filtered_pbf_path: Local path to store the tags-filtered PBF.
+    """
+    name: str
+    url: str
+    raw_pbf_path: Path
+    filtered_pbf_path: Path
 
 
 # -----------------------------------------------------------------------------
@@ -442,15 +466,10 @@ def _download_filter_parse_to_parquet(
 
 
 def download_osm_snapshot(
-    pbf_url: str,
-    raw_pbf_path: Path,
-    filtered_pbf_path: Path,
+    extracts: list[SnapshotExtract],
     output_path: Path,
     filter_keys: list[str],
     extract_keys: list[str],
-    pr_pbf_url: str,
-    raw_pr_pbf_path: Path,
-    filtered_pr_pbf_path: Path,
     overwrite_download: bool = False,
     overwrite_filter: bool = False,
     source_label: str = "osm",
@@ -461,36 +480,31 @@ def download_osm_snapshot(
     verbose: bool = True,
 ) -> Path:
     """
-    End-to-end orchestrator: download both the US-mainland and Puerto Rico
-    Geofabrik PBFs, filter each to POIs, parse each, concat, and save as
-    GeoParquet.
+    End-to-end orchestrator: download each Geofabrik extract in ``extracts``,
+    filter each to POIs, parse each, concat, and save as GeoParquet.
 
-    For each PBF the steps are:
+    For each extract the steps are:
 
     1. download_pbf — streams the PBF to the raw_pbf path.
     2. filter_pbf — runs osmium tags-filter to produce a POI-only PBF.
-    3. parse_pbf_to_geodataframe — parses with pyosmium into a GeoDataFrame.
+    3. parse_pbf_to_parquet — parses with pyosmium into an intermediate
+       parquet file.
 
-    The two GeoDataFrames are concatenated and written to output_path.
+    The intermediate parquets are concatenated and written to output_path.
 
     Steps 1 and 2 are skipped if the target files already exist unless
     overwrite_download / overwrite_filter are True.
 
     Args:
-        pbf_url: URL of the US-mainland PBF extract (Geofabrik us-latest,
-            all 50 states including AK + HI).
-        raw_pbf_path: Local path to store the US-mainland raw PBF.
-        filtered_pbf_path: Local path to store the US-mainland filtered PBF.
+        extracts: List of ``SnapshotExtract`` specs (one per Geofabrik PBF).
+            Each spec carries the URL plus the raw and filtered local paths.
+            Names must be unique within the list (they are used as suffixes
+            on the intermediate parquet filenames).
         output_path: Path to write the output GeoParquet file.
         filter_keys: OSM tag keys used to filter elements in the PBF. Elements
             lacking all of these keys are excluded.
         extract_keys: OSM tag keys to include as output columns. If None, all
             tags on accepted elements are extracted.
-        pr_pbf_url: URL of the Puerto Rico PBF extract
-            (Geofabrik puerto-rico-latest). Geofabrik serves this separately
-            from the US extract.
-        raw_pr_pbf_path: Local path to store the PR raw PBF.
-        filtered_pr_pbf_path: Local path to store the PR filtered PBF.
         overwrite_download: Re-download even if raw paths exist.
         overwrite_filter: Re-filter even if filtered paths exist.
         source_label: Value for the output 'source' column.
@@ -512,57 +526,54 @@ def download_osm_snapshot(
     Returns:
         Path to the written GeoParquet file (same as output_path).
     """
+    if not extracts:
+        raise ValueError("`extracts` must contain at least one SnapshotExtract.")
+    names = [spec.name for spec in extracts]
+    if len(set(names)) != len(names):
+        raise ValueError(
+            f"`extracts` names must be unique; got duplicates in {names}."
+        )
+
     output_path = Path(output_path)
     resolved_extract_keys = None if keep_all_keys else extract_keys
 
-    # Intermediate per-country parsed parquets, deleted after the final concat.
+    # One intermediate per-extract parquet, deleted after the final concat.
     # Written next to output_path so they live on the same filesystem (cheap
     # rename) and away from the PBF `parse_chunks/` work dirs.
-    us_parsed_path = output_path.with_name(output_path.stem + "._us.parquet")
-    pr_parsed_path = output_path.with_name(output_path.stem + "._pr.parquet")
+    parsed_paths: list[Path] = []
+    for spec in extracts:
+        parsed_path = output_path.with_name(
+            output_path.stem + f"._{spec.name}.parquet"
+        )
+        print(f"Processing {spec.name} extract...")
+        _download_filter_parse_to_parquet(
+            pbf_url = spec.url,
+            raw_pbf_path = spec.raw_pbf_path,
+            filtered_pbf_path = spec.filtered_pbf_path,
+            parsed_parquet_path = parsed_path,
+            filter_keys = filter_keys,
+            extract_keys = resolved_extract_keys,
+            overwrite_download = overwrite_download,
+            overwrite_filter = overwrite_filter,
+            source_label = source_label,
+            chunk_size = chunk_size,
+            max_area_nodes = max_area_nodes,
+            chunk_dir = chunk_dir,
+            verbose = verbose,
+        )
+        parsed_paths.append(parsed_path)
 
-    print("Processing US-mainland extract...")
-    _download_filter_parse_to_parquet(
-        pbf_url = pbf_url,
-        raw_pbf_path = raw_pbf_path,
-        filtered_pbf_path = filtered_pbf_path,
-        parsed_parquet_path = us_parsed_path,
-        filter_keys = filter_keys,
-        extract_keys = resolved_extract_keys,
-        overwrite_download = overwrite_download,
-        overwrite_filter = overwrite_filter,
-        source_label = source_label,
-        chunk_size = chunk_size,
-        max_area_nodes = max_area_nodes,
-        chunk_dir = chunk_dir,
-        verbose = verbose,
-    )
-
-    print("Processing Puerto Rico extract...")
-    _download_filter_parse_to_parquet(
-        pbf_url = pr_pbf_url,
-        raw_pbf_path = raw_pr_pbf_path,
-        filtered_pbf_path = filtered_pr_pbf_path,
-        parsed_parquet_path = pr_parsed_path,
-        filter_keys = filter_keys,
-        extract_keys = resolved_extract_keys,
-        overwrite_download = overwrite_download,
-        overwrite_filter = overwrite_filter,
-        source_label = source_label,
-        chunk_size = chunk_size,
-        max_area_nodes = max_area_nodes,
-        chunk_dir = chunk_dir,
-        verbose = verbose,
-    )
-
-    n_us = pq.read_metadata(us_parsed_path).num_rows
-    n_pr = pq.read_metadata(pr_parsed_path).num_rows
-    print(f"Concatenating US ({n_us:,}) + PR ({n_pr:,}) POIs...")
+    per_extract_counts = [
+        (spec.name, pq.read_metadata(p).num_rows)
+        for spec, p in zip(extracts, parsed_paths)
+    ]
+    summary = " + ".join(f"{n} ({c:,})" for n, c in per_extract_counts)
+    print(f"Concatenating {summary} POIs...")
     output_path.parent.mkdir(parents = True, exist_ok = True)
-    _merge_parquets_streaming([us_parsed_path, pr_parsed_path], output_path)
+    _merge_parquets_streaming(parsed_paths, output_path)
 
-    us_parsed_path.unlink()
-    pr_parsed_path.unlink()
+    for p in parsed_paths:
+        p.unlink()
 
     n_total = pq.read_metadata(output_path).num_rows
     print(f"Saved OSM snapshot ({n_total:,} POIs) to {output_path}")

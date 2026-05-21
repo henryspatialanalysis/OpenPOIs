@@ -1,11 +1,13 @@
 """
-Download the current US+PR OpenStreetMap POI snapshot as a GeoParquet file.
+Download the current US + inhabited-territories OpenStreetMap POI snapshot
+as a GeoParquet file.
 
-Downloads two Geofabrik PBF extracts — the US-mainland extract (~11 GB,
-covers all 50 states incl. AK + HI) and the Puerto Rico extract — uses
-osmium tags-filter to extract nodes and ways matching the configured tag
-keys, parses the result with pyosmium into GeoDataFrames, concatenates the
-US + PR results, and saves as GeoParquet. Incremental: skips any PBF
+Downloads four Geofabrik PBF extracts — the US-mainland extract (~11 GB,
+covers all 50 states incl. AK + HI), Puerto Rico, US Virgin Islands, and
+American Oceania (Guam, NMI, American Samoa, plus uninhabited US Pacific
+possessions) — uses osmium tags-filter to extract nodes and ways matching
+the configured tag keys, parses each result with pyosmium, concatenates the
+per-extract parquets, and saves as GeoParquet. Incremental: skips any PBF
 download or filter step whose output file already exists (controlled by
 overwrite_download and overwrite_filter config flags).
 
@@ -13,8 +15,10 @@ Note: osmium is resolved from the conda env bin rather than the shell PATH;
 no manual PATH modification is needed.
 
 Config keys used (config.yaml):
-    download.osm.pbf_url             — Geofabrik US PBF URL (50 states)
-    download.osm.pr_pbf_url          — Geofabrik Puerto Rico PBF URL
+    download.osm.pbf_url                      — Geofabrik US PBF URL (50 states)
+    download.osm.pr_pbf_url                   — Geofabrik Puerto Rico PBF URL
+    download.osm.usvi_pbf_url                 — Geofabrik US Virgin Islands PBF URL
+    download.osm.american_oceania_pbf_url     — Geofabrik American Oceania PBF URL
     download.osm.filter_keys         — OSM tag keys to retain (e.g. amenity, shop)
     download.osm.extract_keys        — tag keys to include as output columns
     download.osm.overwrite_download  — re-download PBFs even if they already exist
@@ -27,12 +31,12 @@ Config keys used (config.yaml):
     directories.snapshot_osm         — output directory; also used for temp PBF files
 
 Output file:
-    osm_snapshot.parquet — GeoParquet with US+PR POIs (nodes + area centroids)
+    osm_snapshot.parquet — GeoParquet with US + territories POIs (nodes + area centroids)
         Columns: osm_id, osm_type, name, geometry, last_edited, source,
         plus all extract_keys columns
 """
 from config_versioned import Config
-from openpois.io.osm_snapshot import download_osm_snapshot
+from openpois.io.osm_snapshot import SnapshotExtract, download_osm_snapshot
 
 # -----------------------------------------------------------------------------
 # Configuration constants
@@ -40,8 +44,6 @@ from openpois.io.osm_snapshot import download_osm_snapshot
 
 config = Config("~/repos/openpois/config.yaml")
 
-PBF_URL = config.get("download", "osm", "pbf_url")
-PR_PBF_URL = config.get("download", "osm", "pr_pbf_url")
 FILTER_KEYS = config.get("download", "osm", "filter_keys")
 EXTRACT_KEYS = config.get("download", "osm", "extract_keys")
 OVERWRITE_DOWNLOAD = config.get("download", "osm", "overwrite_download")
@@ -56,11 +58,40 @@ CHUNK_DIR = config.get_dir_path("snapshot_osm")
 
 SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
-RAW_PBF = config.get_file_path("snapshot_osm", "raw_pbf")
-FILTERED_PBF = config.get_file_path("snapshot_osm", "filtered_pbf")
-RAW_PR_PBF = config.get_file_path("snapshot_osm", "raw_pr_pbf")
-FILTERED_PR_PBF = config.get_file_path("snapshot_osm", "filtered_pr_pbf")
 OUTPUT_PATH = config.get_file_path("snapshot_osm", "snapshot")
+
+# One SnapshotExtract per Geofabrik PBF. Order is preserved through to the
+# concat step; keep the US-mainland extract first since it dominates wall time.
+EXTRACTS = [
+    SnapshotExtract(
+        name = "us",
+        url = config.get("download", "osm", "pbf_url"),
+        raw_pbf_path = config.get_file_path("snapshot_osm", "raw_pbf"),
+        filtered_pbf_path = config.get_file_path("snapshot_osm", "filtered_pbf"),
+    ),
+    SnapshotExtract(
+        name = "pr",
+        url = config.get("download", "osm", "pr_pbf_url"),
+        raw_pbf_path = config.get_file_path("snapshot_osm", "raw_pr_pbf"),
+        filtered_pbf_path = config.get_file_path("snapshot_osm", "filtered_pr_pbf"),
+    ),
+    SnapshotExtract(
+        name = "usvi",
+        url = config.get("download", "osm", "usvi_pbf_url"),
+        raw_pbf_path = config.get_file_path("snapshot_osm", "raw_usvi_pbf"),
+        filtered_pbf_path = config.get_file_path("snapshot_osm", "filtered_usvi_pbf"),
+    ),
+    SnapshotExtract(
+        name = "american_oceania",
+        url = config.get("download", "osm", "american_oceania_pbf_url"),
+        raw_pbf_path = config.get_file_path(
+            "snapshot_osm", "raw_american_oceania_pbf"
+        ),
+        filtered_pbf_path = config.get_file_path(
+            "snapshot_osm", "filtered_american_oceania_pbf"
+        ),
+    ),
+]
 
 
 # -----------------------------------------------------------------------------
@@ -69,12 +100,7 @@ OUTPUT_PATH = config.get_file_path("snapshot_osm", "snapshot")
 
 if __name__ == "__main__":
     download_osm_snapshot(
-        pbf_url = PBF_URL,
-        raw_pbf_path = RAW_PBF,
-        filtered_pbf_path = FILTERED_PBF,
-        pr_pbf_url = PR_PBF_URL,
-        raw_pr_pbf_path = RAW_PR_PBF,
-        filtered_pr_pbf_path = FILTERED_PR_PBF,
+        extracts = EXTRACTS,
         output_path = OUTPUT_PATH,
         filter_keys = FILTER_KEYS,
         extract_keys = EXTRACT_KEYS,
@@ -92,7 +118,11 @@ if __name__ == "__main__":
     # Clean up intermediates
     # -------------------------------------------------------------------------
     if OUTPUT_PATH.exists() and OUTPUT_PATH.stat().st_size > 0:
-        for p in (RAW_PBF, FILTERED_PBF, RAW_PR_PBF, FILTERED_PR_PBF):
+        intermediates = [
+            p for spec in EXTRACTS
+            for p in (spec.raw_pbf_path, spec.filtered_pbf_path)
+        ]
+        for p in intermediates:
             if p.exists():
                 print(f"Removing intermediate {p} ...")
                 p.unlink()
