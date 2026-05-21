@@ -4,9 +4,9 @@
 #   -------------------------------------------------------------
 
 """
-This module downloads US+PR full-history OpenStreetMap data for POI change-rate
-modelling using Geofabrik full-history PBF extracts, osmium-tool CLI
-pre-filtering, and pyosmium streaming.
+This module downloads full-history OpenStreetMap data for the US + inhabited
+territories for POI change-rate modelling using Geofabrik full-history PBF
+extracts, osmium-tool CLI pre-filtering, and pyosmium streaming.
 
 It is broken into the following functions:
 
@@ -19,17 +19,29 @@ It is broken into the following functions:
 - parse_history_pbf: Streams a filtered history PBF with pyosmium and writes
     per-version metadata (osm_versions.parquet) and per-version tag diffs
     (osm_changes.parquet).
-- download_osm_history: End-to-end orchestrator. Downloads both the US-mainland
-    and Puerto Rico history extracts, filters and time-filters each, parses
-    each, concatenates the results, and writes final versions/changes Parquets.
+- download_osm_history: End-to-end orchestrator. Downloads each Geofabrik
+    history extract in the provided list, filters and time-filters each,
+    parses each, concatenates the results with per-element dedup, and writes
+    final versions/changes Parquets. If a per-extract download returns 404
+    (e.g. a territory's history is not published on Geofabrik's internal
+    server), the loader logs a warning and continues without that extract;
+    its snapshot/Overture POIs still flow through downstream stages and the
+    rater falls back to the global-mean delta for that territory.
 
-Data sources:
-    - US mainland (all 50 states incl. AK + HI, ~11 GB):
-      https://osm-internal.download.geofabrik.de/north-america/us-internal.osh.pbf
+Data sources (Geofabrik internal full-history extracts; full set passed via
+the ``extracts`` argument to ``download_osm_history``). Paths are relative
+to ``https://osm-internal.download.geofabrik.de/``:
+    - US mainland (all 50 states incl. AK + HI, ~50 GB):
+      ``north-america/us-internal.osh.pbf``
     - Puerto Rico (separate extract):
-      https://osm-internal.download.geofabrik.de/north-america/us/puerto-rico-internal.osh.pbf
+      ``north-america/us/puerto-rico-internal.osh.pbf``
+    - US Virgin Islands (separate extract):
+      ``north-america/us/us-virgin-islands-internal.osh.pbf``
+    - American Oceania (Guam + NMI + American Samoa + uninhabited US Pacific
+      possessions):
+      ``australia-oceania/american-oceania-internal.osh.pbf``
 
-Both URLs live on Geofabrik's OAuth-protected internal server and require a
+All URLs live on Geofabrik's OAuth-protected internal server and require a
 valid OSM-account cookie jar. Any OSM account grants access; see the README
 section on cookie acquisition for details.
 
@@ -47,11 +59,36 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import NamedTuple
 
 import osmium
 import pyarrow as pa
 import pyarrow.parquet as pq
 import requests
+
+
+class HistoryExtract(NamedTuple):
+    """One Geofabrik full-history extract to be downloaded, filtered,
+    time-filtered, and parsed.
+
+    Attributes:
+        name: Short label used for logging and intermediate filenames
+            (e.g. ``"us"``, ``"pr"``, ``"usvi"``, ``"american_oceania"``).
+            Must be unique within the list passed to ``download_osm_history``.
+        url: Geofabrik ``*-internal.osh.pbf`` URL.
+        raw_pbf_path: Local path to store the downloaded raw history PBF.
+        filtered_pbf_path: Local path to store the tags-filtered PBF.
+        time_filtered_pbf_path: Local path to store the time-filtered PBF.
+        versions_path: Intermediate per-extract versions Parquet.
+        changes_path: Intermediate per-extract changes Parquet.
+    """
+    name: str
+    url: str
+    raw_pbf_path: Path
+    filtered_pbf_path: Path
+    time_filtered_pbf_path: Path
+    versions_path: Path
+    changes_path: Path
 
 
 # -----------------------------------------------------------------------------
@@ -588,101 +625,121 @@ def parse_history_pbf(
 
 
 # -----------------------------------------------------------------------------
-# Parquet concatenation (US + PR) with cross-extract deduplication
+# Parquet concatenation (N-way: US + territories) with cross-extract deduplication
 # -----------------------------------------------------------------------------
 
 
 def _concat_history(
-    us_versions_path: Path,
-    pr_versions_path: Path,
+    intermediates: list[tuple[Path, Path]],
     out_versions_path: Path,
-    us_changes_path: Path,
-    pr_changes_path: Path,
     out_changes_path: Path,
 ) -> tuple[Path, Path]:
     """
-    Stream-concatenate US + PR versions/changes Parquets, dropping PR rows for
-    any element already present in the US file.
+    Stream-concatenate N per-extract versions/changes Parquet pairs into the
+    final outputs, dropping rows for any element already written by an
+    earlier extract.
 
     Geofabrik's per-state/-territory extracts share near-boundary elements:
-    the same ``(type, id)`` version can legitimately appear in both the
-    US-mainland and Puerto Rico extracts. Concatenating naively would produce
-    duplicate rows per ``(id, version, key)`` in the changes Parquet, which
-    breaks ``format_observations`` (it calls ``.loc[key, "change"]`` and
-    expects a scalar, not a Series).
+    the same ``(type, id)`` version can legitimately appear in two extracts
+    that touch the same area. Concatenating naively would produce duplicate
+    rows per ``(id, version, key)`` in the changes Parquet, which breaks
+    ``format_observations`` (it calls ``.loc[key, "change"]`` and expects a
+    scalar, not a Series).
 
-    Strategy:
-    - Stream-copy US versions to the output, collecting the set of
-      ``(type, id)`` seen.
-    - Load PR versions fully (small — PR is ~70K versions), drop any row whose
-      ``(type, id)`` is already in US, write the remainder.
-    - Stream-copy US changes to the output.
-    - Load PR changes fully, drop any row whose ``id`` matches an element
-      dropped from PR versions, write the remainder.
+    Strategy (iterative over ``intermediates`` in the given order):
+    - Stream-copy the first extract's versions to the output, collecting
+      the set of ``(type, id)`` seen.
+    - For each subsequent extract, drop any row whose ``(type, id)`` was
+      already written, append the rest, and add the new ``(type, id)`` keys
+      to the seen set. Track which ids were dropped per-extract so the
+      matching changes rows can be dropped in the second pass.
+    - Stream-copy the first extract's changes; for each subsequent extract,
+      drop the changes rows tied to dropped versions and append the rest.
 
     Dedup is ``(type, id)``-keyed in both tables. OSM element ids are only
     unique *within* a type, so an id-only join would incorrectly collapse a
     node and a way that share an integer id — see the change-log for the
     bug that motivated adding ``type`` to ``osm_changes``.
 
+    Putting the largest extract first (e.g. ``us`` before the territories)
+    minimises wasted reads since dedup only ever drops rows from later
+    extracts.
+
     Args:
-        us_versions_path: Intermediate US versions Parquet.
-        pr_versions_path: Intermediate PR versions Parquet.
+        intermediates: List of ``(versions_path, changes_path)`` pairs, one
+            per successfully-processed extract, in concatenation order.
         out_versions_path: Final concatenated versions Parquet.
-        us_changes_path: Intermediate US changes Parquet.
-        pr_changes_path: Intermediate PR changes Parquet.
         out_changes_path: Final concatenated changes Parquet.
 
     Returns:
         Tuple ``(out_versions_path, out_changes_path)``.
     """
+    if not intermediates:
+        raise ValueError(
+            "`intermediates` must contain at least one (versions, changes) pair."
+        )
+
     out_versions_path.parent.mkdir(parents=True, exist_ok=True)
     out_changes_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Pass 1: versions
-    us_type_ids: set[tuple[str, int]] = set()
+    # Pass 1: versions. Stream-copy the first extract, then per-extract
+    # filter+append each subsequent one. Track per-extract dropped (type, id)
+    # so pass 2 can match the changes rows.
+    seen_type_ids: set[tuple[str, int]] = set()
+    dropped_per_extract: list[set[tuple[str, int]]] = [set()]
     with pq.ParquetWriter(out_versions_path, VERSIONS_SCHEMA) as writer:
-        us_reader = pq.ParquetFile(str(us_versions_path))
-        for batch in us_reader.iter_batches():
+        first_versions_path, _ = intermediates[0]
+        reader = pq.ParquetFile(str(first_versions_path))
+        for batch in reader.iter_batches():
             tbl = pa.Table.from_batches([batch], schema=VERSIONS_SCHEMA)
-            us_type_ids.update(
+            seen_type_ids.update(
                 zip(
                     tbl.column("type").to_pylist(),
                     tbl.column("id").to_pylist(),
                 )
             )
             writer.write_table(tbl)
-        pr_v = pq.read_table(str(pr_versions_path), schema=VERSIONS_SCHEMA)
-        pr_types = pr_v.column("type").to_pylist()
-        pr_ids = pr_v.column("id").to_pylist()
-        keep_mask = [
-            (t, i) not in us_type_ids for t, i in zip(pr_types, pr_ids)
-        ]
-        pr_dropped_type_ids = {
-            (t, i) for (t, i), keep in zip(zip(pr_types, pr_ids), keep_mask)
-            if not keep
-        }
-        pr_v_filtered = pr_v.filter(pa.array(keep_mask, type=pa.bool_()))
-        if pr_v_filtered.num_rows > 0:
-            writer.write_table(pr_v_filtered)
-
-    # Pass 2: changes
-    with pq.ParquetWriter(out_changes_path, CHANGES_SCHEMA) as writer:
-        us_reader = pq.ParquetFile(str(us_changes_path))
-        for batch in us_reader.iter_batches():
-            writer.write_table(pa.Table.from_batches([batch], schema=CHANGES_SCHEMA))
-        pr_c = pq.read_table(str(pr_changes_path), schema=CHANGES_SCHEMA)
-        if pr_dropped_type_ids and pr_c.num_rows > 0:
-            keep_mask = [
-                (t, i) not in pr_dropped_type_ids
-                for t, i in zip(
-                    pr_c.column("type").to_pylist(),
-                    pr_c.column("id").to_pylist(),
+        for versions_path, _ in intermediates[1:]:
+            v_tbl = pq.read_table(str(versions_path), schema=VERSIONS_SCHEMA)
+            types = v_tbl.column("type").to_pylist()
+            ids = v_tbl.column("id").to_pylist()
+            keep_mask = [(t, i) not in seen_type_ids for t, i in zip(types, ids)]
+            dropped = {
+                (t, i) for (t, i), keep in zip(zip(types, ids), keep_mask)
+                if not keep
+            }
+            dropped_per_extract.append(dropped)
+            v_filtered = v_tbl.filter(pa.array(keep_mask, type=pa.bool_()))
+            if v_filtered.num_rows > 0:
+                seen_type_ids.update(
+                    zip(
+                        v_filtered.column("type").to_pylist(),
+                        v_filtered.column("id").to_pylist(),
+                    )
                 )
-            ]
-            pr_c = pr_c.filter(pa.array(keep_mask, type=pa.bool_()))
-        if pr_c.num_rows > 0:
-            writer.write_table(pr_c)
+                writer.write_table(v_filtered)
+
+    # Pass 2: changes. Stream-copy the first extract's changes, then for
+    # each subsequent extract drop the changes rows whose (type, id) was
+    # dropped from versions and append the rest.
+    with pq.ParquetWriter(out_changes_path, CHANGES_SCHEMA) as writer:
+        _, first_changes_path = intermediates[0]
+        reader = pq.ParquetFile(str(first_changes_path))
+        for batch in reader.iter_batches():
+            writer.write_table(pa.Table.from_batches([batch], schema=CHANGES_SCHEMA))
+        for (_, changes_path), dropped in zip(intermediates[1:], dropped_per_extract[1:]):
+            c_tbl = pq.read_table(str(changes_path), schema=CHANGES_SCHEMA)
+            if dropped and c_tbl.num_rows > 0:
+                keep_mask = [
+                    (t, i) not in dropped
+                    for t, i in zip(
+                        c_tbl.column("type").to_pylist(),
+                        c_tbl.column("id").to_pylist(),
+                    )
+                ]
+                c_tbl = c_tbl.filter(pa.array(keep_mask, type=pa.bool_()))
+            if c_tbl.num_rows > 0:
+                writer.write_table(c_tbl)
 
     return out_versions_path, out_changes_path
 
@@ -740,18 +797,7 @@ def _download_filter_timefilter_parse(
 
 
 def download_osm_history(
-    pbf_url: str,
-    raw_pbf_path: Path,
-    filtered_pbf_path: Path,
-    time_filtered_pbf_path: Path,
-    us_versions_path: Path,
-    us_changes_path: Path,
-    pr_pbf_url: str,
-    raw_pr_pbf_path: Path,
-    filtered_pr_pbf_path: Path,
-    time_filtered_pr_pbf_path: Path,
-    pr_versions_path: Path,
-    pr_changes_path: Path,
+    extracts: list[HistoryExtract],
     output_versions_path: Path,
     output_changes_path: Path,
     filter_keys: list[str],
@@ -765,23 +811,25 @@ def download_osm_history(
     verbose: bool = True,
 ) -> tuple[Path, Path]:
     """
-    End-to-end orchestrator: download the US-mainland and PR Geofabrik
-    full-history PBFs, filter and time-filter each, parse each to Parquets,
-    and concatenate into the final versions + changes files.
+    End-to-end orchestrator: download each Geofabrik full-history PBF in
+    ``extracts``, filter and time-filter each, parse each to Parquets, and
+    concatenate into the final versions + changes files.
+
+    Per-extract failure tolerance: if ``download_history_pbf`` raises an
+    ``HTTPError`` with status 404 for an extract (e.g. a territory's history
+    is not published on Geofabrik's internal server), the loader logs a
+    warning and continues without that extract. Its snapshot/Overture POIs
+    still flow through the downstream stages; the rater simply falls back
+    to the global-mean delta for that territory's ``shared_label``s. Any
+    other download error propagates.
+
+    Putting the largest extract first (e.g. ``us`` before the territories)
+    minimises wasted work in ``_concat_history``, which only ever drops
+    rows from later extracts.
 
     Args:
-        pbf_url: URL of the US-mainland full-history PBF (Geofabrik internal).
-        raw_pbf_path: Local path for the raw US PBF.
-        filtered_pbf_path: Local path for the tags-filtered US PBF.
-        time_filtered_pbf_path: Local path for the time-filtered US PBF.
-        us_versions_path: Intermediate Parquet for US versions.
-        us_changes_path: Intermediate Parquet for US changes.
-        pr_pbf_url: URL of the Puerto Rico full-history PBF.
-        raw_pr_pbf_path: Local path for the raw PR PBF.
-        filtered_pr_pbf_path: Local path for the tags-filtered PR PBF.
-        time_filtered_pr_pbf_path: Local path for the time-filtered PR PBF.
-        pr_versions_path: Intermediate Parquet for PR versions.
-        pr_changes_path: Intermediate Parquet for PR changes.
+        extracts: List of ``HistoryExtract`` specs (one per Geofabrik
+            full-history PBF). Names must be unique within the list.
         output_versions_path: Final concatenated osm_versions.parquet.
         output_changes_path: Final concatenated osm_changes.parquet.
         filter_keys: OSM tag keys passed to ``tags-filter``.
@@ -796,55 +844,66 @@ def download_osm_history(
 
     Returns:
         Tuple ``(output_versions_path, output_changes_path)``.
-    """
-    print("Processing US-mainland history extract...")
-    _download_filter_timefilter_parse(
-        pbf_url=pbf_url,
-        raw_pbf_path=raw_pbf_path,
-        filtered_pbf_path=filtered_pbf_path,
-        time_filtered_pbf_path=time_filtered_pbf_path,
-        versions_path=us_versions_path,
-        changes_path=us_changes_path,
-        filter_keys=filter_keys,
-        start_date=start_date,
-        end_date=end_date,
-        cookie_file=cookie_file,
-        overwrite_download=overwrite_download,
-        overwrite_filter=overwrite_filter,
-        overwrite_parse=overwrite_parse,
-        chunk_size=chunk_size,
-        verbose=verbose,
-    )
 
-    print("Processing Puerto Rico history extract...")
-    _download_filter_timefilter_parse(
-        pbf_url=pr_pbf_url,
-        raw_pbf_path=raw_pr_pbf_path,
-        filtered_pbf_path=filtered_pr_pbf_path,
-        time_filtered_pbf_path=time_filtered_pr_pbf_path,
-        versions_path=pr_versions_path,
-        changes_path=pr_changes_path,
-        filter_keys=filter_keys,
-        start_date=start_date,
-        end_date=end_date,
-        cookie_file=cookie_file,
-        overwrite_download=overwrite_download,
-        overwrite_filter=overwrite_filter,
-        overwrite_parse=overwrite_parse,
-        chunk_size=chunk_size,
-        verbose=verbose,
-    )
+    Raises:
+        ValueError: If ``extracts`` is empty, has duplicate names, or every
+            extract fails the 404 check (the final concat needs at least
+            one successful intermediate).
+    """
+    if not extracts:
+        raise ValueError("`extracts` must contain at least one HistoryExtract.")
+    names = [spec.name for spec in extracts]
+    if len(set(names)) != len(names):
+        raise ValueError(
+            f"`extracts` names must be unique; got duplicates in {names}."
+        )
+
+    successful: list[tuple[Path, Path]] = []
+    for spec in extracts:
+        print(f"Processing {spec.name} history extract...")
+        try:
+            _download_filter_timefilter_parse(
+                pbf_url=spec.url,
+                raw_pbf_path=spec.raw_pbf_path,
+                filtered_pbf_path=spec.filtered_pbf_path,
+                time_filtered_pbf_path=spec.time_filtered_pbf_path,
+                versions_path=spec.versions_path,
+                changes_path=spec.changes_path,
+                filter_keys=filter_keys,
+                start_date=start_date,
+                end_date=end_date,
+                cookie_file=cookie_file,
+                overwrite_download=overwrite_download,
+                overwrite_filter=overwrite_filter,
+                overwrite_parse=overwrite_parse,
+                chunk_size=chunk_size,
+                verbose=verbose,
+            )
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            if status == 404:
+                print(
+                    f"WARNING: {spec.name} history PBF not found on Geofabrik "
+                    f"({spec.url} -> HTTP 404). Skipping; this territory's "
+                    f"POIs will rate against the global-mean delta only."
+                )
+                continue
+            raise
+        successful.append((spec.versions_path, spec.changes_path))
+
+    if not successful:
+        raise ValueError(
+            "All history extracts failed with HTTP 404. Cannot concat. "
+            "Check the URLs in config.yaml or refresh the Geofabrik cookie."
+        )
 
     print(
-        "Concatenating US + PR Parquets into"
-        f" {output_versions_path} / {output_changes_path}..."
+        f"Concatenating {len(successful)} history extract(s) into "
+        f"{output_versions_path} / {output_changes_path}..."
     )
     _concat_history(
-        us_versions_path=us_versions_path,
-        pr_versions_path=pr_versions_path,
+        intermediates=successful,
         out_versions_path=output_versions_path,
-        us_changes_path=us_changes_path,
-        pr_changes_path=pr_changes_path,
         out_changes_path=output_changes_path,
     )
     print(
