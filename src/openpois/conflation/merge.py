@@ -56,6 +56,84 @@ def _pick_geometries(
     return result
 
 
+def _present(arr: np.ndarray) -> np.ndarray:
+    """Boolean mask: True where the entry is non-null and, if a
+    string, non-empty. Overture occasionally emits ``""`` for missing
+    address subfields; treat that as missing so backfill kicks in.
+    """
+    notna = pd.notna(arr)
+    if arr.dtype != object:
+        return notna
+    nonempty = np.array(
+        [v != "" for v in arr], dtype = bool,
+    )
+    return notna & nonempty
+
+
+def _blend_with_backfill(
+    osm_vals: np.ndarray,
+    ov_vals: np.ndarray,
+    osm_higher: np.ndarray,
+) -> np.ndarray:
+    """Pick from the higher-confidence source per row, backfilling
+    from the other side whenever the preferred value is missing
+    (None, NaN, or empty string).
+
+    Bidirectional backfill — fixes the prior one-sided brand blend
+    that dropped Overture's brand whenever OSM had higher confidence
+    but a null brand. Used for ``name``, ``brand``, every ``addr_*``
+    field, and the unwrapped ``phone`` / ``website`` primaries.
+    """
+    osm_ok = _present(osm_vals)
+    ov_ok = _present(ov_vals)
+    out = np.where(osm_higher, osm_vals, ov_vals)
+    use_ov = osm_higher & ~osm_ok & ov_ok
+    use_osm = (~osm_higher) & ~ov_ok & osm_ok
+    out = np.where(use_ov, ov_vals, out)
+    out = np.where(use_osm, osm_vals, out)
+    return out
+
+
+def _col_or_null(
+    gdf: gpd.GeoDataFrame,
+    col: str,
+    idx: np.ndarray,
+) -> np.ndarray:
+    """Return ``gdf[col].to_numpy()[idx]`` if column exists, else an
+    object array of ``None`` of length ``len(idx)``. Mirrors the
+    inline ``"brand" in osm_gdf.columns`` guard that previously
+    appeared in three places.
+    """
+    if col in gdf.columns:
+        return gdf[col].to_numpy()[idx]
+    return np.full(len(idx), None, dtype = object)
+
+
+def _unwrap_first_element(arr: np.ndarray) -> np.ndarray:
+    """Flatten an array of LIST<STRING> values (Overture
+    ``websites`` / ``phones``) to an object array of the first
+    element or ``None``. Empty strings become ``None`` so backfill
+    treats them as missing.
+    """
+    out = np.empty(len(arr), dtype = object)
+    for i, x in enumerate(arr):
+        if x is None:
+            out[i] = None
+            continue
+        if isinstance(x, float) and np.isnan(x):
+            out[i] = None
+            continue
+        try:
+            if len(x) > 0:
+                v = x[0]
+                out[i] = v if v != "" else None
+            else:
+                out[i] = None
+        except TypeError:
+            out[i] = None
+    return out
+
+
 def _build_matched_gdf(
     osm_gdf: gpd.GeoDataFrame,
     overture_gdf: gpd.GeoDataFrame,
@@ -76,28 +154,81 @@ def _build_matched_gdf(
     ov_conf = np.where(np.isnan(ov_conf), 0.5, ov_conf)
     osm_higher = osm_conf >= ov_conf
 
+    # Dual-source string fields — blended primary + per-source
+    # traceability arrays. ``_blend_with_backfill`` handles the
+    # higher-confidence pick AND bidirectional null/empty backfill.
     osm_names = osm_gdf["name"].to_numpy()[oi]
     ov_names = overture_gdf["overture_name"].to_numpy()[vi]
-    names = np.where(
-        osm_higher,
-        osm_names,
-        np.where(pd.notna(ov_names), ov_names, osm_names),
+    names = _blend_with_backfill(osm_names, ov_names, osm_higher)
+
+    osm_brands = _col_or_null(osm_gdf, "brand", oi)
+    ov_brands = _col_or_null(overture_gdf, "brand_name", vi)
+    brands = _blend_with_backfill(osm_brands, ov_brands, osm_higher)
+
+    # Address subfields. ``housenumber`` and ``unit`` are OSM-only;
+    # the remaining five exist on both sides.
+    osm_addr_hn = _col_or_null(osm_gdf, "addr:housenumber", oi)
+    osm_addr_st = _col_or_null(osm_gdf, "addr:street", oi)
+    osm_addr_unit = _col_or_null(osm_gdf, "addr:unit", oi)
+    osm_addr_city = _col_or_null(osm_gdf, "addr:city", oi)
+    osm_addr_state = _col_or_null(osm_gdf, "addr:state", oi)
+    osm_addr_pc = _col_or_null(osm_gdf, "addr:postcode", oi)
+    osm_addr_country = _col_or_null(osm_gdf, "addr:country", oi)
+    ov_addr_st = _col_or_null(
+        overture_gdf, "overture_addr_street", vi,
+    )
+    ov_addr_city = _col_or_null(
+        overture_gdf, "overture_addr_city", vi,
+    )
+    ov_addr_state = _col_or_null(
+        overture_gdf, "overture_addr_state", vi,
+    )
+    ov_addr_pc = _col_or_null(
+        overture_gdf, "overture_addr_postcode", vi,
+    )
+    ov_addr_country = _col_or_null(
+        overture_gdf, "overture_addr_country", vi,
+    )
+    addr_street = _blend_with_backfill(
+        osm_addr_st, ov_addr_st, osm_higher,
+    )
+    addr_city = _blend_with_backfill(
+        osm_addr_city, ov_addr_city, osm_higher,
+    )
+    addr_state = _blend_with_backfill(
+        osm_addr_state, ov_addr_state, osm_higher,
+    )
+    addr_postcode = _blend_with_backfill(
+        osm_addr_pc, ov_addr_pc, osm_higher,
+    )
+    addr_country = _blend_with_backfill(
+        osm_addr_country, ov_addr_country, osm_higher,
     )
 
-    osm_brands = (
-        osm_gdf["brand"].to_numpy()[oi]
-        if "brand" in osm_gdf.columns
-        else np.full(len(oi), None, dtype = object)
+    # Contact arrays. Overture sides are LIST<STRING>; unwrap to the
+    # first element for the blended primary, preserve the full list
+    # in the traceability column.
+    osm_phone = _col_or_null(osm_gdf, "phone", oi)
+    osm_website = _col_or_null(osm_gdf, "website", oi)
+    ov_phones = _col_or_null(overture_gdf, "overture_phones", vi)
+    ov_websites = _col_or_null(overture_gdf, "overture_websites", vi)
+    phone = _blend_with_backfill(
+        osm_phone, _unwrap_first_element(ov_phones), osm_higher,
     )
-    ov_brands = (
-        overture_gdf["brand_name"].to_numpy()[vi]
-        if "brand_name" in overture_gdf.columns
-        else np.full(len(vi), None, dtype = object)
+    website = _blend_with_backfill(
+        osm_website, _unwrap_first_element(ov_websites), osm_higher,
     )
-    brands = np.where(
-        osm_higher,
-        osm_brands,
-        np.where(pd.notna(ov_brands), ov_brands, osm_brands),
+
+    # OSM-only fields
+    opening_hours = _col_or_null(osm_gdf, "opening_hours", oi)
+    access = _col_or_null(osm_gdf, "access", oi)
+
+    # Overture-only LIST<STRING> fields — preserved as-is.
+    overture_socials = _col_or_null(
+        overture_gdf, "overture_socials", vi,
+    )
+    overture_categories_alternate = _col_or_null(
+        overture_gdf, "overture_categories_alternate", vi,
     )
 
     merged_conf = osm_conf * osm_w + ov_conf * ov_w
@@ -142,10 +273,40 @@ def _build_matched_gdf(
             "conf_upper": conf_upper,
             "match_score": matches["composite_score"].to_numpy(),
             "match_distance_m": matches["distance_m"].to_numpy(),
+            "addr_housenumber": osm_addr_hn,
+            "addr_street": addr_street,
+            "addr_unit": osm_addr_unit,
+            "addr_city": addr_city,
+            "addr_state": addr_state,
+            "addr_postcode": addr_postcode,
+            "addr_country": addr_country,
+            "phone": phone,
+            "website": website,
+            "opening_hours": opening_hours,
+            "access": access,
+            "overture_socials": overture_socials,
+            "overture_categories_alternate":
+                overture_categories_alternate,
             "osm_name": osm_names,
             "overture_name": ov_names,
             "osm_brand": osm_brands,
             "overture_brand": ov_brands,
+            "osm_addr_housenumber": osm_addr_hn,
+            "osm_addr_street": osm_addr_st,
+            "osm_addr_unit": osm_addr_unit,
+            "osm_addr_city": osm_addr_city,
+            "osm_addr_state": osm_addr_state,
+            "osm_addr_postcode": osm_addr_pc,
+            "osm_addr_country": osm_addr_country,
+            "overture_addr_street": ov_addr_st,
+            "overture_addr_city": ov_addr_city,
+            "overture_addr_state": ov_addr_state,
+            "overture_addr_postcode": ov_addr_pc,
+            "overture_addr_country": ov_addr_country,
+            "osm_phone": osm_phone,
+            "overture_phones": ov_phones,
+            "osm_website": osm_website,
+            "overture_websites": ov_websites,
             "osm_conf_mean": osm_conf,
             "overture_confidence": ov_conf,
         },
@@ -170,15 +331,25 @@ def _build_unmatched_osm_gdf(
     osm_ids = osm_gdf["osm_id"].to_numpy()[idx]
     osm_types = osm_gdf["osm_type"].to_numpy()[idx]
     names = osm_gdf["name"].to_numpy()[idx]
-    brand_arr = (
-        osm_gdf["brand"].to_numpy()[idx]
-        if "brand" in osm_gdf.columns
-        else np.full(n, None, dtype = object)
-    )
+    brand_arr = _col_or_null(osm_gdf, "brand", idx)
     conf_mean = osm_gdf["conf_mean"].to_numpy()[idx].astype(float)
     conf_lower = osm_gdf["conf_lower"].to_numpy()[idx].astype(float)
     conf_upper = osm_gdf["conf_upper"].to_numpy()[idx].astype(float)
     geoms = osm_gdf.geometry.to_numpy()[idx]
+
+    osm_addr_hn = _col_or_null(osm_gdf, "addr:housenumber", idx)
+    osm_addr_st = _col_or_null(osm_gdf, "addr:street", idx)
+    osm_addr_unit = _col_or_null(osm_gdf, "addr:unit", idx)
+    osm_addr_city = _col_or_null(osm_gdf, "addr:city", idx)
+    osm_addr_state = _col_or_null(osm_gdf, "addr:state", idx)
+    osm_addr_pc = _col_or_null(osm_gdf, "addr:postcode", idx)
+    osm_addr_country = _col_or_null(osm_gdf, "addr:country", idx)
+    osm_phone = _col_or_null(osm_gdf, "phone", idx)
+    osm_website = _col_or_null(osm_gdf, "website", idx)
+    opening_hours = _col_or_null(osm_gdf, "opening_hours", idx)
+    access = _col_or_null(osm_gdf, "access", idx)
+
+    nulls = lambda: np.full(n, None, dtype = object)
 
     unified_ids = np.array(
         [f"osm:{x}" for x in osm_ids], dtype = object,
@@ -190,7 +361,7 @@ def _build_unmatched_osm_gdf(
             "source": "osm",
             "osm_id": osm_ids,
             "osm_type": osm_types,
-            "overture_id": np.full(n, None, dtype = object),
+            "overture_id": nulls(),
             "name": names,
             "brand": brand_arr,
             "shared_label": osm_shared_labels[idx],
@@ -199,10 +370,39 @@ def _build_unmatched_osm_gdf(
             "conf_upper": conf_upper,
             "match_score": np.full(n, np.nan),
             "match_distance_m": np.full(n, np.nan),
+            "addr_housenumber": osm_addr_hn,
+            "addr_street": osm_addr_st,
+            "addr_unit": osm_addr_unit,
+            "addr_city": osm_addr_city,
+            "addr_state": osm_addr_state,
+            "addr_postcode": osm_addr_pc,
+            "addr_country": osm_addr_country,
+            "phone": osm_phone,
+            "website": osm_website,
+            "opening_hours": opening_hours,
+            "access": access,
+            "overture_socials": nulls(),
+            "overture_categories_alternate": nulls(),
             "osm_name": names,
-            "overture_name": np.full(n, None, dtype = object),
+            "overture_name": nulls(),
             "osm_brand": brand_arr,
-            "overture_brand": np.full(n, None, dtype = object),
+            "overture_brand": nulls(),
+            "osm_addr_housenumber": osm_addr_hn,
+            "osm_addr_street": osm_addr_st,
+            "osm_addr_unit": osm_addr_unit,
+            "osm_addr_city": osm_addr_city,
+            "osm_addr_state": osm_addr_state,
+            "osm_addr_postcode": osm_addr_pc,
+            "osm_addr_country": osm_addr_country,
+            "overture_addr_street": nulls(),
+            "overture_addr_city": nulls(),
+            "overture_addr_state": nulls(),
+            "overture_addr_postcode": nulls(),
+            "overture_addr_country": nulls(),
+            "osm_phone": osm_phone,
+            "overture_phones": nulls(),
+            "osm_website": osm_website,
+            "overture_websites": nulls(),
             "osm_conf_mean": conf_mean,
             "overture_confidence": np.full(n, np.nan),
         },
@@ -224,17 +424,39 @@ def _build_unmatched_overture_gdf(
 
     ov_ids = overture_gdf["overture_id"].to_numpy()[idx]
     names = overture_gdf["overture_name"].to_numpy()[idx]
-    brand_arr = (
-        overture_gdf["brand_name"].to_numpy()[idx]
-        if "brand_name" in overture_gdf.columns
-        else np.full(n, None, dtype = object)
-    )
+    brand_arr = _col_or_null(overture_gdf, "brand_name", idx)
     ov_conf_raw = overture_gdf["confidence"].to_numpy()[idx]
     ov_conf = pd.to_numeric(
         ov_conf_raw, errors = "coerce"
     ).astype(float)
     ov_conf = np.where(np.isnan(ov_conf), 0.5, ov_conf)
     geoms = overture_gdf.geometry.to_numpy()[idx]
+
+    ov_addr_st = _col_or_null(
+        overture_gdf, "overture_addr_street", idx,
+    )
+    ov_addr_city = _col_or_null(
+        overture_gdf, "overture_addr_city", idx,
+    )
+    ov_addr_state = _col_or_null(
+        overture_gdf, "overture_addr_state", idx,
+    )
+    ov_addr_pc = _col_or_null(
+        overture_gdf, "overture_addr_postcode", idx,
+    )
+    ov_addr_country = _col_or_null(
+        overture_gdf, "overture_addr_country", idx,
+    )
+    ov_phones = _col_or_null(overture_gdf, "overture_phones", idx)
+    ov_websites = _col_or_null(overture_gdf, "overture_websites", idx)
+    ov_socials = _col_or_null(overture_gdf, "overture_socials", idx)
+    ov_categories_alt = _col_or_null(
+        overture_gdf, "overture_categories_alternate", idx,
+    )
+    phone_primary = _unwrap_first_element(ov_phones)
+    website_primary = _unwrap_first_element(ov_websites)
+
+    nulls = lambda: np.full(n, None, dtype = object)
 
     unified_ids = np.array(
         [f"overture:{x}" for x in ov_ids], dtype = object,
@@ -244,8 +466,8 @@ def _build_unmatched_overture_gdf(
         {
             "unified_id": unified_ids,
             "source": "overture",
-            "osm_id": np.full(n, None, dtype = object),
-            "osm_type": np.full(n, None, dtype = object),
+            "osm_id": nulls(),
+            "osm_type": nulls(),
             "overture_id": ov_ids,
             "name": names,
             "brand": brand_arr,
@@ -255,10 +477,39 @@ def _build_unmatched_overture_gdf(
             "conf_upper": np.full(n, np.nan),
             "match_score": np.full(n, np.nan),
             "match_distance_m": np.full(n, np.nan),
-            "osm_name": np.full(n, None, dtype = object),
+            "addr_housenumber": nulls(),
+            "addr_street": ov_addr_st,
+            "addr_unit": nulls(),
+            "addr_city": ov_addr_city,
+            "addr_state": ov_addr_state,
+            "addr_postcode": ov_addr_pc,
+            "addr_country": ov_addr_country,
+            "phone": phone_primary,
+            "website": website_primary,
+            "opening_hours": nulls(),
+            "access": nulls(),
+            "overture_socials": ov_socials,
+            "overture_categories_alternate": ov_categories_alt,
+            "osm_name": nulls(),
             "overture_name": names,
-            "osm_brand": np.full(n, None, dtype = object),
+            "osm_brand": nulls(),
             "overture_brand": brand_arr,
+            "osm_addr_housenumber": nulls(),
+            "osm_addr_street": nulls(),
+            "osm_addr_unit": nulls(),
+            "osm_addr_city": nulls(),
+            "osm_addr_state": nulls(),
+            "osm_addr_postcode": nulls(),
+            "osm_addr_country": nulls(),
+            "overture_addr_street": ov_addr_st,
+            "overture_addr_city": ov_addr_city,
+            "overture_addr_state": ov_addr_state,
+            "overture_addr_postcode": ov_addr_pc,
+            "overture_addr_country": ov_addr_country,
+            "osm_phone": nulls(),
+            "overture_phones": ov_phones,
+            "osm_website": nulls(),
+            "overture_websites": ov_websites,
             "osm_conf_mean": np.full(n, np.nan),
             "overture_confidence": ov_conf,
         },
