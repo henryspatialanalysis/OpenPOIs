@@ -92,8 +92,9 @@ export const BASE_MAP_STYLES = [
 export const CONFLATED_LABELS = SHARED_LABELS
 
 // Zoom thresholds — PMTiles min_zoom (site can't zoom out below this).
-// Points above z14 are rendered via ol-pmtiles over-zoom.
-export const MIN_ZOOM = 14
+// PMTiles archives carry z10–z14; z15+ render via ol-pmtiles over-zoom.
+// Per-layer point radius scales down at lower zooms (see utils.js).
+export const MIN_ZOOM = 10
 
 // Stadia Maps Geocoding
 export const STADIA_GEOCODING_URL =

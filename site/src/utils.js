@@ -42,3 +42,26 @@ export function confidenceColor(value) {
   const b = lerpChannel(lo.b, hi.b, t)
   return `rgb(${r},${g},${b})`
 }
+
+// Spherical-mercator resolution → integer zoom tier in [10, 14].
+// 40075016.6855784 / 256 ≈ 156543.03 m/px at z0; resolution halves per zoom.
+// Clamps to the tile range that prepare_pmtiles emits, so z15+ over-zoom and
+// any sub-z10 view (shouldn't happen — View.minZoom is 10) both fall through.
+export function zoomTierFromResolution(resolution) {
+  const z = Math.log2(156543.03392804097 / resolution)
+  if (z >= 13.5) return 14
+  if (z >= 12.5) return 13
+  if (z >= 11.5) return 12
+  if (z >= 10.5) return 11
+  return 10
+}
+
+// Radius / stroke width by zoom tier. Tuned so dense urban areas stop smearing
+// at low zoom while keeping z14 visually identical to the prior fixed-5 dots.
+export const POI_DOT_BY_ZOOM = {
+  14: { radius: 5,   stroke: 1 },
+  13: { radius: 4,   stroke: 1 },
+  12: { radius: 3,   stroke: 0.75 },
+  11: { radius: 2.5, stroke: 0.5 },
+  10: { radius: 2,   stroke: 0.5 },
+}
