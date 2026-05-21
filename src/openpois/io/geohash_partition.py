@@ -182,6 +182,32 @@ def write_label_partitioned_dataset(
     Partition values that are not alphanumeric (e.g., ``"Fast Food
     Restaurant"``) are URL-encoded in the directory name. DuckDB's
     ``hive_partitioning=1`` decodes these transparently at read time.
+
+    Output files include a GeoParquet 1.1 ``covering.bbox`` struct column
+    (``write_covering_bbox=True``) and use ``row_group_size=100_000`` so
+    spatial bbox predicates can prune row groups. Gotchas for consumers:
+
+    * Predicate pushdown only fires when filters reference the ``bbox``
+      struct fields directly — e.g.,
+      ``WHERE bbox.xmin <= ? AND bbox.xmax >= ? AND bbox.ymin <= ? AND
+      bbox.ymax >= ?``. ``ST_Intersects(geometry, …)`` alone will not
+      trigger bbox pruning in DuckDB; pass both predicates or rely on
+      GeoPandas's ``read_parquet(..., bbox=...)`` which adds the struct
+      filter automatically.
+    * Minimum reader versions: DuckDB ≥ 0.10, PyArrow ≥ 15, GeoPandas
+      ≥ 1.0, GDAL ≥ 3.8. Older readers see the ``bbox`` column as a
+      plain struct and silently skip the pruning optimization.
+    * The ``bbox`` column appears in ``DESCRIBE`` output and in
+      ``SELECT *`` results. Downstream pipelines that materialize all
+      columns will pick it up; drop it explicitly if it conflicts with a
+      schema contract.
+    * Writing requires ``geopandas >= 1.0``; calling this function from
+      an older environment will fail with an unexpected-kwarg error on
+      ``write_covering_bbox``.
+    * ``row_group_size=100_000`` is fine for small partitions (they end
+      up as a single row group) but it caps pruning granularity for very
+      large partitions. Tune downward if a single file grows past ~5M
+      rows and viewport queries still feel slow.
     """
     output_dir = Path(output_dir)
 
