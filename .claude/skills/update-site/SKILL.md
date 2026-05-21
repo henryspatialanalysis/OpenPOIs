@@ -32,12 +32,15 @@ Cooperative version folder.
    - Source filter dropdown (OSM / Overture / Conflated) toggles data
    - Taxonomy legend renders from `taxonomy.html`
    - POI popups show non-empty name/category/confidence
+   - **Post-territory-expansion (≥ 2026-05-21)**: pan to each of GU, VI, MP, AS — Guam (~+144°E) and American Samoa (~-170°W) are the longitudes most likely to expose tile-wrap or PMTiles edge bugs that haven't been exercised on real data. Confirm points render at all 4. Search-bar sanity check: `"Hagåtña"`, `"Charlotte Amalie"`, `"Saipan"`, `"Pago Pago"` should resolve via the Stadia geocoder (`useGeocoder.js` widens `boundary.country` to include `PR,VI,GU,MP,AS`).
 
 4. **Production build**:
    ```bash
    npm run build
    ```
    Inspect `dist/` output; flag large chunk-size increases if dependencies changed.
+
+   **Post-territory-expansion**: tippecanoe (run upstream during `conflate-snapshots`) now widens its tile pyramid to cover both hemispheres now that territory POIs span ~+144°E to ~-170°W. The PMTiles archive should still be small (z14, point data only), but a >2× jump in `osm.pmtiles` / `conflated.pmtiles` size vs the prior version suggests an unwanted full-globe tile pyramid — investigate before deploying.
 
 5. **Deploy** — per host's deployment mechanism (not scripted in-repo).
 

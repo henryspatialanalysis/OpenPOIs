@@ -27,10 +27,16 @@ Downloads the snapshot sources (50 US states + DC + 5 inhabited territories: PR,
 2. **Run the downloads** (independent — order doesn't matter, can run in parallel):
 
    ```bash
-   python scripts/osm_snapshot/download.py     # ~11 GB US PBF + PR PBF → osm_snapshot.parquet
-   python scripts/overture/download.py         # DuckDB over S3           → overture_snapshot.parquet
+   python scripts/osm_snapshot/download.py     # 4 Geofabrik PBFs → osm_snapshot.parquet
+   python scripts/overture/download.py         # DuckDB over S3   → overture_snapshot.parquet
    ```
-   Per-source details, auth, and schema quirks are in [docs/data-sources.md](../../docs/data-sources.md).
+   The snapshot loader pulls 4 extracts in sequence: `us`, `pr`, `usvi`, `american_oceania`. Per-source details, auth, and schema quirks are in [docs/data-sources.md](../../docs/data-sources.md).
+
+   **Gotcha — interrupted snapshot runs**: all 4 extracts share `~/data/openpois/snapshots/osm/<v>/parse_chunks/`. If a run dies between extracts, leftover chunks from extract N may be silently mistaken for extract N+1's parsed output on resume (the parser short-circuits on existing chunks). Before resuming an interrupted snapshot run, nuke the work dir:
+   ```bash
+   rm -rf ~/data/openpois/snapshots/osm/{version}/parse_chunks/
+   ```
+   This forces a clean re-parse of whichever extract was in flight; completed extracts (which write their own per-extract intermediate parquet next to the final output) are still skipped.
 
 3. **Apply the rating model to OSM** → `osm_snapshot_rated.parquet`:
    ```bash
@@ -45,11 +51,13 @@ Downloads the snapshot sources (50 US states + DC + 5 inhabited territories: PR,
 
 ## Verification
 
-Hand off to [skills/verify-pipeline-run](../verify-pipeline-run/SKILL.md). Baseline totals (as of 2026-04-17):
+Hand off to [skills/verify-pipeline-run](../verify-pipeline-run/SKILL.md). Baseline totals (as of 2026-04-17, pre-territory-expansion):
 - OSM: ~7.78M POIs
 - Overture: ~13.05M POIs (jumped from ~7.23M after widening `download.overture.taxonomy_allowlist` to include `services_and_business` + `lifestyle_services` sub-branches)
 
-Flag >5% drops.
+**First territory-inclusive run (≥ 2026-05-21)**: expect ~20–50K additional POIs combined across the 4 new territories (GU/VI/MP/AS). The first such run has no per-territory baseline yet — record actuals in the verify-pipeline-run output so future runs have a comparison point.
+
+Flag >5% drops against the prior run *of the same scope*. Don't compare a territory-inclusive run against a pre-expansion baseline as if a drop has occurred.
 
 ## Next
 

@@ -53,6 +53,18 @@ Version strings appear in these places outside `versions:` — grep before any c
 
 [skills/update-site](../skills/update-site/SKILL.md) covers the frontend side; [skills/conflate-snapshots](../skills/conflate-snapshots/SKILL.md) covers the publish + config side.
 
+## Geographic-scope changes (hand-update on bump)
+
+When the dataset's geographic scope changes (e.g. the 2026-05-21 territory expansion), the *next* Source Cooperative publish is the first to expose the change. The publish step doesn't read the boundary file, so the per-version README's geographic-scope language must be hand-updated alongside the version bump:
+
+| File | Update |
+|---|---|
+| `publish.version_metadata` in [config.yaml](../../config.yaml) | Any human-readable scope strings surfaced in the per-version README |
+| Per-version Source Coop README template (in the publisher) | Geographic scope line — e.g. "50 states + DC + 5 inhabited US territories" |
+| [README.md](../../README.md), [docs/data-sources.md](data-sources.md) | Already updated as part of the scope change PR; double-check before publish |
+
+The 2026-05-21 expansion was the move from "50 states + DC + PR" to "50 states + DC + 5 inhabited US territories" (added VI, GU, MP, AS).
+
 ## Workflow
 
 1. Bump the relevant `versions.*` keys before running a pipeline. For a public release, also bump `versions.source_coop` to the new `YYYY-MM-DD-v0`.
