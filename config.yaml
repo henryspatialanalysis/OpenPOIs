@@ -15,25 +15,42 @@ versions:
 download:
   general:
     timeout: 1_000
-    # Census 1:20M cartographic state boundary file; includes 50 states + DC
-    # + PR. Used by all three snapshot downloads to restrict POIs to the US
-    # plus Puerto Rico. The coastline buffer expands the dissolved polygon
-    # outward by N metres so near-shore POIs are retained; internal state
-    # borders disappear on dissolve so the buffer only affects the coast.
+    # Census 1:5M cartographic state boundary file; includes 50 states + DC
+    # + 5 inhabited US territories (PR, USVI, GU, MP, AS). The 1:20M variant
+    # used previously only covered states + DC + PR. Used by all three
+    # snapshot downloads to restrict POIs to the US footprint. The coastline
+    # buffer expands the dissolved polygon outward by N metres so near-shore
+    # POIs are retained; internal state borders disappear on dissolve so the
+    # buffer only affects the coast.
     boundary:
-      source_url: "https://www2.census.gov/geo/tiger/GENZ2023/shp/cb_2023_us_state_20m.zip"
+      source_url: "https://www2.census.gov/geo/tiger/GENZ2023/shp/cb_2023_us_state_5m.zip"
       coastline_buffer_m: 100
   osm:
     start_date: 2016-01-01
     end_date: 2025-12-31
+    # Snapshot extracts. Geofabrik publishes a dedicated PBF for PR and USVI
+    # under north-america/us/, but the western-Pacific inhabited territories
+    # (Guam, Northern Mariana Islands, American Samoa) have no per-territory
+    # files. They are bundled into a single `american-oceania` extract that
+    # also includes the uninhabited US Pacific possessions (Wake, Midway,
+    # Howland, Baker, Jarvis, Palmyra, Kingman) — those contribute near-zero
+    # POIs and are accepted as bonus coverage.
     pbf_url: "https://download.geofabrik.de/north-america/us-latest.osm.pbf"
     pr_pbf_url: "https://download.geofabrik.de/north-america/us/puerto-rico-latest.osm.pbf"
+    usvi_pbf_url: "https://download.geofabrik.de/north-america/us/us-virgin-islands-latest.osm.pbf"
+    american_oceania_pbf_url: "https://download.geofabrik.de/australia-oceania/american-oceania-latest.osm.pbf"
     # Full-history PBFs live on Geofabrik's OAuth-protected internal server.
     # Any OSM account grants access; generate a Netscape-format cookie jar by
     # logging in at https://osm-internal.download.geofabrik.de/ and exporting
-    # cookies, or by running Geofabrik's oauth_cookie_client.py.
+    # cookies, or by running Geofabrik's oauth_cookie_client.py. The
+    # `usvi_*` and `american_oceania_*` history URLs follow the same path
+    # convention as the snapshot URLs; if any are missing on the server, the
+    # history loader logs a warning and continues without that territory's
+    # history (the rater then falls back to the global-mean delta).
     history_pbf_url: "https://osm-internal.download.geofabrik.de/north-america/us-internal.osh.pbf"
     pr_history_pbf_url: "https://osm-internal.download.geofabrik.de/north-america/us/puerto-rico-internal.osh.pbf"
+    usvi_history_pbf_url: "https://osm-internal.download.geofabrik.de/north-america/us/us-virgin-islands-internal.osh.pbf"
+    american_oceania_history_pbf_url: "https://osm-internal.download.geofabrik.de/australia-oceania/american-oceania-internal.osh.pbf"
     history_cookie_file: "~/data/openpois/.creds/geofabrik_cookies.txt"
     overwrite_download: true
     overwrite_filter: true
@@ -139,7 +156,7 @@ directories:
     versioned: true
     path: ~/data/openpois/osm_data
     files:
-      # US+PR full-history pipeline (PBF-based)
+      # US + territories full-history pipeline (PBF-based)
       osm_changes: osm_changes.parquet
       osm_versions: osm_versions.parquet
       raw_history_pbf: us-internal.osh.pbf
@@ -148,10 +165,20 @@ directories:
       raw_pr_history_pbf: puerto-rico-internal.osh.pbf
       filtered_pr_history_pbf: puerto-rico-pois.osh.pbf
       time_filtered_pr_history_pbf: puerto-rico-pois-timefilt.osh.pbf
+      raw_usvi_history_pbf: us-virgin-islands-internal.osh.pbf
+      filtered_usvi_history_pbf: us-virgin-islands-pois.osh.pbf
+      time_filtered_usvi_history_pbf: us-virgin-islands-pois-timefilt.osh.pbf
+      raw_american_oceania_history_pbf: american-oceania-internal.osh.pbf
+      filtered_american_oceania_history_pbf: american-oceania-pois.osh.pbf
+      time_filtered_american_oceania_history_pbf: american-oceania-pois-timefilt.osh.pbf
       us_versions: us_osm_versions.parquet
       us_changes: us_osm_changes.parquet
       pr_versions: pr_osm_versions.parquet
       pr_changes: pr_osm_changes.parquet
+      usvi_versions: usvi_osm_versions.parquet
+      usvi_changes: usvi_osm_changes.parquet
+      american_oceania_versions: american_oceania_osm_versions.parquet
+      american_oceania_changes: american_oceania_osm_changes.parquet
       # Modelling-ready observations (one row per POI version × shared_label)
       osm_observations: osm_observations.parquet
   model_output:
@@ -171,6 +198,10 @@ directories:
       filtered_pbf: us-pois.osm.pbf
       raw_pr_pbf: puerto-rico-latest.osm.pbf
       filtered_pr_pbf: puerto-rico-pois.osm.pbf
+      raw_usvi_pbf: us-virgin-islands-latest.osm.pbf
+      filtered_usvi_pbf: us-virgin-islands-pois.osm.pbf
+      raw_american_oceania_pbf: american-oceania-latest.osm.pbf
+      filtered_american_oceania_pbf: american-oceania-pois.osm.pbf
       snapshot: osm_snapshot.parquet
       rated_snapshot: osm_snapshot_rated.parquet
       partitioned: osm_snapshot_partitioned
