@@ -1,15 +1,16 @@
 # Versioned directories (used with config.get_dir_path())
 versions:
-  osm_data: "20260515"
+  osm_data: "20260521"
   model_output: "20260422_by_shared_label"
-  snapshot_osm: "20260417"
-  snapshot_overture: "20260423"
-  conflation: "20260423"
-  source_coop: "2026-04-23-v0"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
+  snapshot_osm: "20260521"
+  snapshot_overture: "20260521"
+  conflation: "20260521"
+  source_coop: "2026-05-21-v0"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
   # Ghost POI dataset reconstructed from OSM history (one row per
   # detected previous-state event). Pinned to the same value as
-  # ``osm_data`` since it is derived from the same history parquets.
-  ghost_osm: "20260515"
+  # ``osm_data`` since it is derived from the same history parquets,
+  # and regenerated together with the monthly snapshot refresh.
+  ghost_osm: "20260521"
 
 # Settings for downloading data
 download:
@@ -74,7 +75,7 @@ download:
       'website','wikidata','wikipedia'
     ]
   overture:
-    release_date: null  # null = auto-detect latest
+    release_date: "2026-05-20.0"  # pin for determinism; null = auto-detect latest
     s3_bucket: "overturemaps-us-west-2"
     s3_region: "us-west-2"
     # DuckDB resource caps for the per-part S3 scans and the final polygon
