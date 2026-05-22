@@ -12,7 +12,7 @@ upload for web consumption.
 
 - Rated OSM snapshot (`osm_snapshot_rated.parquet`) at `versions.snapshot_osm` — produced by [skills/full-data-pull](../full-data-pull/SKILL.md) step 3.
 - Overture snapshot (`overture_snapshot.parquet`) at `versions.snapshot_overture`.
-- OSM history parquets (`osm_versions.parquet`, `osm_changes.parquet`) at `versions.osm_data` — produced by [skills/model-history-pipeline](../model-history-pipeline/SKILL.md). Required by the change-detection step in stage 4.
+- OSM history parquets (`osm_versions.parquet`, `osm_changes.parquet`) at `versions.osm_data` — **regenerated each month** by [skills/full-data-pull](../full-data-pull/SKILL.md) step 2 (via `scripts/osm_data/download_history.py`). The full re-fit pipeline at [skills/model-history-pipeline](../model-history-pipeline/SKILL.md) is only invoked when re-fitting λ. Required by the change-detection step in stage 4.
 - **Fresh Source Cooperative temp credentials** in `.env.json` at the repo root. Tokens expire in ~1 hour.
 
 > ⚠️ **Credential refresh check.** Source Cooperative uses short-lived AWS

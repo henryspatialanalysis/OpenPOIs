@@ -11,15 +11,19 @@ Two partition styles are supported:
   OSM POIs). Row-group-level geohash sort is still used within each
   partition so spatial filters prune efficiently.
 """
+import gc
 import shutil
 import urllib.parse
 import warnings
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 import pygeohash
 import shapely
+from geopandas.io.arrow import _geopandas_to_arrow
 
 
 def add_geohash_columns(
@@ -169,6 +173,7 @@ def write_label_partitioned_dataset(
     partition_col: str,
     sort_col: str = "geohash",
     overwrite: bool = True,
+    chunk_rows: int = 1_000_000,
 ) -> None:
     """Hive-partition a GeoDataFrame by ``partition_col``, writing one
     parquet file per distinct value.
@@ -208,6 +213,12 @@ def write_label_partitioned_dataset(
       up as a single row group) but it caps pruning granularity for very
       large partitions. Tune downward if a single file grows past ~5M
       rows and viewport queries still feel slow.
+
+    Memory: large partitions are written via ``pyarrow.parquet.ParquetWriter``
+    in row-group chunks of ``chunk_rows`` rows so the per-partition Arrow
+    Table never coexists at full size with the parent GeoDataFrame. The
+    sort step uses ``np.argsort`` + ``iloc`` rather than pandas
+    ``sort_values``, dropping one full-partition copy from the peak.
     """
     output_dir = Path(output_dir)
 
@@ -245,10 +256,54 @@ def write_label_partitioned_dataset(
         safe_value = urllib.parse.quote(str(value), safe = "")
         partition_dir = output_dir / f"{partition_col}={safe_value}"
         partition_dir.mkdir()
-        group.sort_values(sort_col)[cols].to_parquet(
-            partition_dir / "part-0.parquet",
-            write_covering_bbox = True,
-            row_group_size = 100_000,
-        )
+        part_path = partition_dir / "part-0.parquet"
+
+        # np.argsort + iloc avoids the full-partition copy that
+        # pandas .sort_values() would make; on the 3.9M-row "Other
+        # Amenity" partition that single dropped copy is ~3 GB.
+        sort_keys = group[sort_col].to_numpy()
+        sort_indices = np.argsort(sort_keys, kind = "mergesort")
+        del sort_keys
+
+        n_rows = len(group)
+        if n_rows <= chunk_rows:
+            # Small partitions: single write_table — same end state
+            # as the old code path.
+            sorted_slice = group.iloc[sort_indices][cols]
+            table = _geopandas_to_arrow(
+                sorted_slice, write_covering_bbox = True,
+            )
+            pq.write_table(
+                table, str(part_path),
+                row_group_size = 100_000,
+            )
+            del sorted_slice, table
+        else:
+            # Large partitions: stream via ParquetWriter in row-group
+            # chunks so the Arrow Table never coexists at full size
+            # with the parent GeoDataFrame.
+            sample_slice = group.iloc[sort_indices[:1]][cols]
+            sample_tbl = _geopandas_to_arrow(
+                sample_slice, write_covering_bbox = True,
+            )
+            schema = sample_tbl.schema
+            del sample_slice, sample_tbl
+
+            with pq.ParquetWriter(str(part_path), schema) as writer:
+                for chunk_start in range(0, n_rows, chunk_rows):
+                    chunk_end = min(chunk_start + chunk_rows, n_rows)
+                    chunk_indices = sort_indices[chunk_start:chunk_end]
+                    chunk_slice = group.iloc[chunk_indices][cols]
+                    chunk_tbl = _geopandas_to_arrow(
+                        chunk_slice, write_covering_bbox = True,
+                    )
+                    writer.write_table(
+                        chunk_tbl, row_group_size = 100_000,
+                    )
+                    del chunk_slice, chunk_tbl
+                    gc.collect()
+
+        gc.collect()
+
         if (i + 1) % 25 == 0:
             print(f"  {i + 1}/{n_partitions} partitions written...")
