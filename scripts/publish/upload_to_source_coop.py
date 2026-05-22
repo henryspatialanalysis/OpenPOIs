@@ -80,6 +80,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--skip-changelog", action = "store_true",
+        help = (
+            "Skip uploading CHANGELOG.md to the repo top level. Default "
+            "is to upload it on every run so the public copy stays in "
+            "sync with the latest per-release deltas."
+        ),
+    )
+    parser.add_argument(
         "--skip-latest-mirror", action = "store_true",
         help = (
             "Skip mirroring the uploaded version to {repo_prefix}/latest/. "
@@ -203,6 +211,25 @@ def main() -> None:
             f"  copied {summary['copied']} object(s), "
             f"deleted {summary['deleted']} stale object(s)."
         )
+
+    # -------------------------------------------------------------------------
+    # Top-level CHANGELOG.md (per-release deltas, updated every run by default)
+    # -------------------------------------------------------------------------
+    if not args.skip_changelog:
+        changelog_path = CONFIG_PATH.parent / "CHANGELOG.md"
+        if changelog_path.exists():
+            upload_bytes(
+                client = client,
+                data = changelog_path.read_bytes(),
+                bucket = bucket,
+                key = f"{repo_prefix}/CHANGELOG.md",
+                content_type = "text/markdown; charset=utf-8",
+                dry_run = args.dry_run,
+            )
+        else:
+            print(
+                f"Skipping CHANGELOG.md upload — {changelog_path} not found."
+            )
 
     # -------------------------------------------------------------------------
     # Top-level README + LICENSE (opt-in)
