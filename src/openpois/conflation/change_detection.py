@@ -647,42 +647,91 @@ def apply_shadow_match(
         new_conf_lower[target_global] = np.nan
         new_conf_upper[target_global] = np.nan
 
-    # -- Stitch into output --------------------------------------------
-    out = conflated.copy()
-    out["conf_mean"] = new_conf_mean
-    out["conf_lower"] = new_conf_lower
-    out["conf_upper"] = new_conf_upper
-    out["shadow_matched"] = shadow_matched
-    out["shadow_ghost_id"] = shadow_ghost_id
-    out["shadow_event_type"] = shadow_event_type
-    out["shadow_event_timestamp"] = shadow_event_timestamp.values
-    out["shadow_score"] = shadow_score
-    out["shadow_distance_m"] = shadow_distance_m
-    out["original_conf_mean"] = original_conf_mean
+    # -- Summary scalars are derived now, while pre- and post-penalty
+    # conf_mean views are both still alive. Lengths are captured here
+    # so we can free the heavy intermediates before the parquet write.
+    mean_penalty_factor = (
+        float(
+            (new_conf_mean[shadow_matched]
+             / np.where(
+                 original_conf_mean[shadow_matched] == 0, 1,
+                 original_conf_mean[shadow_matched],
+             )
+            ).mean()
+        )
+        if shadow_matched.any() else float("nan")
+    )
+    n_ghosts_in = int(len(ghosts))
+    n_shadow_matches = int(len(matches))
+
+    # On nationwide data the original "copy then write" path peaked
+    # past the 24 GB WSL cap (≈18M-row shapely-geometry GDF + a full
+    # .copy() + the pyarrow Table materialized inside to_parquet +
+    # the 9M-row unmatched_ov subset). Free the scratch state before
+    # the write peak.
+    del ghosts, matches
+    if "unmatched_ov" in locals():
+        del unmatched_ov  # noqa: F821 -- only bound in the else branch
+    gc.collect()
+
+    # Mutate conflated in place rather than allocating a full copy:
+    # the un-penalized baseline isn't needed after this point and the
+    # audit data is held in standalone numpy arrays.
+    conflated["conf_mean"] = new_conf_mean
+    conflated["conf_lower"] = new_conf_lower
+    conflated["conf_upper"] = new_conf_upper
+    conflated["shadow_matched"] = shadow_matched
+    conflated["shadow_ghost_id"] = shadow_ghost_id
+    conflated["shadow_event_type"] = shadow_event_type
+    conflated["shadow_event_timestamp"] = shadow_event_timestamp.values
+    conflated["shadow_score"] = shadow_score
+    conflated["shadow_distance_m"] = shadow_distance_m
+    conflated["original_conf_mean"] = original_conf_mean
+
+    # Pandas copied each array on assignment, so the standalone
+    # references are now redundant -- drop them before the write.
+    del (
+        new_conf_mean, new_conf_lower, new_conf_upper,
+        shadow_matched, shadow_ghost_id, shadow_event_type,
+        shadow_event_timestamp, shadow_score, shadow_distance_m,
+        original_conf_mean,
+    )
+    gc.collect()
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents = True, exist_ok = True)
     if verbose:
         print(f"Writing {output_path} ...")
-    out.to_parquet(output_path, compression = "zstd")
+
+    # Stream the write in row-group chunks. The default
+    # GeoDataFrame.to_parquet materializes a full pyarrow Table
+    # alongside the live GDF, doubling peak memory; on 18M-row
+    # nationwide inputs that exceeds the 24 GB WSL cap.
+    from geopandas.io.arrow import _geopandas_to_arrow
+
+    chunk_rows = 2_000_000
+    sample_tbl = _geopandas_to_arrow(conflated.iloc[:1])
+    schema = sample_tbl.schema
+    del sample_tbl
+    with pq.ParquetWriter(
+        str(output_path), schema, compression = "zstd",
+    ) as writer:
+        for start in range(0, n, chunk_rows):
+            end = min(start + chunk_rows, n)
+            chunk_tbl = _geopandas_to_arrow(
+                conflated.iloc[start:end]
+            )
+            writer.write_table(chunk_tbl)
+            del chunk_tbl
+            gc.collect()
 
     summary = {
         "n_total": int(n),
         "n_unmatched_overture": int(len(ov_global_idx)),
-        "n_ghosts": int(len(ghosts)),
-        "n_shadow_matches": int(len(matches)),
+        "n_ghosts": n_ghosts_in,
+        "n_shadow_matches": n_shadow_matches,
         "n_survivor_dropped": int(n_survivor_dropped),
-        "mean_penalty_factor": (
-            float(
-                (new_conf_mean[shadow_matched]
-                 / np.where(
-                     original_conf_mean[shadow_matched] == 0, 1,
-                     original_conf_mean[shadow_matched],
-                 )
-                ).mean()
-            )
-            if shadow_matched.any() else float("nan")
-        ),
+        "mean_penalty_factor": mean_penalty_factor,
     }
 
     # Confirm read-back schema integrity.
