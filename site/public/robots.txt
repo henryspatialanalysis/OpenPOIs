@@ -46,3 +46,6 @@ Disallow: /
 
 User-agent: meta-externalagent
 Disallow: /
+
+# --- Sitemap ---
+Sitemap: https://openpois.org/sitemap.xml
