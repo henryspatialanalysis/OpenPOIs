@@ -13,6 +13,7 @@ sign, broken priors).
 """
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 import jax.random as jrd
 import numpy as np
@@ -25,6 +26,7 @@ from openpois.models.osm_models import (
     MODEL_REGISTRY,
     ConstantModel,
     RandomByTypeModel,
+    RandomEffectsModel,
     get_model_class,
 )
 
@@ -399,9 +401,10 @@ def test_predictions_schema_random_by_type():
 
 def test_model_registry():
     """Registry exposes the supported models and rejects removed ones."""
-    assert set(MODEL_REGISTRY) == {"constant", "random_by_type"}
+    assert set(MODEL_REGISTRY) == {"constant", "random_by_type", "random_effects"}
     assert get_model_class("constant") is ConstantModel
     assert get_model_class("random_by_type") is RandomByTypeModel
+    assert get_model_class("random_effects") is RandomEffectsModel
     with pytest.raises(ValueError, match = "Unknown model"):
         get_model_class("pseudo_varying")
 
@@ -579,3 +582,150 @@ def test_random_by_type_requires_group():
     })
     with pytest.raises(ValueError, match = "group"):
         RandomByTypeModel(dataset = df, metadata = {"dt_col": "tag_years"})
+
+
+# Multi-term random effects -------------------------------------------------->
+
+
+def _re_frame(seed = 0, n = 4000):
+    """Synthetic observations carrying the amenity / MSA / urban_rural columns."""
+    rng = np.random.default_rng(seed)
+    return pd.DataFrame({
+        "id": rng.integers(0, 1500, n),
+        "shared_label": rng.choice([f"a{i}" for i in range(6)], n),
+        "msa_code": rng.choice(["12345", "31080", "NO_MSA"], n),
+        "urban_rural": rng.choice(["urban", "suburban", "rural"], n),
+        "tag_years": rng.uniform(0.2, 4.0, n),
+        "changed": rng.binomial(1, 0.12, n),
+        "is_first_interval": rng.binomial(1, 0.5, n).astype(bool),
+    })
+
+
+_ALL_TERMS = {
+    "amenity": {"column": "shared_label"},
+    "msa": {"column": "msa_code"},
+    "amenity_msa": {"columns": ["shared_label", "msa_code"], "min_count": 5},
+    "urbanicity": {"column": "urban_rural"},
+}
+
+
+def _perturbed_params(model, seed = 1):
+    key = jrd.PRNGKey(seed)
+    return {
+        k: v + 0.1 * jrd.normal(jrd.fold_in(key, i), v.shape)
+        for i, (k, v) in enumerate(model.starting_params.items())
+    }
+
+
+@pytest.mark.parametrize("terms", [
+    {"amenity": {"column": "shared_label"}},
+    {"msa": {"column": "msa_code"}},
+    {"urbanicity": {"column": "urban_rural"}},
+    _ALL_TERMS,
+])
+def test_random_effects_suff_stats_matches_dense(terms):
+    """Cell sufficient-stats log-density == dense per-row, value AND gradient,
+    for every term combination."""
+    df = _re_frame()
+    model = RandomEffectsModel(
+        dataset = df,
+        metadata = {
+            "dt_col": "tag_years", "terms": terms, "delta_group": "shared_label",
+        },
+    )
+    params = _perturbed_params(model)
+    row = model.build_row_data()
+    ss = model._suff_stats_log_likelihood(params, model.data, model.target)
+    dense = model._dense_log_likelihood(params, row, model.target)
+    assert abs(float(ss) - float(dense)) < 1e-3
+
+    g_ss = jax.grad(
+        lambda p: model._suff_stats_log_likelihood(p, model.data, model.target)
+    )(params)
+    g_dense = jax.grad(
+        lambda p: model._dense_log_likelihood(p, row, model.target)
+    )(params)
+    for k in params:
+        assert np.allclose(
+            np.asarray(g_ss[k]), np.asarray(g_dense[k]), atol = 1e-3
+        ), f"gradient mismatch for {k}"
+
+
+def test_random_effects_pointwise_sums_to_total():
+    """pointwise_log_likelihood sums to the dense total log-likelihood."""
+    df = _re_frame()
+    model = RandomEffectsModel(
+        dataset = df,
+        metadata = {
+            "dt_col": "tag_years", "terms": _ALL_TERMS, "delta_group": "shared_label",
+        },
+    )
+    params = _perturbed_params(model)
+    row = model.build_row_data()
+    pw = jnp.sum(model.pointwise_log_likelihood(params, row, model.target))
+    total = model._dense_log_likelihood(params, row, model.target)
+    assert abs(float(pw) - float(total)) < 1e-4
+
+
+def test_random_effects_amenity_only_matches_random_by_type():
+    """amenity-only RandomEffectsModel reproduces RandomByTypeModel's
+    log-density exactly at a shared parameter point."""
+    df = _re_frame()
+    re_model = RandomEffectsModel(
+        dataset = df,
+        metadata = {
+            "dt_col": "tag_years",
+            "terms": {"amenity": {"column": "shared_label"}},
+            "delta_group": "shared_label",
+        },
+    )
+    rbt = RandomByTypeModel(
+        dataset = df, metadata = {"dt_col": "tag_years", "group": "shared_label"},
+    )
+    rng = np.random.default_rng(3)
+    k = re_model._n_levels["amenity"]
+    eps = jnp.asarray(rng.normal(size = k))
+    eta = jnp.asarray(rng.normal(size = re_model._n_delta))
+    re_p = {
+        "log_lambda_0": jnp.array(-2.0), "log_sigma_amenity": jnp.array(-0.5),
+        "eps_amenity_raw": eps, "logit_delta_0": jnp.array(-3.0),
+        "log_tau": jnp.array(-2.0), "eta_raw": eta,
+    }
+    rbt_p = {
+        "log_lambda_0": jnp.array(-2.0), "log_sigma": jnp.array(-0.5),
+        "epsilon_raw": eps, "logit_delta_0": jnp.array(-3.0),
+        "log_tau": jnp.array(-2.0), "eta_raw": eta,
+    }
+    ll_re = re_model._suff_stats_log_likelihood(re_p, re_model.data, re_model.target)
+    ll_rbt = rbt._suff_stats_log_likelihood(rbt_p, rbt.data, rbt.target)
+    assert abs(float(ll_re) - float(ll_rbt)) < 1e-4
+
+
+def test_random_effects_interaction_min_count_floor():
+    """(amenity, MSA) cells below the distinct-POI floor get am_active = 0."""
+    df = _re_frame()
+    model = RandomEffectsModel(
+        dataset = df,
+        metadata = {
+            "dt_col": "tag_years",
+            "terms": {
+                "amenity_msa": {
+                    "columns": ["shared_label", "msa_code"], "min_count": 10_000,
+                },
+            },
+            "delta_group": None,
+        },
+    )
+    # No cell can reach 10k distinct POIs in a 4k-row frame → all inactive.
+    assert float(np.asarray(model.data["amenity_msa_active"]).sum()) == 0.0
+
+
+def test_random_effects_requires_terms():
+    """Empty/absent terms is a construction-time error."""
+    df = _re_frame(n = 50)
+    with pytest.raises(ValueError, match = "terms"):
+        RandomEffectsModel(dataset = df, metadata = {"dt_col": "tag_years"})
+
+
+def test_random_effects_in_registry():
+    assert get_model_class("random_effects") is RandomEffectsModel

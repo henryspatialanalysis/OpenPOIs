@@ -82,6 +82,49 @@ if N_CHAINS is None:
 SAVE_FULL_MODEL = config.get("osm_turnover_model", "save_full_model")
 
 
+def build_random_effects_metadata() -> dict:
+    """Assemble the ``random_effects`` model metadata from config — every
+    prior/toggle flows from ``osm_turnover_model.random_effects`` (no magic
+    numbers here)."""
+    re_cfg = config.get("osm_turnover_model", "random_effects")
+    terms: dict[str, dict] = {}
+    for name, tcfg in re_cfg["terms"].items():
+        if not tcfg.get("enabled"):
+            continue
+        if name == "amenity_msa":
+            terms[name] = {
+                "columns": list(tcfg["columns"]),
+                "var_prior": tuple(tcfg["var_prior"]),
+                "min_count": int(re_cfg.get("interaction_min_count", 100)),
+            }
+        elif name == "urbanicity":
+            terms[name] = {
+                "column": tcfg["column"],
+                "prior": tuple(tcfg["prior"]),
+            }
+        else:
+            terms[name] = {
+                "column": tcfg["column"],
+                "var_prior": tuple(tcfg["var_prior"]),
+            }
+    metadata = {
+        "dt_col": "tag_years",
+        "terms": terms,
+        "delta_group": re_cfg.get("delta_group"),
+    }
+    ldp = config.get(
+        "osm_turnover_model", "logit_delta_prior", fail_if_none = False
+    )
+    if ldp is not None:
+        metadata["logit_delta_prior"] = tuple(ldp)
+    ldvp = config.get(
+        "osm_turnover_model", "logit_delta_var_prior", fail_if_none = False
+    )
+    if ldvp is not None:
+        metadata["logit_delta_var_prior"] = tuple(ldvp)
+    return metadata
+
+
 def flatten_param_draws(
     param_draws: dict[str, jnp.ndarray],
 ) -> pd.DataFrame:
@@ -112,19 +155,38 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--model-type",
-        choices = ["constant", "random_by_type"],
+        choices = ["constant", "random_by_type", "random_effects"],
         default = None,
         help = (
             "Override osm_turnover_model.default_model_type for this run."
         ),
     )
+    parser.add_argument(
+        "--observations",
+        default = None,
+        help = (
+            "Path to an observations parquet to fit instead of the configured "
+            "osm_data.osm_observations (e.g. the testing fixture)."
+        ),
+    )
+    parser.add_argument(
+        "--model-version",
+        default = None,
+        help = (
+            "Write outputs to this model_output version instead of "
+            "versions.model_output (avoids clobbering a pinned fit)."
+        ),
+    )
     args = parser.parse_args()
 
-    MODEL_DIR.mkdir(parents = True, exist_ok = True)
-    config.write_self("model_output")
+    model_version = args.model_version
+    model_dir = config.get_dir_path("model_output", custom_version = model_version)
+    model_dir.mkdir(parents = True, exist_ok = True)
+    config.write_self("model_output", custom_version = model_version)
 
     # Data preparation ------------------------------------------------------>
-    observations_df = pd.read_parquet(OBSERVATIONS_PATH)
+    observations_path = args.observations or OBSERVATIONS_PATH
+    observations_df = pd.read_parquet(observations_path)
     # t1_col defaults to "last_obs_timestamp" in prepare_data_for_model, so
     # tag_years is the inter-observation interval the per-row Bernoulli-on-
     # Poisson likelihood requires (methodology §1.2).
@@ -141,23 +203,26 @@ if __name__ == "__main__":
         "osm_turnover_model", "default_model_type"
     )
     print(f"Model type: {model_type}")
-    metadata = {
-        "dt_col": "tag_years",
-        "group": GROUP_KEY,
-        "var_prior": tuple(
-            config.get("osm_turnover_model", "var_prior")
-        ),
-    }
-    logit_delta_prior = config.get(
-        "osm_turnover_model", "logit_delta_prior", fail_if_none = False
-    )
-    if logit_delta_prior is not None:
-        metadata["logit_delta_prior"] = tuple(logit_delta_prior)
-    logit_delta_var_prior = config.get(
-        "osm_turnover_model", "logit_delta_var_prior", fail_if_none = False
-    )
-    if logit_delta_var_prior is not None:
-        metadata["logit_delta_var_prior"] = tuple(logit_delta_var_prior)
+    if model_type == "random_effects":
+        metadata = build_random_effects_metadata()
+    else:
+        metadata = {
+            "dt_col": "tag_years",
+            "group": GROUP_KEY,
+            "var_prior": tuple(
+                config.get("osm_turnover_model", "var_prior")
+            ),
+        }
+        logit_delta_prior = config.get(
+            "osm_turnover_model", "logit_delta_prior", fail_if_none = False
+        )
+        if logit_delta_prior is not None:
+            metadata["logit_delta_prior"] = tuple(logit_delta_prior)
+        logit_delta_var_prior = config.get(
+            "osm_turnover_model", "logit_delta_var_prior", fail_if_none = False
+        )
+        if logit_delta_var_prior is not None:
+            metadata["logit_delta_var_prior"] = tuple(logit_delta_var_prior)
     model = get_model_class(model_type)(
         dataset = obs_sub,
         metadata = metadata,
@@ -184,7 +249,20 @@ if __name__ == "__main__":
         fitter.get_parameter_table()
         .merge(model.param_ids, on = "parameter", how = "left")
     )
-    if model.group_lookup is not None:
+    factor_lookups = getattr(model, "factor_lookups", None)
+    if factor_lookups:
+        # Multi-factor (random_effects): attach level names by (factor, level_id).
+        long_lookup = pd.concat(
+            [
+                lut.loc[:, ["level_id", "level_name"]].assign(factor = fac)
+                for fac, lut in factor_lookups.items()
+            ],
+            ignore_index = True,
+        )
+        fitted_params = fitted_params.merge(
+            long_lookup, on = ["factor", "level_id"], how = "left"
+        )
+    elif model.group_lookup is not None:
         fitted_params = fitted_params.merge(
             model.group_lookup, on = "group_id", how = "left"
         )
@@ -210,7 +288,19 @@ if __name__ == "__main__":
         .assign(t1 = 0.0, units = "years")
     )
     predictions["t2"] = np.asarray(predict_data["dt"])
-    if model.group_lookup is not None:
+    cell_lookup = getattr(model, "cell_lookup", None)
+    if cell_lookup is not None:
+        # Multi-factor (random_effects): one curve per observed cell; label it
+        # with the cell's amenity / MSA / urban_rural.
+        n_periods = len(predict_times)
+        predictions["cell_id"] = np.repeat(
+            np.arange(model._n_cells), n_periods
+        )
+        predictions = (
+            predictions.merge(cell_lookup, on = "cell_id", how = "left")
+            .sort_values(["cell_id", "t2"], ascending = True)
+        )
+    elif model.group_lookup is not None:
         predictions["group"] = np.asarray(predict_data["group"])
         predictions = (
             predictions

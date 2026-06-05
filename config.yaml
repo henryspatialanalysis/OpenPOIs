@@ -162,6 +162,34 @@ osm_turnover_model:
   # R-hat and bulk ESS diagnostics at roughly linear wall-time cost on CPU.
   n_chains: 4
   save_full_model: true
+  # ---- random_effects model (multi-term additive random intercepts) --------
+  # Used only when --model-type random_effects. Every hyperparameter the model
+  # uses is wired from this block — no magic numbers in the script or model
+  # body. Each term is included iff enabled: true, so any combination composes.
+  # var_prior / prior are (loc, scale) on the relevant log_sigma or coefficient.
+  random_effects:
+    # Column for grouped zero-inflation δ (null → single global δ).
+    delta_group: shared_label
+    # Minimum DISTINCT POIs in an (amenity, MSA) cell to warrant its own
+    # interaction level; smaller cells fall back on the main effects.
+    interaction_min_count: 100
+    terms:
+      amenity:
+        enabled: true
+        column: shared_label
+        var_prior: [-1.0, 5.0]      # matches the legacy random_by_type prior
+      msa:
+        enabled: true
+        column: msa_code
+        var_prior: [-1.0, 1.0]
+      amenity_msa:
+        enabled: true
+        columns: [shared_label, msa_code]
+        var_prior: [-2.0, 0.5]      # tight: shrink interactions toward zero
+      urbanicity:
+        enabled: true
+        column: urban_rural          # urban = reference; suburban/rural coeffs
+        prior: [0.0, 1.0]
 
 # Directory definitions (used with config.get_dir_path())
 directories:
