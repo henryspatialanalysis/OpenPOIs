@@ -172,9 +172,9 @@ log σ   ~ N(loc, scale)    (hyperprior)
 ```
 Partial pooling: rarely-observed groups shrink toward the pooled rate. Status in openpois: implemented as [`RandomByTypeModel`](src/openpois/models/osm_models.py#L177-L414), with both centered and non-centered reparameterizations. This is the canonical *Bayesian hierarchical* form of the model.
 
-Possible extensions not yet built:
-- Nested groups (e.g. fine category inside coarse category): `log λ_{g,c} = log λ_0 + α_c + β_{g|c}`.
-- Heavy-tailed random effects (`ε_g ~ t_ν` or Laplace) if a few groups are outliers.
+Extensions:
+- **Multiple additive random effects + a nested interaction + geographic fixed effects — implemented (§7).** `RandomEffectsModel` generalizes `RandomByTypeModel` to a composable sum of amenity, MSA, amenity×MSA (nested, tight prior), and suburban/rural terms on `log λ`. See §7.2.
+- Heavy-tailed random effects (`ε_g ~ t_ν` or Laplace) if a few groups are outliers — *not yet built*.
 
 ### Level 2 — covariates (exponential regression / Poisson GLM with offset)
 ```
@@ -389,3 +389,212 @@ Confirmed in-plan:
 - **The δ-component has a plausible interpretation.** In this POI-name setup, the δ-component corresponds to *names that change almost immediately after being set* — the natural candidates being vandalism reverts, typo fixes, and duplicate-edit clean-up. This is a meaningful separate data-generating process, not just a nuisance parameter, and the mixture structure of §1.7 captures it cleanly.
 
 **No open methodology questions remain.** The next step is to implement §1.7 at Level 0 (plus propagating both predictions forms from §1.7) before moving on to the Level 2+ extensions that are not yet built.
+
+> **Since this writeup**, the ZIE δ extension (§1.7) and a substantial Level‑1 generalization have been implemented. **§7** documents the multi-term random-effects model (`RandomEffectsModel`), the geographic indicators it consumes, the cell-based sufficient-statistics generalization, the predictive-fit / cross-validation framework (which supersedes the to-do framing in §3), and the apply-time reconstruction with its unseen-group back-off rule.
+
+## 7. Multi-term random effects, geographic indicators, cross-validation, and apply-time reconstruction
+
+This section documents the 2026-06 generalization of Level 1. It adds geographic
+covariates to every observation, generalizes the single-factor `RandomByTypeModel`
+to a composable sum of random and fixed effects (`RandomEffectsModel`),
+generalizes the sufficient-statistics likelihood to arbitrary factor
+combinations, adds a predictive-fit / cross-validation framework for comparing
+model variants, and rates the snapshot by reconstructing each POI's curve from
+the posterior (so unobserved cells are still rateable, with honest extra
+uncertainty). The ZIE δ machinery of §1.7 is carried through unchanged and stays
+orthogonal to everything below.
+
+### 7.1 Geographic indicators on each observation
+
+Two indicators are attached to every observation, **per OSM element from its
+most-recent location** (one spatial join per unique element, broadcast to all of
+that element's interval rows — not a per-row operation):
+
+- **`msa_code`** — Metropolitan Statistical Area (CBSA `LSAD == "M1"`, metro
+  only); points outside any MSA get the single dummy group `NO_MSA`.
+- **`urban_rural`** — from the containing Census place's population and density:
+  - **urban** = place population > 100k **and** density > 1000 / sq mi,
+  - **suburban** = otherwise, density > 500 / sq mi,
+  - **rural** = otherwise, or unincorporated (in no place).
+
+Data sources (cartographic-boundary line, single national files): CBSA
+`cb_2023_us_cbsa_500k` (filtered to metro), Place `cb_2023_us_place_500k`
+(incorporated places **and** CDPs), and 2020 Decennial place population
+(`P1_001N`, covers CDPs which the Population Estimates Program omits; fetched via
+the Census API with a key and cached to CSV).
+
+Code: [src/openpois/io/census_areas.py](src/openpois/io/census_areas.py)
+(download/load + `classify_places`-feeding loaders),
+[src/openpois/io/indicators.py](src/openpois/io/indicators.py)
+(`classify_places`, `assign_indicators`, `element_coordinates`,
+`element_indicator_map`). The element coordinate is the snapshot geometry's
+representative point, with a fallback to the last-known node lat/lon recovered
+from the `osm_changes` `lat`/`lon` pseudo-tags for deleted elements. The same
+`assign_indicators` is reused at apply time on the snapshot (§7.5).
+
+### 7.2 `RandomEffectsModel` — multiple additive random effects (generalizes Level 1)
+
+Per-observation log-rate, with only the enabled terms present:
+
+```
+log λ_i = log_lambda_0
+        + [amenity]      σ_amenity · ε_amenity_raw[a_i]        ε_raw ~ N(0,1)
+        + [msa]          σ_msa     · ε_msa_raw[m_i]
+        + [amenity×msa]  σ_am      · ε_am_raw[am_i]            (tight σ prior)
+        + [urbanicity]   β_sub · 1{suburban_i} + β_rural · 1{rural_i}
+```
+
+- **Non-centered** everywhere (`σ_t = exp(log_sigma_t)`, `ε_raw ~ N(0,1)`), reusing
+  the funnel-free parameterization that gives zero divergences (§2 Level 1).
+  Each gathered term has its own `log_sigma_t ~ N(loc, scale)` hyperprior.
+- **The amenity×MSA interaction is nested** and gets a **tighter** hyperprior than
+  the main effects (default `log_sigma_am ~ N(-2, 0.5)` vs `N(-1, …)`), so
+  interactions shrink toward zero unless strongly supported. To bound its
+  dimensionality, an `(amenity, MSA)` cell only gets its own level when it has
+  ≥ `interaction_min_count` **distinct POIs** (default 100); sub-threshold cells
+  contribute zero interaction (fall back on the main effects).
+- **Urbanicity is a fixed effect** with `urban` as the reference category: two
+  coefficients `β_suburban`, `β_rural` with a `N(0, scale)` prior. (Two levels
+  is effectively a fixed effect, not a partially-pooled random one.)
+- **δ (zero-inflation) is independent and configurable** — grouped by amenity
+  (the §1.7 behavior, default when the amenity term is on) or a single global
+  scalar. δ's grouping is decoupled from the λ terms.
+- **Every prior/scale is config-wired**, not hard-coded — the model is fully
+  reproducible from the `osm_turnover_model.random_effects` block. Each term is
+  toggled by its presence (`enabled: true`), so **any combination composes**, and
+  **amenity-only reproduces `RandomByTypeModel` exactly** (asserted to machine
+  precision in tests).
+
+Code: [`RandomEffectsModel`](src/openpois/models/osm_models.py) (registry key
+`random_effects`); config block `osm_turnover_model.random_effects` in
+[config.yaml](config.yaml); metadata assembly + factor-aware output in
+[scripts/models/osm_turnover.py](scripts/models/osm_turnover.py).
+
+### 7.3 Cell-based sufficient statistics (generalizes §1.2 / §4.1)
+
+The single-factor sufficient-statistics reduction (§4.1, keyed on `group`)
+generalizes to multiple factors by defining a **cell** = the unique tuple of all
+active factor levels (the enabled λ factors **plus** the δ-grouping factor). λ and
+δ are **constant within a cell by construction**, so the ZIE Bernoulli-on-Poisson
+factorization of §1.7 / §4.1 carries over verbatim with `group → cell`:
+
+```
+ll = − Σ_c λ_c · (Σ_{unchanged, first} Δ + Σ_{unchanged, non-first} Δ)_c
+     + Σ_c n_first_unchanged_c · log(1 − δ_c)
+     + Σ_{changed, non-first} log(1 − exp(−λ_c Δ))
+     + Σ_{changed, first}     log(1 − (1−δ_c)·exp(−λ_c Δ))
+```
+
+The unchanged contribution collapses from `O(N)` to `O(C)` per-cell scalars; the
+changed contribution iterates only the ~10% of rows that flipped — i.e.
+`O(C + N_changed)`, the same complexity class as the single-factor case. Per-cell
+`log λ_c` and `logit δ_c` are reconstructed by gathering each factor's level
+contribution (the term-enable flags are resolved at JAX trace time, so the
+compiled graph holds only the enabled gathers — no Python loops, no `lax.cond`).
+A dense per-row path is retained for the pointwise log-likelihood (§7.4); the
+two paths are asserted equal in value **and gradient** for every term combination.
+
+### 7.4 Predictive-fit metrics and cross-validation (supersedes the §3 to-do)
+
+[src/openpois/models/metrics.py](src/openpois/models/metrics.py) provides a
+model-agnostic comparison framework built on a per-observation, per-draw ZIE
+log-likelihood matrix (the model exposes `pointwise_log_likelihood`; the dense
+formula is used since the sufficient-stats path can't produce pointwise values):
+
+- **In-sample**: RMSE (`√mean((y_i − p̄_i)²)`, `p̄_i` the posterior-mean
+  conditional `P(change at Δ_i)`), **LPPD** `Σ_i log mean_s p(y_i|θ_s)` (via
+  `logsumexp`), and **WAIC** `= lppd − p_waic` with `p_waic = Σ_i var_s
+  log p(y_i|θ_s)` (reported on the deviance scale, positive = worse).
+- **Subgroup breakdowns** of all three, by amenity, MSA, urban/rural, and the
+  three-way cross-section, with LPD normalized by subgroup size.
+- **Out-of-sample**: a **structured 10-fold holdout** — whole POIs assigned to one
+  fold (all of a POI's interval rows together, so there is no within-POI leakage)
+  and **stratified** across `(MSA × amenity × urban/rural)` cells so each fold is
+  balanced. Each fold refits on the other nine and scores held-out RMSE + LPD;
+  the aggregate is mean RMSE and summed LPD. Methodology follows the
+  [mbg model-comparison article](https://henryspatialanalysis.github.io/mbg/articles/model-comparison.html),
+  with the per-POI / stratified choices specific to this dataset.
+
+Per-observation reductions are streamed in row-blocks so the `(draws, N)` matrix
+is never materialized at national scale. A small national fixture
+(~10k observations, 5 MSAs × 10 amenity types, whole POIs) is built by
+[scripts/exploratory/build_test_dataset.py](scripts/exploratory/build_test_dataset.py)
+for fast model iteration. `scripts/models/osm_turnover.py` writes
+`metrics_summary.csv` + `metrics_subgroup.csv` for any model exposing the
+pointwise likelihood.
+
+### 7.5 Apply-time prediction & the unseen-group back-off
+
+Rating the current snapshot enriches each POI with `msa_code` / `urban_rural`
+(§7.1, reusing `assign_indicators` on the snapshot geometry), assigns a
+`shared_label`, and then **reconstructs that cell's posterior-predictive curve
+directly from the saved draws** rather than looking it up in `predictions.csv`
+(which only holds observed training cells). This makes any
+`(amenity, MSA, urban/rural)` cell rateable. The conditional vs. fresh prediction
+regimes of §1.7 carry over unchanged.
+
+The novel piece is the **default case for a cell whose factor levels were not seen
+at fit time** — i.e. the posterior predictive for a *new* random-effect level,
+which differs by term type:
+
+- **Nested amenity×MSA interaction** — an unobserved `(amenity, MSA)` cell
+  contributes **exactly zero**; the POI falls back on the main effects. (Sparse,
+  tightly-shrunk interactions should not extrapolate.)
+- **All other random effects** (amenity main, MSA main, the per-amenity δ
+  grouping) — a new group's effect is **drawn from the fitted random-effect
+  distribution**, `ε_new ~ N(0, σ_term)` per posterior draw (using the posterior
+  draws of `σ_term`). This injects both the between-group spread and the
+  uncertainty in `σ`, so an unseen group gets a **wider** credible interval than an
+  observed one — the statistically correct posterior predictive for a new level,
+  not a flat fallback. The `N(0,1)` draw is **seeded by a stable hash of
+  `(term, group-name)`**, so the same new group yields the same effect across
+  batches and runs (consistent caching, reproducible output).
+- **Urbanicity** is a fixed effect over known categories — there is no unseen case.
+
+This realizes the principle that a never-before-seen MSA or amenity should be
+modeled as a fresh draw from the estimated heterogeneity (with appropriately
+inflated variance), while an unseen *interaction* — already weakly identified and
+tightly shrunk — simply reverts to its margins.
+
+Code: [src/openpois/models/reconstruct.py](src/openpois/models/reconstruct.py)
+(posterior-predictive curves per cell, vectorized over draws, chunked over cells);
+[scripts/osm_snapshot/apply_model_random_effects.py](scripts/osm_snapshot/apply_model_random_effects.py)
+(streams the snapshot, enriches + labels each batch, reconstructs each unique cell
+once via a cache, reads off confidence at years-since-edit). The fit step saves a
+long-form `factor_lookups.csv` (incl. the interaction's `amenity`/`msa_code`
+components) so the apply step can map cells back to level ids. The reconstruction
+is asserted to match `ModelFitter.predict` on observed cells.
+
+### 7.6 Data loading (implementation note)
+
+[src/openpois/osm/format_observations.py](src/openpois/osm/format_observations.py)
+gained a DuckDB **window-function** implementation (`format_observations_window`)
+of the per-POI state machine (`add_to_list` as a cumulative max; `tag_value`
+delete/re-add and `keep_keys` stickiness as null-preserving
+`last_value(… IGNORE NULLS)` carries; the `last_*` timestamps over emitted rows
+only). It produces **byte-for-byte identical** observations to the legacy row
+loop (gated by a golden test over all edge-case fixtures) but runs in DuckDB's
+streaming engine. Because the chained window operators exceed the memory budget
+in a single national pass, it executes in `hash(id)` buckets — windows partition
+by `(type, id)` and the hash depends only on `id`, so a POI's rows never split
+across buckets — keeping peak RAM bounded while running ~2–3× faster than the
+state machine. The observation build now also folds the §7.1 indicator enrichment
+and the shared-label assignment into a single streaming pass and emits
+`osm_type`, `msa_code`, and `urban_rural` columns.
+
+### 7.7 New / changed files (this session)
+
+| File | Role |
+|---|---|
+| [src/openpois/io/census_areas.py](src/openpois/io/census_areas.py) | **New.** Census CBSA / Place / population download + load (§7.1). |
+| [src/openpois/io/indicators.py](src/openpois/io/indicators.py) | **New.** `classify_places`, `assign_indicators`, element coordinate + indicator map (§7.1). |
+| [src/openpois/osm/format_observations.py](src/openpois/osm/format_observations.py) | DuckDB window build + `osm_type` column (§7.6). |
+| [scripts/osm_data/format_tabular.py](scripts/osm_data/format_tabular.py) | Element-level enrichment + streaming label/explode folded into the build (§7.1, §7.6). |
+| [src/openpois/models/osm_models.py](src/openpois/models/osm_models.py) | **`RandomEffectsModel`** + cell sufficient stats + `pointwise_log_likelihood` (§7.2, §7.3). |
+| [src/openpois/models/metrics.py](src/openpois/models/metrics.py) | **New.** RMSE / LPPD / WAIC, subgroup, stratified 10-fold CV (§7.4). |
+| [src/openpois/models/reconstruct.py](src/openpois/models/reconstruct.py) | **New.** Per-cell posterior-predictive reconstruction + unseen-group back-off (§7.5). |
+| [scripts/models/osm_turnover.py](scripts/models/osm_turnover.py) | `random_effects` wiring, factor-aware outputs, metrics + `factor_lookups.csv` (§7.2, §7.4, §7.5). |
+| [scripts/osm_snapshot/apply_model_random_effects.py](scripts/osm_snapshot/apply_model_random_effects.py) | **New.** Reconstruct-from-params snapshot rating (§7.5). |
+| [scripts/exploratory/build_test_dataset.py](scripts/exploratory/build_test_dataset.py) | **New.** National test fixture (§7.4). |
+| [config.yaml](config.yaml) | `download.census_areas`, `directories.census_areas`, `osm_turnover_model.random_effects`, metrics + `factor_lookups` model-output files. |
+| `tests/test_osm_models.py`, `tests/test_metrics.py`, `tests/test_reconstruct.py`, `tests/test_format_observations.py` | Regression coverage for all of the above (incl. amenity-only ≡ `RandomByTypeModel`, suff-stats ≡ dense, reconstruct ≡ predict, golden window ≡ state machine). |
