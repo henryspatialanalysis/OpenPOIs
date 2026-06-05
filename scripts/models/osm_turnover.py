@@ -251,17 +251,19 @@ if __name__ == "__main__":
         .merge(model.param_ids, on = "parameter", how = "left")
     )
     factor_lookups = getattr(model, "factor_lookups", None)
+    long_lookup = None
     if factor_lookups:
         # Multi-factor (random_effects): attach level names by (factor, level_id).
         long_lookup = pd.concat(
             [
-                lut.loc[:, ["level_id", "level_name"]].assign(factor = fac)
+                lut.assign(factor = fac)
                 for fac, lut in factor_lookups.items()
             ],
             ignore_index = True,
         )
         fitted_params = fitted_params.merge(
-            long_lookup, on = ["factor", "level_id"], how = "left"
+            long_lookup.loc[:, ["factor", "level_id", "level_name"]],
+            on = ["factor", "level_id"], how = "left",
         )
     elif model.group_lookup is not None:
         fitted_params = fitted_params.merge(
@@ -322,6 +324,13 @@ if __name__ == "__main__":
         predictions, "model_output", "predictions",
         custom_version = model_version,
     )
+    if long_lookup is not None:
+        # Long-form factor lookup (incl. the interaction's amenity/msa_code
+        # components) so the apply step can reconstruct arbitrary cells.
+        config.write(
+            long_lookup, "model_output", "factor_lookups",
+            custom_version = model_version,
+        )
     if fitter.diagnostics is not None:
         config.write(
             fitter.diagnostics, "model_output", "diagnostics",

@@ -233,6 +233,9 @@ directories:
       inference_data: inference_data.nc
       metrics_summary: metrics_summary.csv
       metrics_subgroup: metrics_subgroup.csv
+      # Long-form factor → level-name map (random_effects), used by the
+      # apply step to reconstruct per-cell curves from the fitted params.
+      factor_lookups: factor_lookups.csv
   snapshot_osm:
     versioned: true
     path: ~/data/openpois/snapshots/osm
