@@ -116,6 +116,18 @@ download:
       - [community_and_government, public_safety_service]
       - [travel_and_transportation, fueling_station]
       - [travel_and_transportation, vehicle_service]
+  # Census reference areas for the msa_code + urban_rural indicators. The
+  # cartographic-boundary (cb_*_500k) line is used because Census publishes
+  # single national "us" files there for both CBSA and Place. Place population
+  # comes from the 2020 Decennial (covers CDPs, which PEP omits) via the Census
+  # API; it requires a free key (CENSUS_API_KEY in the env or ~/.Renviron) and
+  # is cached to a static CSV on first run.
+  census_areas:
+    cbsa_url: "https://www2.census.gov/geo/tiger/GENZ2023/shp/cb_2023_us_cbsa_500k.zip"
+    place_url: "https://www2.census.gov/geo/tiger/GENZ2023/shp/cb_2023_us_place_500k.zip"
+    cbsa_shp_name: "cb_2023_us_cbsa_500k.shp"
+    place_shp_name: "cb_2023_us_place_500k.shp"
+    population_api_url: "https://api.census.gov/data/2020/dec/pl?get=NAME,P1_001N&for=place:*&in=state:*"
 
 # Settings for OSM exploratory data analysis
 osm_data:
@@ -210,6 +222,13 @@ directories:
   boundary:
     versioned: false
     path: ~/data/openpois/boundary
+  census_areas:
+    versioned: false
+    path: ~/data/openpois/census_areas
+    files:
+      cbsa_shapefile: cb_2023_us_cbsa_500k.shp
+      place_shapefile: cb_2023_us_place_500k.shp
+      place_population: place_population_2020.csv
   snapshot_overture:
     versioned: true
     path: ~/data/openpois/snapshots/overture
@@ -235,6 +254,9 @@ directories:
     files:
       osm_snippet: osm_snippet.csv
       overture_snippet: overture_snippet.csv
+      # Small national-scale modelling fixture (~10k obs, 5 MSAs x 10 amenity
+      # types) built by scripts/exploratory/build_test_dataset.py.
+      test_observations: test_observations.parquet
 
 # Settings for POI conflation
 conflation:
