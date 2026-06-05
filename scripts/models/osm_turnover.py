@@ -51,6 +51,7 @@ import numpy as np
 import pandas as pd
 from config_versioned import Config
 
+from openpois.models import metrics
 from openpois.models.model_fitter import ModelFitter
 from openpois.models.osm_models import get_model_class
 from openpois.models.setup import prepare_data_for_model
@@ -313,14 +314,25 @@ if __name__ == "__main__":
         )
 
     # Save ----------------------------------------------------------------->
-    config.write(fitted_params, "model_output", "fitted_params")
-    config.write(predictions, "model_output", "predictions")
+    config.write(
+        fitted_params, "model_output", "fitted_params",
+        custom_version = model_version,
+    )
+    config.write(
+        predictions, "model_output", "predictions",
+        custom_version = model_version,
+    )
     if fitter.diagnostics is not None:
-        config.write(fitter.diagnostics, "model_output", "diagnostics")
+        config.write(
+            fitter.diagnostics, "model_output", "diagnostics",
+            custom_version = model_version,
+        )
     try:
         idata = fitter.to_inference_data()
         idata.to_netcdf(
-            str(config.get_file_path("model_output", "inference_data"))
+            str(config.get_file_path(
+                "model_output", "inference_data", custom_version = model_version
+            ))
         )
     except ImportError:
         print("arviz not installed — skipping inference_data.nc")
@@ -329,4 +341,27 @@ if __name__ == "__main__":
             flatten_param_draws(fitter.get_parameter_draws()),
             "model_output",
             "param_draws",
+            custom_version = model_version,
         )
+
+    # Predictive-fit metrics (models exposing a pointwise log-likelihood) ----->
+    if hasattr(model, "build_row_data"):
+        summary = metrics.in_sample_metrics(model, fitter)
+        print("\nIn-sample metrics:")
+        for k, v in summary.items():
+            print(f"  {k}: {v}")
+        config.write(
+            pd.DataFrame([summary]), "model_output", "metrics_summary",
+            custom_version = model_version,
+        )
+        by = [
+            c for c in ("shared_label", "msa_code", "urban_rural")
+            if c in model.raw_data.columns
+        ]
+        if by:
+            config.write(
+                metrics.subgroup_metrics(model, fitter, by = tuple(by)),
+                "model_output",
+                "metrics_subgroup",
+                custom_version = model_version,
+            )

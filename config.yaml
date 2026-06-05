@@ -231,6 +231,8 @@ directories:
       predictions: predictions.csv
       diagnostics: diagnostics.csv
       inference_data: inference_data.nc
+      metrics_summary: metrics_summary.csv
+      metrics_subgroup: metrics_subgroup.csv
   snapshot_osm:
     versioned: true
     path: ~/data/openpois/snapshots/osm
