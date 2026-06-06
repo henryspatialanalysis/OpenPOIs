@@ -137,6 +137,46 @@ def in_sample_metrics(
     )
 
 
+def _aggregate_subgroups(
+    frame: pd.DataFrame,
+    by: tuple[str, ...],
+    include_cross: bool = True,
+) -> pd.DataFrame:
+    """
+    Aggregate a per-observation stats ``frame`` into per-subgroup RMSE / LPD /
+    WAIC rows, one block per column in ``by`` plus (optionally) their
+    cross-section.
+
+    ``frame`` must carry ``lppd``, ``var_ll``, ``sq_err`` and every column in
+    ``by``. Returns a long-form DataFrame with columns ``[grouping, level, n,
+    rmse, lppd, lppd_per_obs, p_waic, elpd_waic, waic]``.
+    """
+    def _agg(group_cols: list[str], label: str) -> pd.DataFrame:
+        rows = []
+        for level, g in frame.groupby(group_cols, observed = True):
+            n = len(g)
+            lppd_sum = float(g["lppd"].sum())
+            p_waic = float(g["var_ll"].sum())
+            elpd = lppd_sum - p_waic
+            rows.append({
+                "grouping": label,
+                "level": level if isinstance(level, str) else " | ".join(map(str, level)),
+                "n": n,
+                "rmse": float(np.sqrt(g["sq_err"].mean())),
+                "lppd": lppd_sum,
+                "lppd_per_obs": lppd_sum / n,
+                "p_waic": p_waic,
+                "elpd_waic": elpd,
+                "waic": -2.0 * elpd,
+            })
+        return pd.DataFrame(rows)
+
+    parts = [_agg([col], col) for col in by]
+    if include_cross and len(by) > 1:
+        parts.append(_agg(list(by), " x ".join(by)))
+    return pd.concat(parts, ignore_index = True)
+
+
 def subgroup_metrics(
     model,
     fitter: ModelFitter,
@@ -163,31 +203,7 @@ def subgroup_metrics(
     })
     for col in by:
         frame[col] = base[col].to_numpy()
-
-    def _agg(group_cols: list[str], label: str) -> pd.DataFrame:
-        rows = []
-        for level, g in frame.groupby(group_cols, observed = True):
-            n = len(g)
-            lppd_sum = float(g["lppd"].sum())
-            p_waic = float(g["var_ll"].sum())
-            elpd = lppd_sum - p_waic
-            rows.append({
-                "grouping": label,
-                "level": level if isinstance(level, str) else " | ".join(map(str, level)),
-                "n": n,
-                "rmse": float(np.sqrt(g["sq_err"].mean())),
-                "lppd": lppd_sum,
-                "lppd_per_obs": lppd_sum / n,
-                "p_waic": p_waic,
-                "elpd_waic": elpd,
-                "waic": -2.0 * elpd,
-            })
-        return pd.DataFrame(rows)
-
-    parts = [_agg([col], col) for col in by]
-    if include_cross and len(by) > 1:
-        parts.append(_agg(list(by), " x ".join(by)))
-    return pd.concat(parts, ignore_index = True)
+    return _aggregate_subgroups(frame, by, include_cross = include_cross)
 
 
 # Cross-validation ----------------------------------------------------------->
@@ -266,6 +282,8 @@ def cross_validate(
     strata: tuple[str, ...] = ("msa_code", "shared_label", "urban_rural"),
     seed: int = 0,
     prepared: bool = True,
+    fold_ids: np.ndarray | pd.Series | None = None,
+    subgroup_by: tuple[str, ...] | None = None,
 ) -> dict:
     """
     Structured per-POI 10-fold cross-validation.
@@ -285,19 +303,39 @@ def cross_validate(
         seed: RNG seed for folds + NUTS.
         prepared: Whether ``observations_df`` already has tag_years /
             is_first_interval (skip ``prepare_data_for_model``).
+        fold_ids: Precomputed fold id per row (``1..n_folds``), aligned to
+            ``observations_df`` row order. When given, fold assignment is taken
+            from here instead of calling :func:`assign_holdout_folds` — the way
+            to score several model specifications on one fixed holdout set.
+        subgroup_by: When given, also pool the held-out per-observation stats
+            across folds and aggregate them by these columns, returned under
+            ``per_subgroup``. This is a genuine out-of-sample subgroup
+            breakdown (every observation scored from a model that never saw it).
 
     Returns:
-        dict with ``per_fold`` (DataFrame) and ``aggregate`` (dict).
+        dict with ``per_fold`` (DataFrame), ``aggregate`` (dict), and — when
+        ``subgroup_by`` is given — ``per_subgroup`` (DataFrame).
     """
     model_cls = get_model_class(model_name)
     df = observations_df if prepared else prepare_data_for_model(observations_df)
     df = df.reset_index(drop = True)
-    folds = assign_holdout_folds(
-        df, n_folds = n_folds, strata = strata, seed = seed,
-    )
-    df = df.assign(_fold = folds.to_numpy())
+    if fold_ids is not None:
+        fold_arr = np.asarray(
+            fold_ids.to_numpy() if isinstance(fold_ids, pd.Series) else fold_ids
+        )
+        if len(fold_arr) != len(df):
+            raise ValueError(
+                f"fold_ids length {len(fold_arr)} != observations {len(df)}"
+            )
+        df = df.assign(_fold = fold_arr.astype(int))
+    else:
+        folds = assign_holdout_folds(
+            df, n_folds = n_folds, strata = strata, seed = seed,
+        )
+        df = df.assign(_fold = folds.to_numpy())
 
     per_fold = []
+    pooled_frames: list[pd.DataFrame] = []
     for k in range(1, n_folds + 1):
         train = df[df["_fold"] != k]
         test = df[df["_fold"] == k]
@@ -314,6 +352,15 @@ def cross_validate(
         )
         summary["fold"] = k
         per_fold.append(summary)
+        if subgroup_by is not None:
+            pooled = pd.DataFrame({
+                "lppd": stats["lppd"],
+                "var_ll": stats["var_ll"],
+                "sq_err": (stats["target"] - stats["p_mean"]) ** 2,
+            })
+            for col in subgroup_by:
+                pooled[col] = test[col].to_numpy()
+            pooled_frames.append(pooled)
 
     per_fold_df = pd.DataFrame(per_fold)
     aggregate = {
@@ -324,4 +371,10 @@ def cross_validate(
         ),
         "n_folds": int(len(per_fold_df)),
     }
-    return {"per_fold": per_fold_df, "aggregate": aggregate}
+    result = {"per_fold": per_fold_df, "aggregate": aggregate}
+    if subgroup_by is not None:
+        pooled_all = pd.concat(pooled_frames, ignore_index = True)
+        result["per_subgroup"] = _aggregate_subgroups(
+            pooled_all, subgroup_by, include_cross = False
+        )
+    return result

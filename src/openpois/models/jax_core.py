@@ -7,7 +7,6 @@
 Core functions for fitting Bayesian hierarchical models using JAX.
 """
 
-import importlib.util
 import os
 
 from numpy.random import randint
@@ -18,7 +17,16 @@ import jax.random as jrd
 import blackjax
 
 
-_HAS_FASTPROGRESS = importlib.util.find_spec("fastprogress") is not None
+# Probe with a real import, not just find_spec: fastprogress can be installed
+# yet unusable (it imports IPython, which may be absent), in which case
+# BlackJAX's progress-bar callback raises at run time. Treat a broken
+# fastprogress as absent so verbose fits silently skip the progress bar.
+try:
+    import fastprogress  # noqa: F401
+
+    _HAS_FASTPROGRESS = True
+except Exception:
+    _HAS_FASTPROGRESS = False
 
 
 def _configure_compilation_cache():

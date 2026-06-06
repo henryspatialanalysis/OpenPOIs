@@ -222,6 +222,10 @@ directories:
       american_oceania_changes: american_oceania_osm_changes.parquet
       # Modelling-ready observations (one row per POI version × shared_label)
       osm_observations: osm_observations.parquet
+      # Shared 10-fold holdout assignment (id → fold), built once by
+      # scripts/models/make_holdout_folds.py and reused by every OOS run so
+      # all model specifications are scored on identical folds.
+      holdout_folds: holdout_folds_10fold.parquet
   model_output:
     versioned: true
     path: ~/data/openpois/osm_turnover_model
@@ -236,6 +240,10 @@ directories:
       # Long-form factor → level-name map (random_effects), used by the
       # apply step to reconstruct per-cell curves from the fitted params.
       factor_lookups: factor_lookups.csv
+      # Out-of-sample cross-validation outputs (scripts/models/osm_turnover_cv.py)
+      oos_metrics_per_fold: oos_metrics_per_fold.csv
+      oos_metrics_aggregate: oos_metrics_aggregate.csv
+      oos_metrics_subgroup: oos_metrics_subgroup.csv
   snapshot_osm:
     versioned: true
     path: ~/data/openpois/snapshots/osm

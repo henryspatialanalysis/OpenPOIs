@@ -56,6 +56,8 @@ from openpois.models.model_fitter import ModelFitter
 from openpois.models.osm_models import get_model_class
 from openpois.models.setup import prepare_data_for_model
 
+from _re_metadata import build_random_effects_metadata
+
 
 # Globals
 config = Config("~/repos/openpois/config.yaml")
@@ -81,49 +83,6 @@ if N_SAMPLES is None:
 if N_CHAINS is None:
     N_CHAINS = 1
 SAVE_FULL_MODEL = config.get("osm_turnover_model", "save_full_model")
-
-
-def build_random_effects_metadata() -> dict:
-    """Assemble the ``random_effects`` model metadata from config — every
-    prior/toggle flows from ``osm_turnover_model.random_effects`` (no magic
-    numbers here)."""
-    re_cfg = config.get("osm_turnover_model", "random_effects")
-    terms: dict[str, dict] = {}
-    for name, tcfg in re_cfg["terms"].items():
-        if not tcfg.get("enabled"):
-            continue
-        if name == "amenity_msa":
-            terms[name] = {
-                "columns": list(tcfg["columns"]),
-                "var_prior": tuple(tcfg["var_prior"]),
-                "min_count": int(re_cfg.get("interaction_min_count", 100)),
-            }
-        elif name == "urbanicity":
-            terms[name] = {
-                "column": tcfg["column"],
-                "prior": tuple(tcfg["prior"]),
-            }
-        else:
-            terms[name] = {
-                "column": tcfg["column"],
-                "var_prior": tuple(tcfg["var_prior"]),
-            }
-    metadata = {
-        "dt_col": "tag_years",
-        "terms": terms,
-        "delta_group": re_cfg.get("delta_group"),
-    }
-    ldp = config.get(
-        "osm_turnover_model", "logit_delta_prior", fail_if_none = False
-    )
-    if ldp is not None:
-        metadata["logit_delta_prior"] = tuple(ldp)
-    ldvp = config.get(
-        "osm_turnover_model", "logit_delta_var_prior", fail_if_none = False
-    )
-    if ldvp is not None:
-        metadata["logit_delta_var_prior"] = tuple(ldvp)
-    return metadata
 
 
 def flatten_param_draws(
@@ -205,7 +164,7 @@ if __name__ == "__main__":
     )
     print(f"Model type: {model_type}")
     if model_type == "random_effects":
-        metadata = build_random_effects_metadata()
+        metadata = build_random_effects_metadata(config)
     else:
         metadata = {
             "dt_col": "tag_years",
