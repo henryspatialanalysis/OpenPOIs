@@ -103,13 +103,14 @@ def subgroup_winners(subgroup: dict[str, pd.DataFrame]) -> pd.DataFrame:
 def write_readme(out_dir: Path, summary: pd.DataFrame):
     best_rmse = summary.iloc[0]
     best_lpd = summary.sort_values("rank_lpd").iloc[0]
+    n_folds = int(summary["n_folds"].iloc[0])
     lines = [
         "# Out-of-sample model comparison",
         "",
-        "Every specification below was refit on a shared set of 10 holdout "
-        "folds and scored on the held-out POIs it never saw during fitting. "
-        "Because the folds are identical across specs, the numbers are directly "
-        "comparable.",
+        f"Every specification below was refit on a shared set of {n_folds} "
+        "holdout folds and scored on the held-out POIs it never saw during "
+        "fitting. Because the folds are identical across specs, the numbers are "
+        "directly comparable.",
         "",
         "## How to read the metrics",
         "",
@@ -131,8 +132,8 @@ def write_readme(out_dir: Path, summary: pd.DataFrame):
         "",
         "- `summary.csv` — one row per spec, sorted best-RMSE first.",
         "- `per_fold_rmse.csv` / `per_fold_lpd.csv` — the score on each of the "
-        "10 folds, so you can see whether a spec wins consistently or just on "
-        "average.",
+        f"{n_folds} folds, so you can see whether a spec wins consistently or "
+        "just on average.",
         "- `subgroup_winners.csv` — for each taxonomy category (`shared_label`),"
         " which spec predicts its held-out POIs best. Useful for spotting that "
         "(say) the geography terms only help certain categories.",

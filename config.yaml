@@ -222,16 +222,16 @@ directories:
       american_oceania_changes: american_oceania_osm_changes.parquet
       # Modelling-ready observations (one row per POI version × shared_label)
       osm_observations: osm_observations.parquet
-      # Shared 10-fold holdout assignment (id → fold), built once by
+      # Shared k-fold holdout assignment (id → fold), built once by
       # scripts/models/make_holdout_folds.py and reused by every OOS run so
       # all model specifications are scored on identical folds.
-      holdout_folds: holdout_folds_10fold.parquet
+      holdout_folds: holdout_folds.parquet
   model_output:
     versioned: true
     path: ~/data/openpois/osm_turnover_model
     files:
       fitted_params: fitted_params.csv
-      param_draws: param_draws.csv
+      param_draws: param_draws.parquet
       predictions: predictions.csv
       diagnostics: diagnostics.csv
       inference_data: inference_data.nc

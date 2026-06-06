@@ -41,7 +41,7 @@ Output files (in ``model_output`` directory):
     predictions.csv     — P(change) at t = 0.0..10.0 years per group
     diagnostics.csv     — per-parameter R-hat / bulk-ESS (multi-chain only)
     inference_data.nc   — ArviZ InferenceData (optional, if arviz installed)
-    param_draws.csv     — posterior draws (if save_full_model = true)
+    param_draws.parquet — posterior draws (if save_full_model = true)
 """
 
 import argparse
@@ -305,16 +305,23 @@ if __name__ == "__main__":
     except ImportError:
         print("arviz not installed — skipping inference_data.nc")
     if SAVE_FULL_MODEL:
-        config.write(
-            flatten_param_draws(fitter.get_parameter_draws()),
-            "model_output",
-            "param_draws",
-            custom_version = model_version,
+        # Written directly as Parquet (config_versioned.autowrite has no parquet
+        # backend): ~5-10x smaller and faster to reload than CSV for the wide
+        # draws table. reconstruct.load_random_effects_draws reads it back.
+        param_draws_path = config.get_file_path(
+            "model_output", "param_draws", custom_version = model_version
+        )
+        flatten_param_draws(fitter.get_parameter_draws()).to_parquet(
+            param_draws_path, index = False
         )
 
     # Predictive-fit metrics (models exposing a pointwise log-likelihood) ----->
+    # Keep the per-block (draws x chunk) matrices small enough for a modest box:
+    # at national scale (~2k draws, millions of rows) the default 200k chunk can
+    # need tens of GB.
+    metrics_chunk = 50_000
     if hasattr(model, "build_row_data"):
-        summary = metrics.in_sample_metrics(model, fitter)
+        summary = metrics.in_sample_metrics(model, fitter, chunk = metrics_chunk)
         print("\nIn-sample metrics:")
         for k, v in summary.items():
             print(f"  {k}: {v}")
@@ -328,7 +335,9 @@ if __name__ == "__main__":
         ]
         if by:
             config.write(
-                metrics.subgroup_metrics(model, fitter, by = tuple(by)),
+                metrics.subgroup_metrics(
+                    model, fitter, by = tuple(by), chunk = metrics_chunk
+                ),
                 "model_output",
                 "metrics_subgroup",
                 custom_version = model_version,

@@ -171,11 +171,8 @@ if __name__ == "__main__":
         )
 
     model_dir = MODEL_BASE / args.model_version
-    if not (model_dir / reconstruct.PARAM_DRAWS_FILE).exists():
-        raise FileNotFoundError(
-            f"{reconstruct.PARAM_DRAWS_FILE} not found in {model_dir}; "
-            "fit with save_full_model: true."
-        )
+    # Resolves Parquet (preferred) or legacy CSV; raises if neither is present.
+    reconstruct.resolve_param_draws(model_dir)
     print(f"Loading random_effects artifacts from {model_dir} ...")
     draws = reconstruct.load_random_effects_draws(model_dir)
     maps = reconstruct.load_factor_maps(model_dir)

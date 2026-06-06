@@ -99,7 +99,7 @@ if __name__ == "__main__":
             "auto — 'shared_label' if the amenity term is enabled, else global."
         ),
     )
-    parser.add_argument("--n-folds", type = int, default = 10)
+    parser.add_argument("--n-folds", type = int, default = 5)
     parser.add_argument("--num-warmup", type = int, default = 400)
     parser.add_argument("--num-samples", type = int, default = 400)
     parser.add_argument("--num-chains", type = int, default = 2)

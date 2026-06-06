@@ -36,7 +36,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description = "Assign shared k-fold holdouts for OSM turnover CV.",
     )
-    parser.add_argument("--n-folds", type = int, default = 10)
+    parser.add_argument("--n-folds", type = int, default = 5)
     parser.add_argument("--seed", type = int, default = 0)
     parser.add_argument(
         "--observations", default = None,

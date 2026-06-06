@@ -48,13 +48,34 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-PARAM_DRAWS_FILE = "param_draws.csv"
+PARAM_DRAWS_FILE = "param_draws.parquet"
+# Legacy CSV name still accepted on read for fits made before the Parquet switch.
+PARAM_DRAWS_FILE_LEGACY = "param_draws.csv"
 FACTOR_LOOKUPS_FILE = "factor_lookups.csv"
 
 
+def resolve_param_draws(model_dir: Path) -> Path:
+    """Return the param-draws path in ``model_dir``, preferring Parquet and
+    falling back to the legacy CSV. Raises ``FileNotFoundError`` if neither
+    exists."""
+    model_dir = Path(model_dir)
+    parquet = model_dir / PARAM_DRAWS_FILE
+    if parquet.exists():
+        return parquet
+    legacy = model_dir / PARAM_DRAWS_FILE_LEGACY
+    if legacy.exists():
+        return legacy
+    raise FileNotFoundError(
+        f"Neither {PARAM_DRAWS_FILE} nor {PARAM_DRAWS_FILE_LEGACY} found in "
+        f"{model_dir}; fit with save_full_model: true."
+    )
+
+
 def load_random_effects_draws(model_dir: Path) -> dict[str, np.ndarray]:
-    """Load ``param_draws.csv`` as a dict of per-column draw arrays."""
-    df = pd.read_csv(Path(model_dir) / PARAM_DRAWS_FILE)
+    """Load the param draws as a dict of per-column draw arrays (Parquet,
+    or legacy CSV)."""
+    path = resolve_param_draws(model_dir)
+    df = pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_csv(path)
     return {c: df[c].to_numpy() for c in df.columns}
 
 

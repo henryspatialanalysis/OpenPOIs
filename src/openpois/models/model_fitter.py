@@ -368,12 +368,15 @@ class ModelFitter:
         data: dict[str, jnp.ndarray] | None = None,
         ui_width: float = 0.95,
         mode: str = "conditional",
+        chunk: int = 100_000,
     ) -> pd.DataFrame:
         """
         Posterior-predictive change probabilities.
 
         Vmaps ``calculate_probs`` over the stacked posterior draws in
-        ``self.param_draws``.
+        ``self.param_draws``, processing rows in blocks so the dense
+        ``(draws, rows)`` probability matrix is never materialised in full
+        (at national scale that matrix can be tens of GB).
 
         Args:
             data: Dict of arrays with the same keys as ``self.data``. Defaults
@@ -382,6 +385,8 @@ class ModelFitter:
             mode: ``"conditional"`` (default) or ``"fresh"`` — see
                 ``calculate_probs``. The conditional formula is δ-independent
                 and is the right default for rating already-observed POIs.
+            chunk: Number of rows scored per block. Peak memory scales with
+                ``draws * chunk``.
 
         Returns:
             DataFrame with one row per observation and columns
@@ -393,19 +398,36 @@ class ModelFitter:
             raise ValueError("ui_width must be between 0 and 1")
         if data is None:
             data = self.data
-
-        def probs_for_draw(params):
-            return self.calculate_probs(params, data, mode = mode)
-
-        all_probs = jax.vmap(probs_for_draw)(self.param_draws)
         lb = (1.0 - ui_width) / 2.0
         ub = 1.0 - lb
+        n = int(jnp.shape(data["dt"])[0])
+
+        @jax.jit
+        def block_stats(sub):
+            all_probs = jax.vmap(
+                lambda p: self.calculate_probs(p, sub, mode = mode)
+            )(self.param_draws)
+            return (
+                jnp.mean(all_probs, axis = 0),
+                jnp.quantile(all_probs, lb, axis = 0, method = "linear"),
+                jnp.quantile(all_probs, ub, axis = 0, method = "linear"),
+            )
+
+        means, lowers, uppers = [], [], []
+        for start in range(0, n, chunk):
+            end = min(start + chunk, n)
+            # Slice only the per-row arrays (length n); leave any scalars/other.
+            sub = {
+                k: (v[start:end] if getattr(v, "shape", None) and v.shape[0] == n
+                    else v)
+                for k, v in data.items()
+            }
+            m, lo, hi = block_stats(sub)
+            means.append(np.asarray(m))
+            lowers.append(np.asarray(lo))
+            uppers.append(np.asarray(hi))
         return pd.DataFrame({
-            "p_mean": np.asarray(jnp.mean(all_probs, axis = 0)),
-            "p_lower": np.asarray(
-                jnp.quantile(all_probs, lb, axis = 0, method = "linear")
-            ),
-            "p_upper": np.asarray(
-                jnp.quantile(all_probs, ub, axis = 0, method = "linear")
-            ),
+            "p_mean": np.concatenate(means) if means else np.array([]),
+            "p_lower": np.concatenate(lowers) if lowers else np.array([]),
+            "p_upper": np.concatenate(uppers) if uppers else np.array([]),
         })
