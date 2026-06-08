@@ -104,7 +104,10 @@ def load_factor_maps(model_dir: Path) -> dict[str, dict]:
         "amenity": _name_map("amenity"),
         "msa": _name_map("msa"),
         "amenity_msa": am_map,
+        # Legacy single-group δ map, plus the per-term δ maps (new schema).
         "delta": _name_map("delta"),
+        "delta_amenity": _name_map("delta_amenity"),
+        "delta_msa": _name_map("delta_msa"),
     }
 
 
@@ -233,9 +236,29 @@ def cell_log_params(
         log_lambda += np.where(is_sub, draws["beta_urban[0]"][None, :], 0.0)
         log_lambda += np.where(is_rural, draws["beta_urban[1]"][None, :], 0.0)
 
-    # δ: per-group logit_delta already includes the intercept (logit_delta_0 +
-    # eta). Unseen groups draw a fresh η ~ N(0, exp(log_tau)) about the
-    # intercept (same "from the distribution" rule as the main effects).
+    # δ: composable random intercepts on logit δ. Each enabled δ term adds
+    # eta_<t>[level]; unseen levels draw a fresh η ~ N(0, exp(log_tau_<t>))
+    # about the global intercept (same "from the distribution" fallback as the
+    # λ main effects). Falls back to the legacy single-group schema when the
+    # new per-term draws are absent.
+    delta_term_col = {"amenity": "shared_label", "msa": "msa_code"}
+    new_delta_terms = [
+        t for t in delta_term_col if _stack(draws, f"eta_{t}") is not None
+    ]
+    if new_delta_terms:
+        logit_delta = np.tile(draws["logit_delta_0"], (n, 1)).astype(np.float64)
+        for t in new_delta_terms:
+            eta_t = _stack(draws, f"eta_{t}")  # (K, S)
+            vals = cells[delta_term_col[t]].astype(str).to_numpy()
+            d_idx = np.array([maps.get(f"delta_{t}", {}).get(v, -1) for v in vals])
+            logit_delta += _gather(eta_t, d_idx)
+            if f"log_tau_{t}" in draws:
+                logit_delta += _unseen_contrib(
+                    vals, d_idx < 0, np.exp(draws[f"log_tau_{t}"]), f"delta_{t}"
+                )
+        return log_lambda, logit_delta
+
+    # Legacy single-group δ schema (logit_delta + "delta" map) or global δ.
     logit_delta_grouped = _stack(draws, "logit_delta")
     delta_group_vals = cells[delta_group_col].astype(str).to_numpy()
     if logit_delta_grouped is not None:

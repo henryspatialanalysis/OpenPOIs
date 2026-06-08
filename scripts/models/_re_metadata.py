@@ -16,18 +16,19 @@ _KEEP = "__keep__"
 def build_random_effects_metadata(
     config,
     enabled_terms: Iterable[str] | None = None,
-    delta_group: str | None = _KEEP,
+    enabled_delta_terms: Iterable[str] | str | None = _KEEP,
 ) -> dict:
     """Assemble the ``random_effects`` model metadata from config.
 
     Args:
         config: a ``config_versioned.Config`` instance.
-        enabled_terms: term names to include. ``None`` (default) honours each
+        enabled_terms: λ term names to include. ``None`` (default) honours each
             term's ``enabled`` flag in config; otherwise only the named terms
             are included regardless of their ``enabled`` flag.
-        delta_group: ``"__keep__"`` (default) uses the configured
-            ``random_effects.delta_group``; ``None`` forces a single global δ;
-            any other string overrides the δ grouping column.
+        enabled_delta_terms: δ random-intercept terms to include. ``"__keep__"``
+            (default) honours each δ term's ``enabled`` flag in config; an
+            iterable names the δ terms to enable (empty → single global δ),
+            independent of the λ terms.
 
     Returns:
         Metadata dict suitable for ``RandomEffectsModel(metadata=...)``.
@@ -57,11 +58,27 @@ def build_random_effects_metadata(
                 "column": tcfg["column"],
                 "var_prior": tuple(tcfg["var_prior"]),
             }
-    dg = re_cfg.get("delta_group") if delta_group == _KEEP else delta_group
+
+    # δ random-intercept terms (composable, separate from the λ terms).
+    delta_set = (
+        None if enabled_delta_terms == _KEEP else set(enabled_delta_terms)
+    )
+    delta_terms: dict[str, dict] = {}
+    for name, dcfg in (re_cfg.get("delta_terms") or {}).items():
+        if delta_set is None:
+            if not dcfg.get("enabled"):
+                continue
+        elif name not in delta_set:
+            continue
+        entry = {"column": dcfg["column"]}
+        if dcfg.get("var_prior") is not None:
+            entry["var_prior"] = tuple(dcfg["var_prior"])
+        delta_terms[name] = entry
+
     metadata = {
         "dt_col": "tag_years",
         "terms": terms,
-        "delta_group": dg,
+        "delta_terms": delta_terms,
     }
     ldp = config.get(
         "osm_turnover_model", "logit_delta_prior", fail_if_none = False

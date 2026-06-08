@@ -168,8 +168,6 @@ osm_turnover_model:
   # body. Each term is included iff enabled: true, so any combination composes.
   # var_prior / prior are (loc, scale) on the relevant log_sigma or coefficient.
   random_effects:
-    # Column for grouped zero-inflation δ (null → single global δ).
-    delta_group: shared_label
     # Minimum DISTINCT POIs in an (amenity, MSA) cell to warrant its own
     # interaction level; smaller cells fall back on the main effects.
     interaction_min_count: 100
@@ -190,6 +188,20 @@ osm_turnover_model:
         enabled: true
         column: urban_rural          # urban = reference; suburban/rural coeffs
         prior: [0.0, 1.0]
+    # δ (zero-inflation) random intercepts — composable and toggled
+    # independently of the λ terms above. Each enabled term adds a random
+    # intercept on logit δ (amenity grouped by shared_label, msa by msa_code),
+    # with its own log_tau scale (var_prior). No terms enabled → single global
+    # δ. Unseen levels back off to the global intercept, same as the λ terms.
+    delta_terms:
+      amenity:
+        enabled: true
+        column: shared_label
+        var_prior: [-2.0, 0.5]       # tight, matches the legacy per-group δ
+      msa:
+        enabled: false
+        column: msa_code
+        var_prior: [-2.0, 0.5]
 
 # Directory definitions (used with config.get_dir_path())
 directories:

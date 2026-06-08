@@ -53,6 +53,7 @@ from _re_metadata import build_random_effects_metadata
 config = Config("~/repos/openpois/config.yaml")
 
 VALID_TERMS = ("amenity", "msa", "amenity_msa", "urbanicity")
+DELTA_VALID_TERMS = ("amenity", "msa")
 SUBGROUP_BY = ("shared_label", "msa_code", "urban_rural")
 
 
@@ -93,10 +94,12 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
-        "--delta-group", default = None,
+        "--delta-terms", default = None,
         help = (
-            "δ grouping column, or 'none' for a single global δ. Default: "
-            "auto — 'shared_label' if the amenity term is enabled, else global."
+            "Comma-separated δ random-intercept terms from {amenity,msa} "
+            "(amenity→shared_label, msa→msa_code), or 'none'/'global' for a "
+            "single global δ. Default: auto — δ on amenity if the amenity λ "
+            "term is enabled, else global δ."
         ),
     )
     parser.add_argument("--n-folds", type = int, default = 5)
@@ -104,6 +107,13 @@ if __name__ == "__main__":
     parser.add_argument("--num-samples", type = int, default = 400)
     parser.add_argument("--num-chains", type = int, default = 2)
     parser.add_argument("--seed", type = int, default = 0)
+    parser.add_argument(
+        "--stats-chunk", type = int, default = 50_000,
+        help = (
+            "Row-block size for held-out scoring; peak memory ~ draws * chunk. "
+            "Kept modest for memory-constrained hosts."
+        ),
+    )
     parser.add_argument("--observations", default = None)
     parser.add_argument(
         "--folds-file", default = None,
@@ -120,21 +130,26 @@ if __name__ == "__main__":
             "amenity_msa requires both amenity and msa to be enabled."
         )
 
-    # δ rule (auto unless overridden).
-    if args.delta_group is None:
-        delta_group = "shared_label" if "amenity" in terms else None
-    elif args.delta_group.lower() == "none":
-        delta_group = None
+    # δ terms (auto unless overridden): default mirrors the prior behavior —
+    # δ on amenity (shared_label) when the amenity λ term is enabled, else
+    # global δ. Both back off to the global intercept for unseen levels.
+    if args.delta_terms is None:
+        delta_terms = ["amenity"] if "amenity" in terms else []
+    elif args.delta_terms.lower() in ("none", "global", ""):
+        delta_terms = []
     else:
-        delta_group = args.delta_group
+        delta_terms = [d.strip() for d in args.delta_terms.split(",") if d.strip()]
+    bad_d = [d for d in delta_terms if d not in DELTA_VALID_TERMS]
+    if bad_d:
+        raise SystemExit(f"Unknown delta term(s) {bad_d}; valid: {DELTA_VALID_TERMS}")
     print(
         f"Spec {args.model_version}: terms={terms}, "
-        f"delta_group={delta_group!r}, folds={args.n_folds}, "
+        f"delta_terms={delta_terms}, folds={args.n_folds}, "
         f"NUTS={args.num_chains}x({args.num_warmup}+{args.num_samples})"
     )
 
     metadata = build_random_effects_metadata(
-        config, enabled_terms = terms, delta_group = delta_group,
+        config, enabled_terms = terms, enabled_delta_terms = delta_terms,
     )
 
     # Faithful config snapshot: record the exact spec under this run version.
@@ -143,7 +158,8 @@ if __name__ == "__main__":
     re_cfg = otm["random_effects"]
     for name in re_cfg["terms"]:
         re_cfg["terms"][name]["enabled"] = name in terms
-    re_cfg["delta_group"] = delta_group
+    for name in re_cfg.get("delta_terms", {}):
+        re_cfg["delta_terms"][name]["enabled"] = name in delta_terms
     model_dir = config.get_dir_path(
         "model_output", custom_version = args.model_version
     )
@@ -223,6 +239,7 @@ if __name__ == "__main__":
         prepared = True,
         fold_ids = fold_ids,
         subgroup_by = SUBGROUP_BY,
+        stats_chunk = args.stats_chunk,
     )
 
     per_fold = cv["per_fold"]

@@ -31,7 +31,10 @@ _META = {
         "amenity_msa": {"columns": ["shared_label", "msa_code"], "min_count": 5},
         "urbanicity": {"column": "urban_rural"},
     },
-    "delta_group": "shared_label",
+    "delta_terms": {
+        "amenity": {"column": "shared_label"},
+        "msa": {"column": "msa_code"},
+    },
 }
 
 
@@ -65,7 +68,7 @@ def _flatten(pytree):
 def _maps_from_model(model):
     fl = model.factor_lookups
     inter = fl["amenity_msa"]
-    return {
+    maps = {
         "amenity": dict(zip(
             fl["amenity"]["level_name"], fl["amenity"]["level_id"].astype(int)
         )),
@@ -75,10 +78,14 @@ def _maps_from_model(model):
         "amenity_msa": {
             (r.amenity, r.msa_code): int(r.level_id) for r in inter.itertuples()
         },
-        "delta": dict(zip(
-            fl["delta"]["level_name"], fl["delta"]["level_id"].astype(int)
-        )),
     }
+    for term in ("amenity", "msa"):
+        key = f"delta_{term}"
+        if key in fl:
+            maps[key] = dict(zip(
+                fl[key]["level_name"], fl[key]["level_id"].astype(int)
+            ))
+    return maps
 
 
 def _fit(df):

@@ -676,7 +676,7 @@ def test_random_effects_amenity_only_matches_random_by_type():
         metadata = {
             "dt_col": "tag_years",
             "terms": {"amenity": {"column": "shared_label"}},
-            "delta_group": "shared_label",
+            "delta_terms": {"amenity": {"column": "shared_label"}},
         },
     )
     rbt = RandomByTypeModel(
@@ -685,11 +685,11 @@ def test_random_effects_amenity_only_matches_random_by_type():
     rng = np.random.default_rng(3)
     k = re_model._n_levels["amenity"]
     eps = jnp.asarray(rng.normal(size = k))
-    eta = jnp.asarray(rng.normal(size = re_model._n_delta))
+    eta = jnp.asarray(rng.normal(size = re_model._n_delta["amenity"]))
     re_p = {
         "log_lambda_0": jnp.array(-2.0), "log_sigma_amenity": jnp.array(-0.5),
         "eps_amenity_raw": eps, "logit_delta_0": jnp.array(-3.0),
-        "log_tau": jnp.array(-2.0), "eta_raw": eta,
+        "log_tau_amenity": jnp.array(-2.0), "eta_amenity_raw": eta,
     }
     rbt_p = {
         "log_lambda_0": jnp.array(-2.0), "log_sigma": jnp.array(-0.5),
@@ -718,6 +718,38 @@ def test_random_effects_interaction_min_count_floor():
     )
     # No cell can reach 10k distinct POIs in a 4k-row frame → all inactive.
     assert float(np.asarray(model.data["amenity_msa_active"]).sum()) == 0.0
+
+
+def test_random_effects_delta_terms_and_unseen_fallback():
+    """δ supports composable, independently-toggled random intercepts (amenity
+    on shared_label, msa on msa_code), and an unseen δ level backs off to the
+    global intercept (active = 0) — the same OOS fallback the λ terms use."""
+    df = _re_frame()
+    model = RandomEffectsModel(
+        dataset = df,
+        metadata = {
+            "dt_col": "tag_years",
+            "terms": {"amenity": {"column": "shared_label"}},
+            "delta_terms": {
+                "amenity": {"column": "shared_label"},
+                "msa": {"column": "msa_code"},
+            },
+        },
+    )
+    # Both δ terms are wired up with their own scale + raw-effect vectors,
+    # separate from the λ amenity effect.
+    for p in ("log_tau_amenity", "eta_amenity_raw", "log_tau_msa", "eta_msa_raw"):
+        assert p in model.starting_params
+    assert model._n_delta["msa"] == df["msa_code"].nunique()
+
+    # Out-of-sample fallback: a held-out frame with an unseen msa_code gets
+    # delta_msa_active = 0 (→ global logit_delta_0), while the amenity δ term,
+    # whose shared_labels were all seen, stays active.
+    test_df = df.head(5).copy()
+    test_df["msa_code"] = "UNSEEN_MSA"
+    rd = model.build_row_data(test_df)
+    assert float(np.asarray(rd["delta_msa_active"]).sum()) == 0.0
+    assert float(np.asarray(rd["delta_amenity_active"]).sum()) == len(test_df)
 
 
 def test_random_effects_requires_terms():

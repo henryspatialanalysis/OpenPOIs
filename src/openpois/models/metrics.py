@@ -284,6 +284,7 @@ def cross_validate(
     prepared: bool = True,
     fold_ids: np.ndarray | pd.Series | None = None,
     subgroup_by: tuple[str, ...] | None = None,
+    stats_chunk: int = 200_000,
 ) -> dict:
     """
     Structured per-POI 10-fold cross-validation.
@@ -311,6 +312,9 @@ def cross_validate(
             across folds and aggregate them by these columns, returned under
             ``per_subgroup``. This is a genuine out-of-sample subgroup
             breakdown (every observation scored from a model that never saw it).
+        stats_chunk: Row-block size for the held-out per-observation scoring;
+            peak memory scales with ``draws * stats_chunk``. Lower it on
+            memory-constrained hosts.
 
     Returns:
         dict with ``per_fold`` (DataFrame), ``aggregate`` (dict), and — when
@@ -346,7 +350,7 @@ def cross_validate(
             model, num_warmup, num_samples, num_chains,
             jax.random.PRNGKey(seed + k),
         )
-        stats = per_observation_stats(model, fitter, df = test)
+        stats = per_observation_stats(model, fitter, df = test, chunk = stats_chunk)
         summary = _summarize(
             stats["lppd"], stats["var_ll"], stats["p_mean"], stats["target"]
         )

@@ -29,6 +29,8 @@ DEFAULT_SPECS = {
     "2026-06-04-oos-amenity": "Amenity only",
     "2026-06-04-oos-noamenity": "MSA + urbanicity",
     "2026-06-04-oos-nourbanicity": "MSA + amenity + amenity×MSA",
+    "2026-06-06-oos-full-dmsa": "Full + δ(amenity + MSA)",
+    "2026-06-06-oos-full-dmsa-no-damenity": "Full + δ(MSA only)",
 }
 
 

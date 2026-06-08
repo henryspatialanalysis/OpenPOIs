@@ -755,6 +755,37 @@ _MAIN_TERMS = (_AMENITY_TERM, _MSA_TERM)
 _GATHERED_TERMS = (_AMENITY_TERM, _MSA_TERM, _INTERACTION_TERM)
 _VALID_TERMS = (_AMENITY_TERM, _MSA_TERM, _INTERACTION_TERM, _URBANICITY_TERM)
 
+# δ (zero-inflation) random-intercept terms, each independently toggleable and
+# separate from the λ terms above. ``amenity`` groups δ by shared_label,
+# ``msa`` by msa_code; each owns a log_tau_<t> scale + eta_<t>_raw vector.
+_DELTA_VALID_TERMS = (_AMENITY_TERM, _MSA_TERM)
+_DELTA_DEFAULT_COLUMNS = {_AMENITY_TERM: "shared_label", _MSA_TERM: "msa_code"}
+
+
+def _resolve_delta_terms(meta: dict) -> dict[str, dict]:
+    """Resolve the enabled δ random-intercept terms from metadata.
+
+    Preferred form is ``meta["delta_terms"]`` — a dict ``term -> {"column":...,
+    "var_prior":...}`` holding only the enabled terms (mirrors ``meta["terms"]``
+    for λ). For backward compatibility a legacy single ``meta["delta_group"]``
+    column is translated into one δ term (``amenity`` for shared_label, ``msa``
+    for msa_code, else a term named after the column).
+    """
+    dterms = meta.get("delta_terms")
+    if dterms is not None:
+        out = {}
+        for name, cfg in dterms.items():
+            col = cfg.get("column", _DELTA_DEFAULT_COLUMNS.get(name, name))
+            out[name] = {"column": col, "var_prior": cfg.get("var_prior")}
+        return out
+    dg = meta.get("delta_group")
+    if not dg:
+        return {}
+    name = next(
+        (t for t, c in _DELTA_DEFAULT_COLUMNS.items() if c == dg), dg
+    )
+    return {name: {"column": dg, "var_prior": None}}
+
 
 class RandomEffectsModel(ModelFactory):
     """
@@ -775,9 +806,18 @@ class RandomEffectsModel(ModelFactory):
     ``min_count`` distinct POIs; smaller cells get ``am_active = 0`` and fall
     back on the main effects.
 
-    δ (zero-inflation) is configured independently via ``metadata["delta_group"]``:
-    grouped (``logit δ_g = logit_delta_0 + exp(log_tau)·eta_raw[g]``) or, when
-    None, a single global ``logit_delta_0``.
+    δ (zero-inflation) is configured independently of the λ terms via
+    ``metadata["delta_terms"]`` — a composable, separately-toggleable set of
+    random intercepts on ``logit δ`` (``amenity`` grouped by shared_label,
+    ``msa`` by msa_code), each with its own ``log_tau_<t>`` scale and
+    ``eta_<t>_raw`` vector::
+
+        logit δ_i = logit_delta_0 + Σ_t active_{t,i}·exp(log_tau_t)·eta_t_raw[idx]
+
+    With no δ terms enabled δ is a single global ``logit_delta_0``. Unseen δ
+    levels back off to the global intercept (``active = 0``) exactly as the λ
+    terms do. A legacy scalar ``metadata["delta_group"]`` is still accepted and
+    maps to one δ term.
 
     The likelihood uses a **cell** sufficient-statistics fast path: a cell is a
     unique tuple of all active factor levels (λ factors + δ group), within which
@@ -792,9 +832,12 @@ class RandomEffectsModel(ModelFactory):
             ``{"columns": [amenity_col, msa_col], "var_prior": (loc, scale),
             "min_count": int}``; ``urbanicity`` takes ``{"column": str,
             "prior": (loc, scale)}`` with values ``urban``/``suburban``/``rural``.
-        delta_group: column for grouped δ, or None for a global scalar δ.
+        delta_terms: dict mapping δ term name (``amenity``/``msa``) → config
+            ``{"column": str, "var_prior": (loc, scale)}`` (only enabled terms);
+            empty/absent → global δ. (Legacy: ``delta_group`` scalar column.)
         logit_delta_prior, logit_delta_var_prior, use_sufficient_stats: as in
-            :class:`RandomByTypeModel`.
+            :class:`RandomByTypeModel`. ``logit_delta_var_prior`` is the default
+            ``log_tau`` hyperprior for δ terms that don't set their own.
     """
 
     # -- validation --------------------------------------------------------->
@@ -819,9 +862,16 @@ class RandomEffectsModel(ModelFactory):
                     raise ValueError(
                         f"Term {name!r} column {col!r} not in raw_data columns"
                     )
-        dg = meta.get("delta_group")
-        if dg is not None and dg not in self.raw_data.columns:
-            raise ValueError(f"delta_group column {dg!r} not in raw_data columns")
+        for name, cfg in _resolve_delta_terms(meta).items():
+            if name not in _DELTA_VALID_TERMS:
+                raise ValueError(
+                    f"Unknown delta term {name!r}; valid: {_DELTA_VALID_TERMS}"
+                )
+            if cfg["column"] not in self.raw_data.columns:
+                raise ValueError(
+                    f"delta term {name!r} column {cfg['column']!r} not in "
+                    "raw_data columns"
+                )
 
     # -- build -------------------------------------------------------------->
 
@@ -831,8 +881,10 @@ class RandomEffectsModel(ModelFactory):
         dt_col = meta.get("dt_col", "tag_years")
         self._terms = {k: dict(v) for k, v in terms.items()}
         self._has = {t: (t in self._terms) for t in _VALID_TERMS}
-        self._delta_group_col = meta.get("delta_group")
-        self._delta_grouped = self._delta_group_col is not None
+        # δ random-intercept terms (composable, separate from the λ terms).
+        self._delta_terms = _resolve_delta_terms(meta)
+        self._delta_terms_on = list(self._delta_terms)
+        self._delta_grouped = bool(self._delta_terms_on)
         self._use_sufficient_stats = meta.get("use_sufficient_stats", True)
 
         df = self.raw_data
@@ -842,8 +894,8 @@ class RandomEffectsModel(ModelFactory):
             active_cols += (
                 cfg["columns"] if name == _INTERACTION_TERM else [cfg["column"]]
             )
-        if self._delta_grouped:
-            active_cols.append(self._delta_group_col)
+        for cfg in self._delta_terms.values():
+            active_cols.append(cfg["column"])
         df = df.dropna(subset = list(dict.fromkeys(active_cols))).copy()
         self.raw_data = df
 
@@ -875,15 +927,18 @@ class RandomEffectsModel(ModelFactory):
             self._is_sub = (uvals == "suburban").astype(np.float32)
             self._is_rural = (uvals == "rural").astype(np.float32)
 
-        # δ grouping coding.
-        if self._delta_grouped:
+        # δ grouping coding — one random-intercept per enabled δ term.
+        self._delta_row_idx: dict[str, np.ndarray] = {}
+        self._delta_row_active: dict[str, np.ndarray] = {}
+        self._n_delta: dict[str, int] = {}
+        for term, cfg in self._delta_terms.items():
             codes, levels = pd.factorize(
-                df[self._delta_group_col].astype("string"), sort = True
+                df[cfg["column"]].astype("string"), sort = True
             )
-            self._row_delta_idx = codes.astype(np.int32)
-            self._row_delta_active = np.ones(len(df), dtype = np.float32)
-            self._n_delta = len(levels)
-            self.factor_lookups["delta"] = pd.DataFrame({
+            self._delta_row_idx[term] = codes.astype(np.int32)
+            self._delta_row_active[term] = np.ones(len(df), dtype = np.float32)
+            self._n_delta[term] = len(levels)
+            self.factor_lookups[f"delta_{term}"] = pd.DataFrame({
                 "level_id": np.arange(len(levels), dtype = np.int64),
                 "level_name": list(levels),
             })
@@ -969,15 +1024,21 @@ class RandomEffectsModel(ModelFactory):
             self.metadata.get("logit_delta_prior", DEFAULT_LOGIT_DELTA_PRIOR)[0]
         )
         params["logit_delta_0"] = jnp.array(logit_delta_0_init)
-        if self._delta_grouped:
-            log_tau_init = float(
-                self.metadata.get(
-                    "logit_delta_var_prior", DEFAULT_LOGIT_DELTA_VAR_PRIOR
-                )[0]
-            )
-            params["log_tau"] = jnp.array(log_tau_init)
-            params["eta_raw"] = jnp.zeros(self._n_delta)
+        for term in self._delta_terms_on:
+            log_tau_init = float(self._delta_var_prior(term)[0])
+            params[f"log_tau_{term}"] = jnp.array(log_tau_init)
+            params[f"eta_{term}_raw"] = jnp.zeros(self._n_delta[term])
         self.starting_params = params
+
+    def _delta_var_prior(self, term: str) -> tuple:
+        """(loc, scale) hyperprior on a δ term's log_tau — the term's own
+        ``var_prior`` if set, else the model-level ``logit_delta_var_prior``."""
+        vp = self._delta_terms[term].get("var_prior")
+        if vp is None:
+            vp = self.metadata.get(
+                "logit_delta_var_prior", DEFAULT_LOGIT_DELTA_VAR_PRIOR
+            )
+        return tuple(vp)
 
     def _init_log_sigma(self, init_df, term, dt_col) -> float:
         """log(std of per-level empirical log-rates), bounded — EB init."""
@@ -1035,15 +1096,15 @@ class RandomEffectsModel(ModelFactory):
                 names.append(nm)
                 factors.append(_URBANICITY_TERM)
                 level_ids.append(np.nan)
-        if self._delta_grouped:
-            rows.append("log_tau")
-            names.append("log_tau")
+        for term in self._delta_terms_on:
+            rows.append(f"log_tau_{term}")
+            names.append(f"log_tau_{term}")
             factors.append(np.nan)
             level_ids.append(np.nan)
-            for i in range(self._n_delta):
-                rows.append(f"eta[{i}]")
-                names.append("eta")
-                factors.append("delta")
+            for i in range(self._n_delta[term]):
+                rows.append(f"eta_{term}[{i}]")
+                names.append(f"eta_{term}")
+                factors.append(f"delta_{term}")
                 level_ids.append(i)
         self.param_ids = pd.DataFrame({
             "parameter": rows,
@@ -1086,13 +1147,15 @@ class RandomEffectsModel(ModelFactory):
             uvals = df[self._terms[_URBANICITY_TERM]["column"]].astype("string").to_numpy()
             out["is_sub"] = (uvals == "suburban").astype(np.float32)
             out["is_rural"] = (uvals == "rural").astype(np.float32)
-        if self._delta_grouped:
-            lut = self.factor_lookups["delta"]
+        for term, cfg in self._delta_terms.items():
+            lut = self.factor_lookups[f"delta_{term}"]
             name_to_id = dict(zip(lut["level_name"], lut["level_id"]))
-            vals = df[self._delta_group_col].astype("string").to_numpy()
+            vals = df[cfg["column"]].astype("string").to_numpy()
             idx = np.array([name_to_id.get(v, -1) for v in vals], dtype = np.int64)
-            out["delta_idx"] = np.where(idx >= 0, idx, 0).astype(np.int32)
-            out["delta_active"] = (idx >= 0).astype(np.float32)
+            # Unseen δ levels back off (active = 0 → global logit_delta_0), the
+            # same out-of-sample fallback used for the λ random effects.
+            out[f"delta_{term}_idx"] = np.where(idx >= 0, idx, 0).astype(np.int32)
+            out[f"delta_{term}_active"] = (idx >= 0).astype(np.float32)
         return out
 
     def build_row_data(self, df: pd.DataFrame | None = None) -> dict:
@@ -1130,9 +1193,9 @@ class RandomEffectsModel(ModelFactory):
             comp_names.append("is_sub")
             components.append(self._is_rural.astype(np.int32))
             comp_names.append("is_rural")
-        if self._delta_grouped:
-            components.append(self._row_delta_idx)
-            comp_names.append("delta_idx")
+        for term in self._delta_terms_on:
+            components.append(self._delta_row_idx[term])
+            comp_names.append(f"delta_{term}_idx")
 
         comp_df = pd.DataFrame({name: c for name, c in zip(comp_names, components)})
         cell_id, _ = pd.factorize(
@@ -1167,11 +1230,11 @@ class RandomEffectsModel(ModelFactory):
             data["is_rural"] = jnp.asarray(
                 self._is_rural[cell_first_row], dtype = jnp.float32
             )
-        if self._delta_grouped:
-            data["delta_idx"] = jnp.asarray(
-                self._row_delta_idx[cell_first_row], dtype = jnp.int32
+        for term in self._delta_terms_on:
+            data[f"delta_{term}_idx"] = jnp.asarray(
+                self._delta_row_idx[term][cell_first_row], dtype = jnp.int32
             )
-            data["delta_active"] = jnp.ones(n_cells, dtype = jnp.float32)
+            data[f"delta_{term}_active"] = jnp.ones(n_cells, dtype = jnp.float32)
 
         # Sufficient statistics per cell (mirrors RandomByTypeModel).
         dt_np = df[dt_col].to_numpy().astype(np.float32)
@@ -1244,13 +1307,16 @@ class RandomEffectsModel(ModelFactory):
         return out
 
     def _logit_delta(self, params, data, ref):
-        if self._delta_grouped:
-            return params["logit_delta_0"] + (
-                data["delta_active"]
-                * jnp.exp(params["log_tau"])
-                * params["eta_raw"][data["delta_idx"]]
+        if not self._delta_terms_on:
+            return jnp.broadcast_to(params["logit_delta_0"], jnp.shape(ref))
+        out = params["logit_delta_0"]
+        for term in self._delta_terms_on:
+            out = out + (
+                data[f"delta_{term}_active"]
+                * jnp.exp(params[f"log_tau_{term}"])
+                * params[f"eta_{term}_raw"][data[f"delta_{term}_idx"]]
             )
-        return jnp.broadcast_to(params["logit_delta_0"], jnp.shape(ref))
+        return out
 
     def event_rate_fun(self, params, data):
         return jnp.exp(self._log_lambda(params, data)) * data["dt"]
@@ -1325,15 +1391,13 @@ class RandomEffectsModel(ModelFactory):
         ll = ll + stats.norm.logpdf(
             params["logit_delta_0"], loc = delta_loc, scale = delta_scale
         ).sum()
-        if self._delta_grouped:
-            tau_loc, tau_scale = self.metadata.get(
-                "logit_delta_var_prior", DEFAULT_LOGIT_DELTA_VAR_PRIOR
-            )
+        for term in self._delta_terms_on:
+            tau_loc, tau_scale = self._delta_var_prior(term)
             ll = ll + stats.norm.logpdf(
-                params["log_tau"], loc = tau_loc, scale = tau_scale
+                params[f"log_tau_{term}"], loc = tau_loc, scale = tau_scale
             ).sum()
             ll = ll + stats.norm.logpdf(
-                params["eta_raw"], loc = 0.0, scale = 1.0
+                params[f"eta_{term}_raw"], loc = 0.0, scale = 1.0
             ).sum()
         return ll
 
@@ -1346,12 +1410,12 @@ class RandomEffectsModel(ModelFactory):
                 jnp.exp(draws[f"log_sigma_{term}"])[:, None]
                 * draws[f"eps_{term}_raw"]
             )
-        if self._delta_grouped:
-            eta = jnp.exp(draws["log_tau"])[:, None] * draws["eta_raw"]
-            out["eta"] = eta
-            out["logit_delta"] = draws["logit_delta_0"][:, None] + eta
-            out["delta"] = jax.nn.sigmoid(out["logit_delta"])
-        else:
+        for term in self._delta_terms_on:
+            out[f"eta_{term}"] = (
+                jnp.exp(draws[f"log_tau_{term}"])[:, None]
+                * draws[f"eta_{term}_raw"]
+            )
+        if not self._delta_terms_on:
             out["delta"] = jax.nn.sigmoid(draws["logit_delta_0"])
         return out
 
@@ -1374,9 +1438,13 @@ class RandomEffectsModel(ModelFactory):
         if self._has[_URBANICITY_TERM]:
             out["is_sub"] = jnp.repeat(self.data["is_sub"], n_periods)
             out["is_rural"] = jnp.repeat(self.data["is_rural"], n_periods)
-        if self._delta_grouped:
-            out["delta_idx"] = jnp.repeat(self.data["delta_idx"], n_periods)
-            out["delta_active"] = jnp.repeat(self.data["delta_active"], n_periods)
+        for term in self._delta_terms_on:
+            out[f"delta_{term}_idx"] = jnp.repeat(
+                self.data[f"delta_{term}_idx"], n_periods
+            )
+            out[f"delta_{term}_active"] = jnp.repeat(
+                self.data[f"delta_{term}_active"], n_periods
+            )
         return out
 
 
