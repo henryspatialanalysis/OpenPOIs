@@ -142,9 +142,14 @@ osm_data:
 
 # Settings for scripts/models/osm_turnover.py (JAX turnover model)
 osm_turnover_model:
-  # Overridable at the CLI via --model-type {constant,random_by_type}.
+  # Overridable at the CLI via --model-type
+  # {constant,constant_breakpoint,random_by_type,random_effects}.
   default_model_type: constant
   var_prior: [-1.0, 5.0]
+  # Time-varying λ — only used by --model-type constant_breakpoint. Log-normal
+  # prior on the breakpoint age t_B (years since the tag was established):
+  # (loc, scale) on log t_B; loc = 0 → median 1 year.
+  t_breakpoint_prior: [0.0, 1.0]
   # Tight hyperprior on log_tau (random-effect scale for per-group logit_delta
   # in RandomByTypeModel). Tau median ≈ exp(-2) ≈ 0.135 on the logit scale —
   # shrinks per-group δ toward the global intercept.

@@ -24,11 +24,14 @@ from openpois.models.jax_core import jax_rng
 from openpois.models.model_fitter import ModelFitter
 from openpois.models.osm_models import (
     MODEL_REGISTRY,
+    ConstantBreakpointModel,
     ConstantModel,
     RandomByTypeModel,
     RandomEffectsModel,
+    _breakpoint_integrated_hazard,
     get_model_class,
 )
+from openpois.models.setup import prepare_data_for_model
 
 
 NUM_DRAWS = 300
@@ -401,12 +404,207 @@ def test_predictions_schema_random_by_type():
 
 def test_model_registry():
     """Registry exposes the supported models and rejects removed ones."""
-    assert set(MODEL_REGISTRY) == {"constant", "random_by_type", "random_effects"}
+    assert set(MODEL_REGISTRY) == {
+        "constant", "constant_breakpoint", "random_by_type", "random_effects",
+    }
     assert get_model_class("constant") is ConstantModel
+    assert get_model_class("constant_breakpoint") is ConstantBreakpointModel
     assert get_model_class("random_by_type") is RandomByTypeModel
     assert get_model_class("random_effects") is RandomEffectsModel
     with pytest.raises(ValueError, match = "Unknown model"):
         get_model_class("pseudo_varying")
+
+
+# Time-varying (breakpoint) constant model ------------------------------------>
+
+
+def _simulate_breakpoint_frame(
+    key,
+    n: int,
+    true_lambda_1: float,
+    true_lambda_2: float,
+    true_t_b: float,
+    age_start_range: tuple[float, float] = (0.0, 4.0),
+    dt_range: tuple[float, float] = (0.2, 3.0),
+) -> pd.DataFrame:
+    """Intervals drawn from the two-rate breakpoint hazard.
+
+    Each row is an interval at tag age ``[age_start, age_end]`` with
+    ``changed ~ Bernoulli(1 − exp(−H))``, where H is the breakpoint integrated
+    hazard. ``age_start`` spans a range that straddles ``true_t_b`` so the
+    breakpoint is identifiable. ``is_first_interval`` is all-False (age_start
+    drawn > 0), so δ does not enter the likelihood and recovery isolates
+    λ_1 / λ_2 / t_B.
+    """
+    key_a, key_dt, key_y = jrd.split(key, 3)
+    age_start = np.asarray(
+        jrd.uniform(
+            key_a, (n,), minval = age_start_range[0], maxval = age_start_range[1]
+        )
+    )
+    dt = np.asarray(
+        jrd.uniform(key_dt, (n,), minval = dt_range[0], maxval = dt_range[1])
+    )
+    age_end = age_start + dt
+    crossing = np.clip(true_t_b, age_start, age_end)
+    rate = (
+        true_lambda_1 * (crossing - age_start)
+        + true_lambda_2 * (age_end - crossing)
+    )
+    p = 1.0 - np.exp(-rate)
+    y = np.asarray(jrd.bernoulli(key_y, jnp.asarray(p))).astype(np.int32)
+    return pd.DataFrame({
+        "tag_years": dt,
+        "age_start": age_start,
+        "age_end": age_end,
+        "changed": y,
+        "is_first_interval": np.zeros(n, dtype = bool),
+    })
+
+
+def test_breakpoint_integrated_hazard():
+    """Closed-form integral matches all three cases + reduces to λ·Δt."""
+    lam1, lam2, t_b = 0.4, 1.3, 1.0
+    # Interval fully before t_b → λ_1 · Δ.
+    h = float(_breakpoint_integrated_hazard(
+        lam1, lam2, t_b, jnp.array(0.2), jnp.array(0.8)
+    ))
+    assert np.isclose(h, lam1 * (0.8 - 0.2))
+    # Interval fully after t_b → λ_2 · Δ.
+    h = float(_breakpoint_integrated_hazard(
+        lam1, lam2, t_b, jnp.array(1.5), jnp.array(2.5)
+    ))
+    assert np.isclose(h, lam2 * (2.5 - 1.5))
+    # Straddling t_b → λ_1·(t_b − t1) + λ_2·(t2 − t_b).
+    h = float(_breakpoint_integrated_hazard(
+        lam1, lam2, t_b, jnp.array(0.5), jnp.array(2.0)
+    ))
+    assert np.isclose(h, lam1 * (1.0 - 0.5) + lam2 * (2.0 - 1.0))
+    # λ_1 == λ_2 → λ·Δt for any breakpoint position.
+    age_start = jnp.array([0.0, 0.7, 2.0])
+    age_end = jnp.array([0.5, 1.5, 3.1])
+    for tb in (0.1, 1.0, 5.0):
+        h = _breakpoint_integrated_hazard(
+            0.7, 0.7, jnp.array(tb), age_start, age_end
+        )
+        assert np.allclose(
+            np.asarray(h), 0.7 * np.asarray(age_end - age_start)
+        )
+
+
+def test_constant_breakpoint_recovery():
+    """Posterior should bracket the true λ_1, λ_2, and t_B."""
+    true_lambda_1, true_lambda_2, true_t_b = 0.8, 0.2, 1.0
+    # Fixed key: jax_rng() reseeds randomly each run, which makes a 95%-CI
+    # coverage assertion flaky. Pin the simulation so the test is reproducible;
+    # age_start concentrated near t_B gives the breakpoint identifying signal.
+    key_sim, key_fit = jrd.split(jrd.PRNGKey(0))
+    df = _simulate_breakpoint_frame(
+        key_sim,
+        n = 10_000,
+        true_lambda_1 = true_lambda_1,
+        true_lambda_2 = true_lambda_2,
+        true_t_b = true_t_b,
+        age_start_range = (0.0, 2.0),
+        dt_range = (0.2, 2.0),
+    )
+    model = ConstantBreakpointModel(
+        dataset = df, metadata = {"dt_col": "tag_years"}
+    )
+    fitter = _run_fitter(model, key_fit)
+
+    tbl = fitter.get_parameter_table().set_index("parameter")
+    for name, truth in (
+        ("lambda_1", true_lambda_1),
+        ("lambda_2", true_lambda_2),
+        ("t_breakpoint", true_t_b),
+    ):
+        row = tbl.loc[name]
+        assert row["lower"] <= truth <= row["upper"], (
+            f"true {name} {truth:.3f} not covered by "
+            f"[{row['lower']:.3f}, {row['upper']:.3f}]"
+        )
+
+
+def test_constant_breakpoint_reduces_to_constant():
+    """With λ_1 == λ_2 the rate equals λ·Δt regardless of t_B."""
+    key = jax_rng()
+    df = _simulate_breakpoint_frame(
+        key, n = 200, true_lambda_1 = 0.5, true_lambda_2 = 0.5, true_t_b = 1.0,
+    )
+    model = ConstantBreakpointModel(
+        dataset = df, metadata = {"dt_col": "tag_years"}
+    )
+    log_lam = float(np.log(0.5))
+    for log_t_b in (np.log(0.1), 0.0, np.log(5.0)):
+        params = {
+            "log_lambda_1": jnp.array(log_lam),
+            "log_lambda_2": jnp.array(log_lam),
+            "log_t_breakpoint": jnp.array(log_t_b),
+            "logit_delta": jnp.array(-3.0),
+        }
+        rate = model.event_rate_fun(params, model.data)
+        assert np.allclose(
+            np.asarray(rate), 0.5 * np.asarray(model.data["dt"]), atol = 1e-5
+        )
+
+
+def test_predictions_schema_constant_breakpoint():
+    """predict() output for ConstantBreakpointModel is well-formed + monotone."""
+    key = jax_rng()
+    df = _simulate_breakpoint_frame(
+        key, n = 400, true_lambda_1 = 0.6, true_lambda_2 = 0.2, true_t_b = 1.0,
+    )
+    model = ConstantBreakpointModel(
+        dataset = df, metadata = {"dt_col": "tag_years"}
+    )
+    fitter = _run_fitter(model, jrd.fold_in(key, 1))
+
+    times = jnp.arange(11) / 10.0
+    preds = fitter.predict(data = model.build_predict_data(times))
+    assert list(preds.columns) == ["p_mean", "p_lower", "p_upper"]
+    assert len(preds) == 11
+    pm = preds["p_mean"].values
+    assert np.all((pm >= 0.0) & (pm <= 1.0))
+    assert np.all(np.diff(pm) >= -1e-6)
+
+
+def test_constant_breakpoint_requires_age_columns():
+    """Missing age_start / age_end raises a clear, actionable error."""
+    key = jax_rng()
+    df = _simulate_breakpoint_frame(
+        key, n = 50, true_lambda_1 = 0.5, true_lambda_2 = 0.5, true_t_b = 1.0,
+    ).drop(columns = ["age_start", "age_end"])
+    with pytest.raises(ValueError, match = "age_start"):
+        ConstantBreakpointModel(dataset = df, metadata = {"dt_col": "tag_years"})
+
+
+def test_prepare_data_emits_age_columns():
+    """prepare_data_for_model emits age_start / age_end consistent with dt."""
+    ts = pd.Timestamp
+    df = pd.DataFrame({
+        "id": [1, 1, 2],
+        "changed": [0, 1, 0],
+        "last_tag_timestamp": [
+            ts("2020-01-01"), ts("2020-01-01"), ts("2021-01-01"),
+        ],
+        "last_obs_timestamp": [
+            ts("2020-01-01"), ts("2021-01-01"), ts("2021-01-01"),
+        ],
+        "obs_timestamp": [
+            ts("2021-01-01"), ts("2022-01-01"), ts("2022-01-01"),
+        ],
+    })
+    out = prepare_data_for_model(df)
+    assert {"age_start", "age_end"}.issubset(out.columns)
+    # age_end − age_start telescopes to the inter-observation interval.
+    assert np.allclose(
+        out["age_end"] - out["age_start"], out["tag_years"], atol = 1e-9
+    )
+    # First intervals (last_obs == last_tag) start at age 0; others start later.
+    first = out["is_first_interval"].to_numpy()
+    assert np.allclose(out.loc[first, "age_start"], 0.0)
+    assert (out.loc[~first, "age_start"] > 0).all()
 
 
 def test_random_by_type_multichain_diagnostics():

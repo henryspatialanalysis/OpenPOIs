@@ -115,7 +115,10 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--model-type",
-        choices = ["constant", "random_by_type", "random_effects"],
+        choices = [
+            "constant", "constant_breakpoint", "random_by_type",
+            "random_effects",
+        ],
         default = None,
         help = (
             "Override osm_turnover_model.default_model_type for this run."
@@ -183,6 +186,13 @@ if __name__ == "__main__":
         )
         if logit_delta_var_prior is not None:
             metadata["logit_delta_var_prior"] = tuple(logit_delta_var_prior)
+        # Time-varying λ (constant_breakpoint): log-normal prior on the
+        # breakpoint age t_B. Ignored by the other non-RE model types.
+        t_breakpoint_prior = config.get(
+            "osm_turnover_model", "t_breakpoint_prior", fail_if_none = False
+        )
+        if t_breakpoint_prior is not None:
+            metadata["t_breakpoint_prior"] = tuple(t_breakpoint_prior)
     model = get_model_class(model_type)(
         dataset = obs_sub,
         metadata = metadata,

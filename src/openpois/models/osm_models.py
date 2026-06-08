@@ -43,6 +43,10 @@ DEFAULT_LOGIT_DELTA_PRIOR = (-3.0, 1.0)
 # Tight hyperprior on log_tau (random-effect scale for per-group logit_delta).
 # Tau median ≈ exp(-2) ≈ 0.135 on the logit scale.
 DEFAULT_LOGIT_DELTA_VAR_PRIOR = (-2.0, 0.5)
+# Log-normal prior on the breakpoint age t_B (years since the tag was
+# established) for ConstantBreakpointModel: (loc, scale) on log t_B. loc = 0 →
+# median t_B = exp(0) = 1 year.
+DEFAULT_T_BREAKPOINT_PRIOR = (0.0, 1.0)
 # Floor applied when taking the log of an empirical rate. Groups with zero
 # observed changes would otherwise give log(0) = -inf on init.
 _EMPIRICAL_RATE_FLOOR = 1e-8
@@ -315,6 +319,192 @@ class ConstantModel(ModelFactory):
 
     def build_predict_data(self, times):
         return {"dt": jnp.asarray(times, dtype = jnp.float32)}
+
+
+# Constant rate with a time-varying (breakpoint) hazard ----------------------->
+
+
+def _breakpoint_integrated_hazard(
+    lam1: jnp.ndarray,
+    lam2: jnp.ndarray,
+    t_b: jnp.ndarray,
+    age_start: jnp.ndarray,
+    age_end: jnp.ndarray,
+) -> jnp.ndarray:
+    """
+    Integral of a two-rate piecewise-constant hazard over ``[age_start,
+    age_end]`` (the interval's tag-age bounds).
+
+    The hazard is λ(a) = λ_1 for a < t_b and λ_2 for a ≥ t_b. Its integral
+    ``∫_{age_start}^{age_end} λ(a) da`` has the branchless closed form
+
+        crossing = clip(t_b, age_start, age_end)
+        H = λ_1·(crossing − age_start) + λ_2·(age_end − crossing)
+
+    which handles all three cases (interval fully before / fully after /
+    straddling t_b) at once, and reduces to λ·(age_end − age_start) when
+    λ_1 == λ_2. ``age_start`` ≤ ``age_end`` always holds (dt > 0), so ``clip``
+    is well-defined. This is the time-varying analogue of the constant model's
+    ``λ·Δt`` rate; everything downstream (ZIE δ, ``P = 1 − exp(−rate)``) is
+    unchanged.
+    """
+    crossing = jnp.clip(t_b, age_start, age_end)
+    return lam1 * (crossing - age_start) + lam2 * (age_end - crossing)
+
+
+class ConstantBreakpointModel(ConstantModel):
+    """
+    Two-rate (breakpoint) change model with the ZIE δ mixture.
+
+    A single global hazard that switches from λ_1 = exp(log_lambda_1) to
+    λ_2 = exp(log_lambda_2) at tag age t_B = exp(log_t_breakpoint) years (years
+    since the tag value was established, per ``age_start`` / ``age_end``). The
+    change probability over an interval is 1 − exp(−H), where H is the integral
+    of the piecewise-constant hazard over the interval's tag-age bounds (see
+    ``_breakpoint_integrated_hazard``). δ = sigmoid(logit_delta) carries the
+    instant-change mass on first intervals exactly as ``ConstantModel``.
+
+    Reduces to ``ConstantModel`` when λ_1 == λ_2 (the rate becomes λ·Δt for any
+    t_B). Toggle via ``--model-type constant_breakpoint``.
+
+    Metadata keys (in addition to ConstantModel's):
+        t_breakpoint_prior: (loc, scale) tuple for the Normal prior on
+            ``log_t_breakpoint`` (default ``DEFAULT_T_BREAKPOINT_PRIOR`` =
+            (0.0, 1.0) → median t_B = 1 year).
+    """
+
+    def validate_inputs(self):
+        super().validate_inputs()
+        for col in ("age_start", "age_end"):
+            if col not in self.raw_data.columns:
+                raise ValueError(
+                    f"ConstantBreakpointModel requires an '{col}' column; run "
+                    "prepare_data_for_model (which emits age_start / age_end) "
+                    "before fitting."
+                )
+
+    def build_model(self):
+        """Define ``log_lambda_1/2``, ``log_t_breakpoint``, ``logit_delta``."""
+        dt_col = self.metadata.get("dt_col", "tag_years")
+        empirical_rate = _empirical_rate_from_nonfirst(self.raw_data, dt_col)
+        log_lambda_init = float(
+            np.log(max(empirical_rate, _EMPIRICAL_RATE_FLOOR))
+        )
+        logit_delta_init = float(
+            self.metadata.get("logit_delta_prior", DEFAULT_LOGIT_DELTA_PRIOR)[0]
+        )
+        tb_loc = float(
+            self.metadata.get(
+                "t_breakpoint_prior", DEFAULT_T_BREAKPOINT_PRIOR
+            )[0]
+        )
+        self.starting_params = {
+            "log_lambda_1": jnp.array(log_lambda_init),
+            "log_lambda_2": jnp.array(log_lambda_init),
+            "log_t_breakpoint": jnp.array(tb_loc),
+            "logit_delta": jnp.array(logit_delta_init),
+        }
+        names = [
+            "log_lambda_1", "log_lambda_2", "log_t_breakpoint", "logit_delta",
+            "lambda_1", "lambda_2", "t_breakpoint", "delta",
+        ]
+        self.param_ids = pd.DataFrame({
+            "parameter": names,
+            "param_name": names,
+            "group_id": [np.nan] * len(names),
+        })
+        self.group_lookup = None
+        self.log_likelihood_fun = self._zie_log_likelihood
+
+    def assign_targets(self):
+        """Add ``age_start`` / ``age_end`` on top of dt / target / is_first."""
+        super().assign_targets()
+        self.data["age_start"] = jnp.asarray(
+            self.raw_data["age_start"].to_numpy(), dtype = jnp.float32
+        )
+        self.data["age_end"] = jnp.asarray(
+            self.raw_data["age_end"].to_numpy(), dtype = jnp.float32
+        )
+
+    @staticmethod
+    def _zie_log_likelihood(params, data, target):
+        per_obs = ConstantBreakpointModel._zie_pointwise(params, data, target)
+        return jnp.sum(per_obs)
+
+    @staticmethod
+    def _zie_pointwise(params, data, target):
+        """Per-row ZIE log-likelihood with the breakpoint integrated hazard."""
+        rate = _breakpoint_integrated_hazard(
+            jnp.exp(params["log_lambda_1"]),
+            jnp.exp(params["log_lambda_2"]),
+            jnp.exp(params["log_t_breakpoint"]),
+            data["age_start"],
+            data["age_end"],
+        )
+        log_1md = jax.nn.log_sigmoid(-params["logit_delta"])
+        return _zie_pointwise_loglik(
+            rate, data["is_first_interval"], log_1md, target
+        )
+
+    def pointwise_log_likelihood(self, params, data, target):
+        return ConstantBreakpointModel._zie_pointwise(params, data, target)
+
+    def event_rate_fun(self, params, data):
+        return _breakpoint_integrated_hazard(
+            jnp.exp(params["log_lambda_1"]),
+            jnp.exp(params["log_lambda_2"]),
+            jnp.exp(params["log_t_breakpoint"]),
+            data["age_start"],
+            data["age_end"],
+        )
+
+    def param_likelihood(self, params):
+        scale = self.metadata.get(
+            "log_lambda_prior_scale", DEFAULT_LOG_LAMBDA_PRIOR_SCALE
+        )
+        delta_loc, delta_scale = self.metadata.get(
+            "logit_delta_prior", DEFAULT_LOGIT_DELTA_PRIOR
+        )
+        tb_loc, tb_scale = self.metadata.get(
+            "t_breakpoint_prior", DEFAULT_T_BREAKPOINT_PRIOR
+        )
+        lp = stats.norm.logpdf(
+            params["log_lambda_1"], loc = 0.0, scale = scale
+        ).sum()
+        lp = lp + stats.norm.logpdf(
+            params["log_lambda_2"], loc = 0.0, scale = scale
+        ).sum()
+        lp = lp + stats.norm.logpdf(
+            params["log_t_breakpoint"], loc = tb_loc, scale = tb_scale
+        ).sum()
+        lp = lp + stats.norm.logpdf(
+            params["logit_delta"], loc = delta_loc, scale = delta_scale
+        ).sum()
+        return lp
+
+    def derive_draws(self, draws):
+        """Expose natural-scale λ_1, λ_2, t_B, δ alongside the raw draws."""
+        return {
+            **draws,
+            "lambda_1": jnp.exp(draws["log_lambda_1"]),
+            "lambda_2": jnp.exp(draws["log_lambda_2"]),
+            "t_breakpoint": jnp.exp(draws["log_t_breakpoint"]),
+            "delta": jax.nn.sigmoid(draws["logit_delta"]),
+        }
+
+    def build_predict_data(self, times):
+        """From-establishment diagnostic curve: age 0 → t for each t.
+
+        The production rating instead integrates the hazard over each POI's
+        actual ``[last_edited, now]`` window at its true tag age (closed-form
+        Λ); this curve is for inspection / the saved predictions.csv.
+        """
+        times = jnp.asarray(times, dtype = jnp.float32)
+        return {
+            "dt": times,
+            "age_start": jnp.zeros_like(times),
+            "age_end": times,
+        }
 
 
 # Random effects by group ---------------------------------------------------->
@@ -1453,6 +1643,7 @@ class RandomEffectsModel(ModelFactory):
 
 MODEL_REGISTRY = {
     "constant": ConstantModel,
+    "constant_breakpoint": ConstantBreakpointModel,
     "random_by_type": RandomByTypeModel,
     "random_effects": RandomEffectsModel,
 }
