@@ -29,6 +29,13 @@ def prepare_data_for_model(
     surviving observation of its ``(POI, name-iteration)`` individual. Used
     by the ZIE δ extension (methodology §1.7).
 
+    Finally emits ``age_start`` / ``age_end`` — the tag's age (years since
+    ``last_tag_timestamp``) at the start and end of the interval. These are the
+    integration bounds for time-varying λ models (e.g.
+    ``constant_breakpoint``); by construction ``age_end − age_start ==
+    tag_years`` and ``age_start == 0`` on first intervals. Constant-λ models
+    ignore them.
+
     Args:
         data: Observations DataFrame as returned by format_observations.
         group_key: Column name of the grouping variable. If None, no group
@@ -42,8 +49,8 @@ def prepare_data_for_model(
         t2_col: Name of the end-time timestamp column.
 
     Returns:
-        Filtered DataFrame with additional ``tag_days``, ``tag_years``, and
-        ``is_first_interval`` columns.
+        Filtered DataFrame with additional ``tag_days``, ``tag_years``,
+        ``is_first_interval``, ``age_start``, and ``age_end`` columns.
 
     Raises:
         ValueError: If ``t1_col`` or ``t2_col`` is not present in data.
@@ -74,12 +81,22 @@ def prepare_data_for_model(
     for timestamp_col in set(required_cols):
         data[timestamp_col] = pd.to_datetime(data[timestamp_col])
     tag_days = (data[t2_col] - data[t1_col]).dt.days
+    # Tag age (years since the current tag value was established) at the start
+    # and end of the interval — the integration bounds for time-varying λ. When
+    # last_tag_timestamp is missing (e.g. a POI's first-ever observation), fall
+    # back to the interval start so age_start = 0 and age_end = tag_years; this
+    # keeps the row (only time-varying models read these columns).
+    tag_origin = data['last_tag_timestamp'].fillna(data[t1_col])
+    age_start_days = (data[t1_col] - tag_origin).dt.days
+    age_end_days = (data[t2_col] - tag_origin).dt.days
     data = data.assign(
         tag_days = tag_days,
         tag_years = tag_days / 365,
         is_first_interval = (
             data['last_obs_timestamp'] == data['last_tag_timestamp']
         ),
+        age_start = age_start_days / 365,
+        age_end = age_end_days / 365,
     )
     data = (
         data

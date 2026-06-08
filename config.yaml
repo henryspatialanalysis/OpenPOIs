@@ -116,6 +116,18 @@ download:
       - [community_and_government, public_safety_service]
       - [travel_and_transportation, fueling_station]
       - [travel_and_transportation, vehicle_service]
+  # Census reference areas for the msa_code + urban_rural indicators. The
+  # cartographic-boundary (cb_*_500k) line is used because Census publishes
+  # single national "us" files there for both CBSA and Place. Place population
+  # comes from the 2020 Decennial (covers CDPs, which PEP omits) via the Census
+  # API; it requires a free key (CENSUS_API_KEY in the env or ~/.Renviron) and
+  # is cached to a static CSV on first run.
+  census_areas:
+    cbsa_url: "https://www2.census.gov/geo/tiger/GENZ2023/shp/cb_2023_us_cbsa_500k.zip"
+    place_url: "https://www2.census.gov/geo/tiger/GENZ2023/shp/cb_2023_us_place_500k.zip"
+    cbsa_shp_name: "cb_2023_us_cbsa_500k.shp"
+    place_shp_name: "cb_2023_us_place_500k.shp"
+    population_api_url: "https://api.census.gov/data/2020/dec/pl?get=NAME,P1_001N&for=place:*&in=state:*"
 
 # Settings for OSM exploratory data analysis
 osm_data:
@@ -130,9 +142,14 @@ osm_data:
 
 # Settings for scripts/models/osm_turnover.py (JAX turnover model)
 osm_turnover_model:
-  # Overridable at the CLI via --model-type {constant,random_by_type}.
+  # Overridable at the CLI via --model-type
+  # {constant,constant_breakpoint,random_by_type,random_effects}.
   default_model_type: constant
   var_prior: [-1.0, 5.0]
+  # Time-varying λ — only used by --model-type constant_breakpoint. Log-normal
+  # prior on the breakpoint age t_B (years since the tag was established):
+  # (loc, scale) on log t_B; loc = 0 → median 1 year.
+  t_breakpoint_prior: [0.0, 1.0]
   # Tight hyperprior on log_tau (random-effect scale for per-group logit_delta
   # in RandomByTypeModel). Tau median ≈ exp(-2) ≈ 0.135 on the logit scale —
   # shrinks per-group δ toward the global intercept.
@@ -150,6 +167,46 @@ osm_turnover_model:
   # R-hat and bulk ESS diagnostics at roughly linear wall-time cost on CPU.
   n_chains: 4
   save_full_model: true
+  # ---- random_effects model (multi-term additive random intercepts) --------
+  # Used only when --model-type random_effects. Every hyperparameter the model
+  # uses is wired from this block — no magic numbers in the script or model
+  # body. Each term is included iff enabled: true, so any combination composes.
+  # var_prior / prior are (loc, scale) on the relevant log_sigma or coefficient.
+  random_effects:
+    # Minimum DISTINCT POIs in an (amenity, MSA) cell to warrant its own
+    # interaction level; smaller cells fall back on the main effects.
+    interaction_min_count: 100
+    terms:
+      amenity:
+        enabled: true
+        column: shared_label
+        var_prior: [-1.0, 5.0]      # matches the legacy random_by_type prior
+      msa:
+        enabled: true
+        column: msa_code
+        var_prior: [-1.0, 1.0]
+      amenity_msa:
+        enabled: true
+        columns: [shared_label, msa_code]
+        var_prior: [-2.0, 0.5]      # tight: shrink interactions toward zero
+      urbanicity:
+        enabled: true
+        column: urban_rural          # urban = reference; suburban/rural coeffs
+        prior: [0.0, 1.0]
+    # δ (zero-inflation) random intercepts — composable and toggled
+    # independently of the λ terms above. Each enabled term adds a random
+    # intercept on logit δ (amenity grouped by shared_label, msa by msa_code),
+    # with its own log_tau scale (var_prior). No terms enabled → single global
+    # δ. Unseen levels back off to the global intercept, same as the λ terms.
+    delta_terms:
+      amenity:
+        enabled: true
+        column: shared_label
+        var_prior: [-2.0, 0.5]       # tight, matches the legacy per-group δ
+      msa:
+        enabled: false
+        column: msa_code
+        var_prior: [-2.0, 0.5]
 
 # Directory definitions (used with config.get_dir_path())
 directories:
@@ -182,15 +239,28 @@ directories:
       american_oceania_changes: american_oceania_osm_changes.parquet
       # Modelling-ready observations (one row per POI version × shared_label)
       osm_observations: osm_observations.parquet
+      # Shared k-fold holdout assignment (id → fold), built once by
+      # scripts/models/make_holdout_folds.py and reused by every OOS run so
+      # all model specifications are scored on identical folds.
+      holdout_folds: holdout_folds.parquet
   model_output:
     versioned: true
     path: ~/data/openpois/osm_turnover_model
     files:
       fitted_params: fitted_params.csv
-      param_draws: param_draws.csv
+      param_draws: param_draws.parquet
       predictions: predictions.csv
       diagnostics: diagnostics.csv
       inference_data: inference_data.nc
+      metrics_summary: metrics_summary.csv
+      metrics_subgroup: metrics_subgroup.csv
+      # Long-form factor → level-name map (random_effects), used by the
+      # apply step to reconstruct per-cell curves from the fitted params.
+      factor_lookups: factor_lookups.csv
+      # Out-of-sample cross-validation outputs (scripts/models/osm_turnover_cv.py)
+      oos_metrics_per_fold: oos_metrics_per_fold.csv
+      oos_metrics_aggregate: oos_metrics_aggregate.csv
+      oos_metrics_subgroup: oos_metrics_subgroup.csv
   snapshot_osm:
     versioned: true
     path: ~/data/openpois/snapshots/osm
@@ -210,6 +280,13 @@ directories:
   boundary:
     versioned: false
     path: ~/data/openpois/boundary
+  census_areas:
+    versioned: false
+    path: ~/data/openpois/census_areas
+    files:
+      cbsa_shapefile: cb_2023_us_cbsa_500k.shp
+      place_shapefile: cb_2023_us_place_500k.shp
+      place_population: place_population_2020.csv
   snapshot_overture:
     versioned: true
     path: ~/data/openpois/snapshots/overture
@@ -235,6 +312,9 @@ directories:
     files:
       osm_snippet: osm_snippet.csv
       overture_snippet: overture_snippet.csv
+      # Small national-scale modelling fixture (~10k obs, 5 MSAs x 10 amenity
+      # types) built by scripts/exploratory/build_test_dataset.py.
+      test_observations: test_observations.parquet
 
 # Settings for POI conflation
 conflation:

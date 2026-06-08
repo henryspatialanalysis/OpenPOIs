@@ -41,7 +41,7 @@ Output files (in ``model_output`` directory):
     predictions.csv     — P(change) at t = 0.0..10.0 years per group
     diagnostics.csv     — per-parameter R-hat / bulk-ESS (multi-chain only)
     inference_data.nc   — ArviZ InferenceData (optional, if arviz installed)
-    param_draws.csv     — posterior draws (if save_full_model = true)
+    param_draws.parquet — posterior draws (if save_full_model = true)
 """
 
 import argparse
@@ -51,9 +51,12 @@ import numpy as np
 import pandas as pd
 from config_versioned import Config
 
+from openpois.models import metrics
 from openpois.models.model_fitter import ModelFitter
 from openpois.models.osm_models import get_model_class
 from openpois.models.setup import prepare_data_for_model
+
+from _re_metadata import build_random_effects_metadata
 
 
 # Globals
@@ -112,19 +115,41 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--model-type",
-        choices = ["constant", "random_by_type"],
+        choices = [
+            "constant", "constant_breakpoint", "random_by_type",
+            "random_effects",
+        ],
         default = None,
         help = (
             "Override osm_turnover_model.default_model_type for this run."
         ),
     )
+    parser.add_argument(
+        "--observations",
+        default = None,
+        help = (
+            "Path to an observations parquet to fit instead of the configured "
+            "osm_data.osm_observations (e.g. the testing fixture)."
+        ),
+    )
+    parser.add_argument(
+        "--model-version",
+        default = None,
+        help = (
+            "Write outputs to this model_output version instead of "
+            "versions.model_output (avoids clobbering a pinned fit)."
+        ),
+    )
     args = parser.parse_args()
 
-    MODEL_DIR.mkdir(parents = True, exist_ok = True)
-    config.write_self("model_output")
+    model_version = args.model_version
+    model_dir = config.get_dir_path("model_output", custom_version = model_version)
+    model_dir.mkdir(parents = True, exist_ok = True)
+    config.write_self("model_output", custom_version = model_version)
 
     # Data preparation ------------------------------------------------------>
-    observations_df = pd.read_parquet(OBSERVATIONS_PATH)
+    observations_path = args.observations or OBSERVATIONS_PATH
+    observations_df = pd.read_parquet(observations_path)
     # t1_col defaults to "last_obs_timestamp" in prepare_data_for_model, so
     # tag_years is the inter-observation interval the per-row Bernoulli-on-
     # Poisson likelihood requires (methodology §1.2).
@@ -141,23 +166,33 @@ if __name__ == "__main__":
         "osm_turnover_model", "default_model_type"
     )
     print(f"Model type: {model_type}")
-    metadata = {
-        "dt_col": "tag_years",
-        "group": GROUP_KEY,
-        "var_prior": tuple(
-            config.get("osm_turnover_model", "var_prior")
-        ),
-    }
-    logit_delta_prior = config.get(
-        "osm_turnover_model", "logit_delta_prior", fail_if_none = False
-    )
-    if logit_delta_prior is not None:
-        metadata["logit_delta_prior"] = tuple(logit_delta_prior)
-    logit_delta_var_prior = config.get(
-        "osm_turnover_model", "logit_delta_var_prior", fail_if_none = False
-    )
-    if logit_delta_var_prior is not None:
-        metadata["logit_delta_var_prior"] = tuple(logit_delta_var_prior)
+    if model_type == "random_effects":
+        metadata = build_random_effects_metadata(config)
+    else:
+        metadata = {
+            "dt_col": "tag_years",
+            "group": GROUP_KEY,
+            "var_prior": tuple(
+                config.get("osm_turnover_model", "var_prior")
+            ),
+        }
+        logit_delta_prior = config.get(
+            "osm_turnover_model", "logit_delta_prior", fail_if_none = False
+        )
+        if logit_delta_prior is not None:
+            metadata["logit_delta_prior"] = tuple(logit_delta_prior)
+        logit_delta_var_prior = config.get(
+            "osm_turnover_model", "logit_delta_var_prior", fail_if_none = False
+        )
+        if logit_delta_var_prior is not None:
+            metadata["logit_delta_var_prior"] = tuple(logit_delta_var_prior)
+        # Time-varying λ (constant_breakpoint): log-normal prior on the
+        # breakpoint age t_B. Ignored by the other non-RE model types.
+        t_breakpoint_prior = config.get(
+            "osm_turnover_model", "t_breakpoint_prior", fail_if_none = False
+        )
+        if t_breakpoint_prior is not None:
+            metadata["t_breakpoint_prior"] = tuple(t_breakpoint_prior)
     model = get_model_class(model_type)(
         dataset = obs_sub,
         metadata = metadata,
@@ -184,7 +219,22 @@ if __name__ == "__main__":
         fitter.get_parameter_table()
         .merge(model.param_ids, on = "parameter", how = "left")
     )
-    if model.group_lookup is not None:
+    factor_lookups = getattr(model, "factor_lookups", None)
+    long_lookup = None
+    if factor_lookups:
+        # Multi-factor (random_effects): attach level names by (factor, level_id).
+        long_lookup = pd.concat(
+            [
+                lut.assign(factor = fac)
+                for fac, lut in factor_lookups.items()
+            ],
+            ignore_index = True,
+        )
+        fitted_params = fitted_params.merge(
+            long_lookup.loc[:, ["factor", "level_id", "level_name"]],
+            on = ["factor", "level_id"], how = "left",
+        )
+    elif model.group_lookup is not None:
         fitted_params = fitted_params.merge(
             model.group_lookup, on = "group_id", how = "left"
         )
@@ -210,7 +260,19 @@ if __name__ == "__main__":
         .assign(t1 = 0.0, units = "years")
     )
     predictions["t2"] = np.asarray(predict_data["dt"])
-    if model.group_lookup is not None:
+    cell_lookup = getattr(model, "cell_lookup", None)
+    if cell_lookup is not None:
+        # Multi-factor (random_effects): one curve per observed cell; label it
+        # with the cell's amenity / MSA / urban_rural.
+        n_periods = len(predict_times)
+        predictions["cell_id"] = np.repeat(
+            np.arange(model._n_cells), n_periods
+        )
+        predictions = (
+            predictions.merge(cell_lookup, on = "cell_id", how = "left")
+            .sort_values(["cell_id", "t2"], ascending = True)
+        )
+    elif model.group_lookup is not None:
         predictions["group"] = np.asarray(predict_data["group"])
         predictions = (
             predictions
@@ -223,20 +285,70 @@ if __name__ == "__main__":
         )
 
     # Save ----------------------------------------------------------------->
-    config.write(fitted_params, "model_output", "fitted_params")
-    config.write(predictions, "model_output", "predictions")
+    config.write(
+        fitted_params, "model_output", "fitted_params",
+        custom_version = model_version,
+    )
+    config.write(
+        predictions, "model_output", "predictions",
+        custom_version = model_version,
+    )
+    if long_lookup is not None:
+        # Long-form factor lookup (incl. the interaction's amenity/msa_code
+        # components) so the apply step can reconstruct arbitrary cells.
+        config.write(
+            long_lookup, "model_output", "factor_lookups",
+            custom_version = model_version,
+        )
     if fitter.diagnostics is not None:
-        config.write(fitter.diagnostics, "model_output", "diagnostics")
+        config.write(
+            fitter.diagnostics, "model_output", "diagnostics",
+            custom_version = model_version,
+        )
     try:
         idata = fitter.to_inference_data()
         idata.to_netcdf(
-            str(config.get_file_path("model_output", "inference_data"))
+            str(config.get_file_path(
+                "model_output", "inference_data", custom_version = model_version
+            ))
         )
     except ImportError:
         print("arviz not installed — skipping inference_data.nc")
     if SAVE_FULL_MODEL:
-        config.write(
-            flatten_param_draws(fitter.get_parameter_draws()),
-            "model_output",
-            "param_draws",
+        # Written directly as Parquet (config_versioned.autowrite has no parquet
+        # backend): ~5-10x smaller and faster to reload than CSV for the wide
+        # draws table. reconstruct.load_random_effects_draws reads it back.
+        param_draws_path = config.get_file_path(
+            "model_output", "param_draws", custom_version = model_version
         )
+        flatten_param_draws(fitter.get_parameter_draws()).to_parquet(
+            param_draws_path, index = False
+        )
+
+    # Predictive-fit metrics (models exposing a pointwise log-likelihood) ----->
+    # Keep the per-block (draws x chunk) matrices small enough for a modest box:
+    # at national scale (~2k draws, millions of rows) the default 200k chunk can
+    # need tens of GB.
+    metrics_chunk = 50_000
+    if hasattr(model, "build_row_data"):
+        summary = metrics.in_sample_metrics(model, fitter, chunk = metrics_chunk)
+        print("\nIn-sample metrics:")
+        for k, v in summary.items():
+            print(f"  {k}: {v}")
+        config.write(
+            pd.DataFrame([summary]), "model_output", "metrics_summary",
+            custom_version = model_version,
+        )
+        by = [
+            c for c in ("shared_label", "msa_code", "urban_rural")
+            if c in model.raw_data.columns
+        ]
+        if by:
+            config.write(
+                metrics.subgroup_metrics(
+                    model, fitter, by = tuple(by), chunk = metrics_chunk
+                ),
+                "model_output",
+                "metrics_subgroup",
+                custom_version = model_version,
+            )
