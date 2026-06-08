@@ -192,7 +192,7 @@ Captures unobserved individual heterogeneity beyond covariates. **Critical cavea
 ```
 λ(t) = exp(x^T β) · baseline(t)
 ```
-**Piecewise-constant baseline** is the simplest non-homogeneous extension: partition calendar time into `K` intervals, give each its own rate. The row decomposition still works, but any observation interval that *crosses a knot* must be split at the knot so that each row sees a single rate. This is also the hook for richer flexible baselines (B-splines, Gaussian-process log-intensity). Not implemented.
+**Piecewise-constant baseline** is the simplest non-homogeneous extension: partition time into `K` intervals, give each its own rate. The row decomposition still works, but any observation interval that *crosses a knot* must have its hazard integral split at the knot. The first such model — a single breakpoint on **tag age** — is now implemented; see §8.
 
 ## 3. Verification plan
 
@@ -230,7 +230,7 @@ Captures unobserved individual heterogeneity beyond covariates. **Critical cavea
 | Zero-inflated mixture `δ` (§1.7) | `L_first = (1-δ)^{1-y}·(1-(1-δ)e^{-λΔ})^y · e^{-λΔ(1-y)}` | — | *Not in the code yet* — see §4.2 for the implementation plan | **To build** |
 | Level 2: covariates `log λ = β_0 + x^T β` | — | — | Not implemented; needs a new `CovariateModel` class in `osm_models.py` | **To build** |
 | Level 3: individual frailty | — | — | Could be expressed via `RandomByTypeModel` using `id` as the group key, but only works if `id` matches the per-POI-name-iteration "individual" | **To investigate** |
-| Level 4: piecewise-constant baseline λ(t) | — | — | Would require splitting rows at knot boundaries in `format_observations.py` | **To build** |
+| Level 4: piecewise-constant baseline λ(t) | `H = λ_1·(crossing−t1) + λ_2·(t2−crossing)`, `crossing = clip(t_B, t1, t2)` | [src/openpois/models/osm_models.py](src/openpois/models/osm_models.py) | `_breakpoint_integrated_hazard`, `ConstantBreakpointModel` — closed-form integral on the tag-age clock (no row splitting); see §8 + [docs/time-varying-models.md](time-varying-models.md) | **Done (constant); parked** — nationwide breakpoint not identified |
 
 ### 4.2 Implementation plan for the ZIE δ extension (§1.7) at Level 0
 
@@ -598,3 +598,67 @@ and the shared-label assignment into a single streaming pass and emits
 | [scripts/exploratory/build_test_dataset.py](scripts/exploratory/build_test_dataset.py) | **New.** National test fixture (§7.4). |
 | [config.yaml](config.yaml) | `download.census_areas`, `directories.census_areas`, `osm_turnover_model.random_effects`, metrics + `factor_lookups` model-output files. |
 | `tests/test_osm_models.py`, `tests/test_metrics.py`, `tests/test_reconstruct.py`, `tests/test_format_observations.py` | Regression coverage for all of the above (incl. amenity-only ≡ `RandomByTypeModel`, suff-stats ≡ dense, reconstruct ≡ predict, golden window ≡ state machine). |
+
+## 8. Time-varying λ — the breakpoint (two-rate) model (Level 4, implemented)
+
+### 8.1 The integrated-hazard view
+
+Every model here enters the likelihood **only** through the cumulative hazard
+over each interval, `H(t1, t2) = ∫_{t1}^{t2} λ(a) da`, via `P(change) = 1 −
+exp(−H)` and the ZIE δ discount on first intervals (§1.7). The fitter treats
+`event_rate_fun`'s output as exactly this `H` ([model_fitter.py](src/openpois/models/model_fitter.py) `make_log_density`; [osm_models.py](src/openpois/models/osm_models.py) `_zie_pointwise_loglik`). For a **constant** λ, `H = λ·(t2 − t1) = λ·Δt`. A time-varying λ only swaps in a different closed-form `H` — nothing downstream changes. **Design rule:** only adopt λ(a) forms whose integral has a closed form (no quadrature in the inner loop).
+
+### 8.2 Time axis = tag age
+
+The hazard clock is the tag's **age since the current value was established**
+(`last_tag_timestamp`). For each interval row, `age_start = t1 − last_tag` and
+`age_end = t2 − last_tag` (in years); `age_start = 0` on the first interval, and
+`age_end − age_start = tag_years` so per-row hazards telescope to each
+individual's cumulative hazard. These columns are emitted by
+[`prepare_data_for_model`](src/openpois/models/setup.py); constant-λ models
+ignore them.
+
+### 8.3 The two-rate breakpoint
+
+A single breakpoint at age `t_B` with `λ_1 = exp(log_lambda_1)` before it and
+`λ_2 = exp(log_lambda_2)` after. The integral over `[age_start, age_end]` is the
+branchless clamp form (`_breakpoint_integrated_hazard`):
+
+```
+crossing = clip(t_B, age_start, age_end)
+H        = λ_1·(crossing − age_start) + λ_2·(age_end − crossing)
+```
+
+covering all three cases (interval fully before / fully after / straddling
+`t_B`) at once, and reducing to `λ·Δt` when `λ_1 = λ_2`. Cost is the same `O(N)`
+dense per-row sum as `ConstantModel`. Priors: `log_lambda_1`, `log_lambda_2 ~
+N(0, 3)` (the constant-λ prior); `log_t_breakpoint ~ N(0, 1)` (log-normal,
+median `t_B = 1` year, config key `osm_turnover_model.t_breakpoint_prior`);
+δ unchanged. `clip` is continuous and differentiable a.e. — NUTS handles the
+kinks given enough straddling intervals and the log-normal `t_B` prior.
+
+Code: `ConstantBreakpointModel` (subclass of `ConstantModel`) in
+[osm_models.py](src/openpois/models/osm_models.py), registered as model type
+`constant_breakpoint`; toggle with `--model-type constant_breakpoint`.
+
+### 8.4 Rating consequence (tag age vs. last edit)
+
+Snapshot rating ([apply_model.py](scripts/osm_snapshot/apply_model.py)) anchors
+the survival clock at `last_edited` and asks `P(change within elapsed)`. That is
+memoryless-correct **only for constant λ**. Under a tag-age hazard the rating
+must integrate the hazard at the tag's *true age* over the `[last_edited, now]`
+window:
+
+```
+Λ(a)        = λ_1·min(a, t_B) + λ_2·max(0, a − t_B)        # cumulative hazard
+a_last_edit = last_edited − tag_established
+a_now       = now         − tag_established
+P(change since last edit) = 1 − exp( −( Λ(a_now) − Λ(a_last_edit) ) )
+```
+
+This needs a per-POI `tag_established` (the `last_tag_timestamp` that
+`format_observations` already derives), joined onto the snapshot; POIs absent
+from history fall back to `a_last_edit = 0`. CIs come from a modest set of
+posterior draws of `(λ_1, λ_2, t_B)` pushed through `Λ`. **This rating-side work
+is a scoped follow-up**; the model, training data prep, in-sample fit, and the
+from-age-0 diagnostic prediction curve land first.
