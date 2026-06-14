@@ -2,7 +2,7 @@ import { fromLonLat, toLonLat } from 'ol/proj'
 
 const HASH_RE = /^#(\d+(?:\.\d+)?)\/(-?\d+(?:\.\d+)?)\/(-?\d+(?:\.\d+)?)$/
 
-function readHash() {
+export function parseMapHash() {
   const m = HASH_RE.exec(window.location.hash)
   if (!m) return null
   return {
@@ -20,14 +20,5 @@ function writeHash(view) {
 }
 
 export function useMapHash(map) {
-  const initial = readHash()
-
-  if (initial) {
-    map.getView().setCenter(initial.center)
-    map.getView().setZoom(initial.zoom)
-  }
-
   map.on('moveend', () => writeHash(map.getView()))
-
-  return { hasHash: !!initial }
 }
