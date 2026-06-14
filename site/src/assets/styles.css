@@ -302,7 +302,7 @@ body,
 .confidence-legend .legend-bar {
   height: 10px;
   border-radius: 3px;
-  background: linear-gradient(to right, #d73027, #fee08b, #1a9850);
+  background: linear-gradient(to right, rgb(158,1,66), rgb(213,62,79), rgb(244,109,67), rgb(253,174,97), rgb(254,224,139), rgb(255,255,191), rgb(230,245,152), rgb(171,221,164), rgb(102,194,165), rgb(50,136,189), rgb(94,79,162));
 }
 
 .confidence-legend .legend-ticks {

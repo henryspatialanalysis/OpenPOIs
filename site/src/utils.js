@@ -6,11 +6,20 @@ export function discretizeConf(conf) {
   return Math.round(Math.max(0, Math.min(1, conf)) * 20)
 }
 
-// Confidence gradient stops: red → yellow → green
+// Confidence gradient stops: Spectral 11 (ColorBrewer diverging)
+// Source: cpt-city cb/div/spectral_11
 const CONF_STOPS = [
-  { t: 0.0, r: 215, g: 48,  b: 39  },  // #d73027 red
-  { t: 0.5, r: 254, g: 224, b: 139 },  // #fee08b yellow
-  { t: 1.0, r: 26,  g: 152, b: 80  },  // #1a9850 green
+  { t: 0.0, r: 158, g: 1,   b: 66  },  // dark red
+  { t: 0.1, r: 213, g: 62,  b: 79  },  // red
+  { t: 0.2, r: 244, g: 109, b: 67  },  // orange-red
+  { t: 0.3, r: 253, g: 174, b: 97  },  // orange
+  { t: 0.4, r: 254, g: 224, b: 139 },  // yellow-orange
+  { t: 0.5, r: 255, g: 255, b: 191 },  // pale yellow
+  { t: 0.6, r: 230, g: 245, b: 152 },  // yellow-green
+  { t: 0.7, r: 171, g: 221, b: 164 },  // light green
+  { t: 0.8, r: 102, g: 194, b: 165 },  // teal
+  { t: 0.9, r: 50,  g: 136, b: 189 },  // blue
+  { t: 1.0, r: 94,  g: 79,  b: 162 },  // purple
 ]
 
 function lerpChannel(a, b, t) {
