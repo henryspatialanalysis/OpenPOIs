@@ -6,20 +6,20 @@ export function discretizeConf(conf) {
   return Math.round(Math.max(0, Math.min(1, conf)) * 20)
 }
 
-// Confidence gradient stops: Spectral 11 (ColorBrewer diverging)
-// Source: cpt-city cb/div/spectral_11
+// Confidence gradient stops: Turbo (reversed so low=red, high=purple)
+// Source: https://gist.github.com/mikhailov-work/ee72ba4191942acecc03fe6da94fc73f
 const CONF_STOPS = [
-  { t: 0.0, r: 158, g: 1,   b: 66  },  // dark red
-  { t: 0.1, r: 213, g: 62,  b: 79  },  // red
-  { t: 0.2, r: 244, g: 109, b: 67  },  // orange-red
-  { t: 0.3, r: 253, g: 174, b: 97  },  // orange
-  { t: 0.4, r: 254, g: 224, b: 139 },  // yellow-orange
-  { t: 0.5, r: 255, g: 255, b: 191 },  // pale yellow
-  { t: 0.6, r: 230, g: 245, b: 152 },  // yellow-green
-  { t: 0.7, r: 171, g: 221, b: 164 },  // light green
-  { t: 0.8, r: 102, g: 194, b: 165 },  // teal
-  { t: 0.9, r: 50,  g: 136, b: 189 },  // blue
-  { t: 1.0, r: 94,  g: 79,  b: 162 },  // purple
+  { t: 0.0, r: 122, g:   4, b:   3 },  // #7a0403 dark red
+  { t: 0.1, r: 197, g:  38, b:   3 },  // #c52603 red
+  { t: 0.2, r: 240, g:  91, b:  18 },  // #f05b12 orange-red
+  { t: 0.3, r: 254, g: 164, b:  49 },  // #fea431 orange
+  { t: 0.4, r: 225, g: 221, b:  55 },  // #e1dd37 yellow
+  { t: 0.5, r: 161, g: 253, b:  61 },  // #a1fd3d yellow-green
+  { t: 0.6, r:  70, g: 248, b: 132 },  // #46f884 green
+  { t: 0.7, r:  24, g: 215, b: 202 },  // #18d7ca teal
+  { t: 0.8, r:  62, g: 155, b: 254 },  // #3e9bfe blue
+  { t: 0.9, r:  69, g:  89, b: 203 },  // #4559cb indigo
+  { t: 1.0, r:  48, g:  18, b:  59 },  // #30123b dark purple
 ]
 
 function lerpChannel(a, b, t) {

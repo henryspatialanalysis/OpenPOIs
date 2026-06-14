@@ -302,7 +302,7 @@ body,
 .confidence-legend .legend-bar {
   height: 10px;
   border-radius: 3px;
-  background: linear-gradient(to right, rgb(158,1,66), rgb(213,62,79), rgb(244,109,67), rgb(253,174,97), rgb(254,224,139), rgb(255,255,191), rgb(230,245,152), rgb(171,221,164), rgb(102,194,165), rgb(50,136,189), rgb(94,79,162));
+  background: linear-gradient(to right, rgb(122,4,3), rgb(197,38,3), rgb(240,91,18), rgb(254,164,49), rgb(225,221,55), rgb(161,253,61), rgb(70,248,132), rgb(24,215,202), rgb(62,155,254), rgb(69,89,203), rgb(48,18,59));
 }
 
 .confidence-legend .legend-ticks {
