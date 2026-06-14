@@ -70,6 +70,7 @@ import { apply } from 'ol-mapbox-style'
 import PoiPopup from './PoiPopup.vue'
 import ConfidenceLegend from './ConfidenceLegend.vue'
 import { useGeolocation } from '../composables/useGeolocation.js'
+import { useMapHash } from '../composables/useMapHash.js'
 import {
   getOsmLayer,
   updateOsmFilters,
@@ -161,7 +162,8 @@ onMounted(async () => {
   updateOvertureFilters(props.overtureFilters)
   updateConflatedFilters(props.conflatedFilters)
 
-  handleGeolocate()
+  const { hasHash } = useMapHash(olMap)
+  if (!hasHash) handleGeolocate()
 })
 
 onBeforeUnmount(() => {
