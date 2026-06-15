@@ -21,14 +21,9 @@ export const OVERTURE_PMTILES_URL =
 
 // Confidence color ramp (conf_mean 0-1, 1 = stable)
 export const COLORS = {
-  low: '#d73027',      // red, conf < 0.3
-  medium: '#fee08b',   // yellow, conf 0.3-0.7
-  high: '#1a9850',     // green, conf > 0.7
   cluster: '#6366f1',  // indigo for clusters
   geolocation: '#60a5fa', // light blue dot
 }
-
-export const CONFIDENCE_THRESHOLDS = { low: 0.3, high: 0.7 }
 
 const OSM_KEY_LABELS = {
   amenity: 'Amenity',
