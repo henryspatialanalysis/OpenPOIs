@@ -202,15 +202,22 @@ if __name__ == "__main__":
         )
         fig_save(fig, stub = "osm_changes_all_preds")
 
-    # Multi-panel plot faceted by the top shared labels.
+    # Multi-panel plot faceted by the top shared labels. Catch-all "Other ..."
+    # labels are excluded so the top N reflects specific POI categories.
     TOP_N_TYPES = config.get("osm_data", "top_n_types")
+    other_labels = sorted(
+        lbl for lbl in to_plot_df["shared_label"].dropna().unique()
+        if str(lbl).startswith("Other ")
+    )
     fig = change_multiplot_create(
         observations = to_plot_df,
         col = "shared_label",
         top_n = TOP_N_TYPES,
+        exclude_values = other_labels,
         no_change_col = 'no_change',
         change_col = 'change',
         final_observation_col = 'final_obs',
+        color_label = "Amenity",
         title = f"Stability of the `{TAG_KEY}` tag over time by shared label",
         subtitle = (
             f"Top {TOP_N_TYPES} shared labels by number of observations"
