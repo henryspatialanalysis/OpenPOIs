@@ -6,20 +6,23 @@ export function discretizeConf(conf) {
   return Math.round(Math.max(0, Math.min(1, conf)) * 20)
 }
 
-// Confidence gradient stops: Turbo (reversed so low=red, high=purple)
+// Confidence gradient stops: Turbo (reversed so low=red, high=purple),
+// resampled so yellow is centered at t=0.5. The warm red->yellow side is
+// stretched and the green-blue-purple side compressed. The Turbo range is
+// trimmed to its 5%-95% span so the endpoints aren't too dark.
 // Source: https://gist.github.com/mikhailov-work/ee72ba4191942acecc03fe6da94fc73f
 const CONF_STOPS = [
-  { t: 0.0, r: 122, g:   4, b:   3 },  // #7a0403 dark red
-  { t: 0.1, r: 197, g:  38, b:   3 },  // #c52603 red
-  { t: 0.2, r: 240, g:  91, b:  18 },  // #f05b12 orange-red
-  { t: 0.3, r: 254, g: 164, b:  49 },  // #fea431 orange
-  { t: 0.4, r: 225, g: 221, b:  55 },  // #e1dd37 yellow
-  { t: 0.5, r: 161, g: 253, b:  61 },  // #a1fd3d yellow-green
-  { t: 0.6, r:  70, g: 248, b: 132 },  // #46f884 green
-  { t: 0.7, r:  24, g: 215, b: 202 },  // #18d7ca teal
-  { t: 0.8, r:  62, g: 155, b: 254 },  // #3e9bfe blue
-  { t: 0.9, r:  69, g:  89, b: 203 },  // #4559cb indigo
-  { t: 1.0, r:  48, g:  18, b:  59 },  // #30123b dark purple
+  { t: 0.0, r: 161, g:  18, b:   1 },  // #a11201 dark red
+  { t: 0.1, r: 208, g:  47, b:   5 },  // #d02f05 red
+  { t: 0.2, r: 237, g:  85, b:  16 },  // #ed5510 orange-red
+  { t: 0.3, r: 253, g: 138, b:  38 },  // #fd8a26 orange
+  { t: 0.4, r: 250, g: 186, b:  57 },  // #faba39 yellow-orange
+  { t: 0.5, r: 223, g: 223, b:  55 },  // #dfdf37 yellow
+  { t: 0.6, r: 153, g: 254, b:  66 },  // #99fe42 yellow-green
+  { t: 0.7, r:  50, g: 242, b: 152 },  // #32f298 green
+  { t: 0.8, r:  34, g: 197, b: 226 },  // #22c5e2 teal/cyan
+  { t: 0.9, r:  70, g: 128, b: 246 },  // #4680f6 blue
+  { t: 1.0, r:  61, g:  53, b: 139 },  // #3d358b dark purple
 ]
 
 function lerpChannel(a, b, t) {
