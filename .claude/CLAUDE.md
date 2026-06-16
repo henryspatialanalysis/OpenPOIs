@@ -56,6 +56,7 @@ Style: Black (format-on-save in VSCode). Lint: flake8 + pylint, configured in `p
 - [docs/turnover-model-methodology.md](docs/turnover-model-methodology.md) — statistical derivation of the POI turnover model with ZIE extension
 - [docs/change-detection.md](docs/change-detection.md) — OSM-history-derived ghost POIs, shadow matching, and the per-`shared_label` δ penalty applied to Overture. Canonical entry point is `make conflate`, which runs the three-step `build_ghosts` → `conflate.py --output-suffix=baseline` → `apply_change_detection.py` pipeline so all national runs include the CD penalty by default.
 - [docs/time-varying-models.md](docs/time-varying-models.md) — experimental/parked `constant_breakpoint` (two-rate, tag-age) turnover model: rationale, key files, how to run, the inconclusive 2026-06-08 nationwide result (t_B collapses to ~days, non-identified), and why the random-effects extension was not built. Production `constant`/`random_effects` models are unchanged.
+- [docs/source-provenance-tags.md](docs/source-provenance-tags.md) — investigated/parked check on survey-vs-armchair OSM provenance tags (`survey:date`, `source`, `check_date`, changeset-only `imagery_used`): which exist, element vs changeset, the snapshot `source` collision, and the descriptive result (in-person markers on only ~0.5% of POIs — too sparse to downweight on). Run via `scripts/osm_data/source_tag_prevalence.py`.
 
 ## Running to-do
 
