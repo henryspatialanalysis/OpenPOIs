@@ -254,6 +254,13 @@ directories:
       inference_data: inference_data.nc
       metrics_summary: metrics_summary.csv
       metrics_subgroup: metrics_subgroup.csv
+      # Overdispersion diagnostics (scripts/models/osm_turnover.py via
+      # openpois.models.dispersion): φ̂ + posterior-predictive p-values for the
+      # covariate-cell and per-POI frailty statistics, subgroup/age breakdown,
+      # and the fitted-probability calibration table.
+      dispersion_summary: dispersion_summary.csv
+      dispersion_subgroup: dispersion_subgroup.csv
+      dispersion_calibration: dispersion_calibration.csv
       # Long-form factor → level-name map (random_effects), used by the
       # apply step to reconstruct per-cell curves from the fitted params.
       factor_lookups: factor_lookups.csv
