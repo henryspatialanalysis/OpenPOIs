@@ -51,7 +51,7 @@ import numpy as np
 import pandas as pd
 from config_versioned import Config
 
-from openpois.models import metrics
+from openpois.models import dispersion, metrics
 from openpois.models.model_fitter import ModelFitter
 from openpois.models.osm_models import get_model_class
 from openpois.models.setup import prepare_data_for_model
@@ -352,3 +352,29 @@ if __name__ == "__main__":
                 "metrics_subgroup",
                 custom_version = model_version,
             )
+
+    # Overdispersion diagnostics ------------------------------------------->
+    # Answers the conference question "are the data overdispersed?" — see
+    # openpois.models.dispersion. Memory-bounded by streaming one posterior draw
+    # at a time, so it is safe at national scale; n_ppc_draws caps the run.
+    disp_cols = ("shared_label", "msa_code", "urban_rural", "id")
+    if all(c in model.raw_data.columns for c in disp_cols):
+        report = dispersion.dispersion_report(model, fitter)
+        print("\nOverdispersion diagnostics (φ̂ ≈ 1 ⇒ well specified):")
+        for _, r in report["summary"].iterrows():
+            print(
+                f"  {r['statistic']:>14}: phi_hat={r['phi_hat']:.3f} "
+                f"ppp={r['ppp']:.3f} (n_groups≈{r['n_groups']})"
+            )
+        config.write(
+            report["summary"], "model_output", "dispersion_summary",
+            custom_version = model_version,
+        )
+        config.write(
+            report["subgroup"], "model_output", "dispersion_subgroup",
+            custom_version = model_version,
+        )
+        config.write(
+            report["calibration"], "model_output", "dispersion_calibration",
+            custom_version = model_version,
+        )
