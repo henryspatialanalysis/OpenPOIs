@@ -662,3 +662,339 @@ from history fall back to `a_last_edit = 0`. CIs come from a modest set of
 posterior draws of `(λ_1, λ_2, t_B)` pushed through `Λ`. **This rating-side work
 is a scoped follow-up**; the model, training data prep, in-sample fit, and the
 from-age-0 diagnostic prediction curve land first.
+
+## 9. Overdispersion investigation and the observation-process problem (2026-06)
+
+This section documents a focused investigation prompted by a conference
+question: *is the Poisson assumption valid, or are the data overdispersed*
+(which would motivate a negative-binomial-type model)? The bottom line, after a
+chain of diagnostics and model experiments: **the apparent overdispersion is
+overwhelmingly an artifact of the edit-triggered observation scheme, not a
+failure of the interval-censored Poisson likelihood.** The framing of §1 is
+sound under *exogenous* observation; the residual heterogeneity is mild and
+already absorbed by the §7 random effects. A separate, orthogonal limitation —
+**under-reporting** — caps what OSM edit history can say about *true* (as opposed
+to *recorded*) turnover. None of this changed the production model; the
+recommended fix is in data construction, not in the likelihood.
+
+### 9.1 What "overdispersion" means for *this* likelihood
+
+Three facts from the literature reframe the question:
+
+1. **Overdispersion is undefined for ungrouped Bernoulli (n = 1) data.** Each
+   per-interval row is a single Bernoulli trial; its deviance / Pearson residual
+   carries no dispersion information until rows are aggregated into *replicated
+   subpopulations* (McCullagh & Nelder 1989 §4.5). So a textbook count-Poisson
+   dispersion test cannot be applied to the raw rows — a custom, aggregated test
+   is required.
+2. **In a survival / exponential model, overdispersion ≡ unobserved
+   heterogeneity ≡ frailty.** A Gamma frailty on the exponential rate yields a
+   Lomax / Pareto-II marginal with a *decreasing* apparent hazard — the survival
+   analogue of Poisson → Negative-Binomial (Rodríguez, *Unobserved
+   Heterogeneity*; Balan & Putter 2020).
+3. **Posterior predictive checks with a dispersion discrepancy + Bayesian
+   p-value** are the standard, distribution-free route, and fit the BlackJAX
+   draw-based machinery directly (Gelman et al. *BDA3* ch. 6).
+
+So the honest question is: *after the amenity / MSA / urbanicity random effects
+(§7) and the ZIE δ (§1.7), is there residual heterogeneity in λ that the
+homogeneous-Poisson assumption misses?*
+
+**Diagnostic module.** [src/openpois/models/dispersion.py](src/openpois/models/dispersion.py)
+implements three complementary discrepancy statistics, each with a
+posterior-predictive Bayesian p-value (`ppp`) and a readable dispersion ratio
+`φ̂` (≈ 1 ⇒ well specified):
+
+- **`covariate_cell`** — Pearson dispersion over `(shared_label, msa_code,
+  urban_rural, age_bin)` cells, using the exact Poisson-binomial mean
+  `μ_c = Σ p_i` and variance `V_c = Σ p_i(1−p_i)` (handles per-row Δ
+  heterogeneity, so no duration binning is needed).
+- **`poi_frailty`** — within-physical-POI clustering over multi-interval POIs
+  (the negative-binomial-targeted / shared-frailty test).
+- **`calibration`** — observed vs expected change rate across fitted-probability
+  deciles (Hosmer–Lemeshow / DHARMa style), separating *mean* misspecification
+  from *pure* dispersion.
+
+It is memory-bounded by streaming one posterior draw at a time (never forming
+the `(S, N)` matrix), so it runs at national scale (N ≈ 5.7M, S ≈ 2k) in
+minutes. `dispersion_report(model, fitter)` drives it from a live fit;
+`dispersion_report_from_probs(df, get_probs, …)` is the JAX-decoupled core, used
+to score a fit reconstructed off disk. Tests:
+[tests/test_dispersion.py](tests/test_dispersion.py) (null calibration +
+injected-frailty power). It is wired into
+[scripts/models/osm_turnover.py](scripts/models/osm_turnover.py)
+(`dispersion_summary` / `dispersion_subgroup` / `dispersion_calibration`).
+
+### 9.2 The headline finding on the production fit
+
+Run on the production `random_effects` national fit
+(`2026-06-05-nationwide-full`, osm_data `20260521`, 5.65M rows):
+
+| statistic | φ̂ | ppp | reading |
+|---|---|---|---|
+| `covariate_cell` | **25** | 0.0 | severe residual dispersion in the mean structure |
+| `poi_frailty` | **1.34** | 0.0 | genuine but modest per-POI clustering |
+
+The **calibration** table was the tell: the model matched the *global* change
+rate (~0.22 expected vs ~0.23 observed) but was badly miscalibrated in the
+tails — lowest fitted-prob bin expected 0.005 vs observed **0.118** (~25×
+under-prediction). And the dispersion **rose steeply with tag age**: φ̂ by age
+bin = 5.3 (0–0.56 yr) → 8.2 → **106** (4.3–17.6 yr), concentrated in low-churn
+amenities (School 328, Cemetery 249). This looked like the classic
+"heterogeneity among survivors" / decreasing-apparent-hazard signature, and
+motivated the frailty / declining-hazard experiments in §9.3.
+
+### 9.3 Frailty / declining-hazard models — and why they failed
+
+Two declining-hazard tag-age baselines were implemented as drop-ins on the
+[ConstantBreakpointModel](src/openpois/models/osm_models.py) scaffolding (they
+inherit `age_start` / `age_end` handling and the ZIE δ; only the integrated
+hazard changes), registered as model types `weibull` and `lomax`:
+
+- **`WeibullModel`** — `h(a) = λ p a^{p-1}`, `H = λ (age_end^p − age_start^p)`
+  (`_weibull_integrated_hazard`, gradient-safe at the age = 0 boundary). `p < 1`
+  is a decreasing hazard; `p = 1` reduces to `ConstantModel`.
+- **`LomaxModel`** — the *marginal* Gamma(mean 1, variance θ) frailty on a
+  constant rate: `H = θ^{-1} log(1 + θ λ a)` (`_lomax_integrated_hazard`),
+  decreasing marginal hazard `λ/(1+θλa)`. θ is the frailty-variance /
+  overdispersion knob; θ → 0 recovers `ConstantModel`. This is the explicit
+  Poisson → Negative-Binomial analogue.
+
+Both have closed-form cumulative hazards (the §8.1 design rule), keep δ, and
+compose with the proportional-hazards random effects. Tests:
+[tests/test_hazard_models.py](tests/test_hazard_models.py). Experiment runner:
+[scripts/exploratory/fit_hazard_model_and_diagnose.py](scripts/exploratory/fit_hazard_model_and_diagnose.py)
+(fit a subsample, WAIC on a held-out subset, dispersion on the full data, with a
+same-handicap constant baseline).
+
+**Negative result, nationally.** Fit on the national data (no covariates, to
+isolate the hazard shape):
+
+| model | shape | WAIC vs constant | age-φ̂ (young→old) |
+|---|---|---|---|
+| constant | — | — | 12 → 19 → 129 |
+| **Lomax** | θ = 0.005 (→ 0) | −650 (0.1 %) | 12 → 19 → 129 (≡ constant) |
+| **Weibull** | p = 0.86 | −1577 (0.25 %) | 12 → 18 → 158 (worse) |
+
+Lomax collapsed to the constant model (θ → 0); Weibull bent only mildly and made
+the old-age fit *worse*. Neither flattened the age gradient.
+
+**The decisive cut — School only.** Restricting to a single amenity removes the
+cross-type heterogeneity. The overdispersion got *more* extreme (old-age φ̂ rose
+to ~1600), Lomax θ again → 0, and Weibull chose **p = 1.51 (increasing!)** — the
+opposite of a declining hazard. A direct cell-level breakdown explained why:
+
+> **Old School tags (age 7–17 yr) change at an observed rate of 53 %, but the
+> constant model predicts 5.6 %** — a 10× *under*-prediction. The worst cell
+> (rural / NO_MSA: 25,016 rows, 20,952 changes = 84 % observed vs 911 expected)
+> alone is 57 % of the old-age Pearson.
+
+Old tags are not stable survivors changing *less* than predicted (the frailty
+story) — when they appear in the data at all they change *far more* than
+predicted. No reshaping of a hazard in *time* (Weibull, Lomax, breakpoint, or a
+latent frailty on λ) can fix a 10× under-prediction whose cause is the
+observation process. The `weibull` / `lomax` types remain in the registry but
+are **not used by the pipeline**; they served their diagnostic purpose.
+
+### 9.4 The real cause: informative (edit-triggered) observation times
+
+The OSM history observes a POI only at **edit (version) times**, and those times
+are endogenous: a version exists *because* someone edited the element, and the
+edit is often the change itself. This is the textbook problem of **informative /
+outcome-dependent observation times** (the hardest, "VNAR" case in the
+Pullenayegum & Lim 2016 taxonomy — the observation is created *by* the outcome).
+
+A model-free test makes it unambiguous. Under non-informative observation a
+homogeneous-Poisson interval has `P(change | Δ) → 0` as `Δ → 0`; a non-zero
+intercept is direct evidence of edit-triggering. On non-first intervals:
+
+- `P(change | Δ < 7 days) = 0.117`, vs **0.001** predicted by the fitted
+  exponential — a **109× intercept**.
+- The implied per-bin rate `λ̂(Δ)` falls monotonically from **13.8/yr**
+  (Δ < 7 d) to **0.027/yr** (Δ > 8 yr) — a ~500× range, where a true homogeneous
+  Poisson would be *constant* in Δ.
+- `P(change)` is nearly **flat in Δ** (~0.12–0.21) across three orders of
+  magnitude of interval length. Stratifying by tag age (to rule out genuine
+  duration dependence) confirms it: short ≈ long at both young and old ages.
+
+The interpretation: **change is recorded *per edit*, not *per unit time*.** Each
+version carries a ~constant ~15–20 % chance of being a tag change, almost
+independent of elapsed time. The fitted "rate λ" is therefore confounded with
+edit frequency, and is not identifiable as a calendar-time rate from
+edit-triggered observations alone.
+
+### 9.5 How the model partially addresses it, and the calendar-grid fix
+
+**Partial mitigation already in the model.** The ZIE δ component (§1.7) absorbs
+*some* of this: the spike of changes at very short tag age (vandalism reverts,
+typo fixes, and — crucially — the edit-triggering at creation) is exactly the
+"instant-change mass" δ is designed to model. The breakpoint experiments (§8)
+showed `t_B` collapsing to ~1 day regardless of its prior, confirming a genuine
+short-age burst that δ and the breakpoint both compete to explain. But δ only
+covers the *first interval* of each individual; the informative-sampling
+inflation pervades *all* intervals, so δ cannot remove it.
+
+**The fix is data construction, not the likelihood.** Because we hold the full
+version history, we can reconstruct each POI's tag value at *fixed calendar
+times* and build intervals on an exogenous grid ("did the value change between
+successive yearly snapshots?") instead of at edit times. The observation times
+are then exogenous by construction, restoring the non-informative interval
+censoring the §1 framing assumes. This was tested directly:
+
+| diagnostic | edit-triggered (current) | **calendar grid (exogenous)** |
+|---|---|---|
+| `λ̂` spread across interval lengths | ~500× | **~3×** |
+| `covariate_cell` φ̂ (constant model) | 33 | **4.0** |
+| φ̂ by tag age (young → old) | 12 → 19 → **129** | **8.4 → 3.8 → 3.2 → 2.5 → 2.3** |
+| `poi_frailty` φ̂ | 1.3 | **1.03** |
+
+The 109× intercept disappears (at 3-month spacing `λ̂ = 0.038/yr`, not 13.8),
+and the catastrophic age explosion (129 → ~2–8) is gone. The true calendar-time
+turnover rate is a stable **~1–4 %/yr** across grid spacings. The residual
+`φ̂ ≈ 4` is from the *constant* model with **no covariates** — exactly the mild
+heterogeneity the §7 random effects already absorb (they took the edit-triggered
+33 → 25; on grid data they would push 4 toward ~1–2). **No frailty / NB-type
+likelihood is needed.** (Measurement scripts:
+[scripts/exploratory/run_dispersion_on_fit.py](scripts/exploratory/run_dispersion_on_fit.py),
+[scripts/exploratory/refit_breakpoint_and_diagnose.py](scripts/exploratory/refit_breakpoint_and_diagnose.py),
+`fit_hazard_model_and_diagnose.py`, and the calendar-grid Part A/B analyses
+logged under `~/data/openpois/logs/grid_part*.log`.)
+
+This vindicates the original interval-censoring instinct (§1.2): the "did *any*
+change happen over the whole gap" Bernoulli framing **is** robust to a reporting
+*delay* between when reality changes and when the edit lands — under exogenous
+observation, a random time-shift of a point process preserves its rate, and
+`P(≥1 over the gap)` is delay-invariant. What broke the framing was never the
+delay; it was the edit-triggered observation *timing*, which calendar-gridding
+removes.
+
+**Recommended follow-up (not yet implemented):** add a calendar-grid mode to
+[src/openpois/osm/format_observations.py](src/openpois/osm/format_observations.py)
+that samples each element's reconstructed state on a fixed grid (and pulls in
+never-edited POIs from the full history — they are absent from the current
+observation table, so the quick test above, which used only edited elements,
+*understates* the stabilisation). Everything downstream — the ZIE / exponential
+likelihood, the random effects, the rating logic — stays as-is.
+
+### 9.6 Under-reporting: observed vs. true turnover (the irreducible gap)
+
+The calendar-grid fix resolves informative *timing*. A second, orthogonal
+limitation remains, and it is the binding one for the *estimand we actually
+care about*: **λ_true = the rate at which the real-world attribute changes (the
+POI data becomes stale), regardless of whether the change is ever recorded.**
+
+We observe only *recorded* changes. A real change that is never edited into OSM
+is pure missing data. If each real change is ever-recorded (within the window)
+with probability `q`, the recorded-change process is a thinned Poisson with rate
+**`q · λ_true`**. From a single channel, `q` and `λ_true` are not separable, so
+`λ̂` is a **lower bound on λ_true, biased down by the (unknown, possibly
+stratum-varying) detection probability `q`.**
+
+Crucial distinctions:
+
+- **Delay vs. non-detection.** A change recorded *late* is benign under
+  exogenous observation (§9.5). Only a change recorded *never* biases the rate.
+  The boundary is window-dependent: "not yet recorded" shrinks toward
+  "eventually recorded" as the history lengthens, so `q → 1` for *persistent*
+  changes (closures, permanent renames) over a long history, and is lowest for
+  *recent* changes (the actuarial "incurred but not reported" tail) and
+  neglected POIs.
+- **Direction is "safe" but not harmless.** The bias is downward (we *under*-warn
+  about staleness), but false reassurance on a genuinely-stale-but-uncorrected
+  POI is a real product risk. And if `q` varies by stratum (urban POIs are
+  re-checked more than rural), even *relative* comparisons are distorted.
+
+This is a known problem with established frameworks for inferring a latent
+state-change process from delayed / selective observation: **dynamic occupancy
+models with imperfect detection** (MacKenzie et al. 2003 — separates the
+transition rate from a detection probability `p`), **continuous-time
+hidden-Markov / multistate models with misclassification** (Jackson `msm`),
+**nowcasting / reporting-delay / actuarial IBNR** (Höhle & an der Heiden 2014;
+Lawless 1994), and the umbrella idea of **preferential sampling** (Diggle,
+Menezes & Su 2010). All of them need *identification leverage* — replicate or
+exogenous observations, an estimable delay distribution, or external ground
+truth — to separate `q` from `λ_true`. Options for this project:
+
+1. **Capture–recapture / multiple-systems estimation** with a second
+   *independent* detection channel; Overture is a candidate, but it partly
+   ingests OSM, violating independence and biasing `q` optimistically.
+2. **A modest externally-validated calibration sample** (hand-check or check
+   against one external source for a few hundred POIs, stratified) — enough to
+   estimate `q` and test whether it varies by stratum, without needing
+   population coverage.
+3. **Sensitivity analysis** over a plausible `q` range (Pullenayegum &
+   Scharfstein 2022).
+
+**Honest scoping for any write-up:** what the model estimates from OSM edit
+history is the **rate of recorded turnover, a lower bound on true turnover**.
+Closing the gap to λ_true requires an independent calibration source we do not
+currently have, and is a fundamental limit of the data source — shared by any
+method built on OSM alone — not a deficiency of the likelihood.
+
+### 9.7 References (new this section)
+
+Overdispersion / dispersion checking:
+- McCullagh & Nelder (1989), *Generalized Linear Models*, 2nd ed., §4.5 (binary
+  data and overdispersion). Hinde & Demétrio (1998), "Overdispersion: models and
+  estimation."
+- Rodríguez, G., [*Unobserved Heterogeneity*](https://grodri.github.io/survival/UnobservedHeterogeneity.pdf)
+  (Gamma frailty on exponential → Lomax, decreasing hazard).
+- Gelman et al. (2013), *BDA3*, ch. 6 (posterior predictive checks); the DHARMa
+  package (simulated residuals for GL(M)Ms).
+
+Declining-hazard / frailty families:
+- Lomax (1954). Balan & Putter (2020), "A tutorial on frailty models," *Stat.
+  Methods Med. Res.* 29(11). MacKenzie-style decreasing Weibull (`p < 1`,
+  "infant-mortality" hazard) — Kalbfleisch & Prentice (2002); Klein &
+  Moeschberger (2003).
+- Abbring & van den Berg (2007), "The unobserved heterogeneity distribution in
+  duration analysis," *Biometrika* 94(1) — heterogeneity among survivors
+  converges to a gamma; the frailty-vs-duration-dependence identification
+  problem.
+
+Informative observation times:
+- Lin, Scharfstein & Rosenheck (2004), "Analysis of longitudinal data with
+  irregular, outcome-dependent follow-up," *JRSS-B* 66:791–813
+  (in the library, ref `10.1111/j.1467-9868.2004.b5543.x`; IIW + GEE).
+- Pullenayegum & Lim (2016), "Longitudinal data subject to irregular
+  observation: a review" — the VCAR / VAR / VNAR taxonomy; the `IrregLong` R
+  package.
+- Neuhaus, McCulloch et al. (2018), "Analysis of longitudinal data from
+  outcome-dependent visit processes: failure of proposed methods in realistic
+  settings" — IIW breaks when the visit depends on the *current* outcome (our
+  case).
+- Sun, "Panel count data regression with informative observation times."
+
+Latent-state / delayed-observation frameworks (for the under-reporting gap):
+- MacKenzie et al. (2003), "Estimating site occupancy, colonization, and local
+  extinction when a species is detected imperfectly," *Ecology* 84:2200–2207
+  (dynamic occupancy; `unmarked`).
+- Jackson, "Multi-state models for panel data: the `msm` package"; Jackson et
+  al. (2003), multistate Markov models with classification error.
+- Höhle & an der Heiden (2014), Bayesian nowcasting; Lawless (1994), reporting
+  delays; Brookmeyer & Gail, AIDS back-calculation; actuarial IBNR.
+- Diggle, Menezes & Su (2010), "Geostatistical inference under preferential
+  sampling," *JRSS-C* 59(2). Pullenayegum & Scharfstein (2022/2023), sensitivity
+  analysis for informative assessment times.
+
+### 9.8 Status and takeaways
+
+- **Production model unchanged.** The constant / `random_effects` / breakpoint
+  models and the pipeline are exactly as in §§1–8.
+- **The Poisson / interval-censoring framing is sound.** The apparent
+  overdispersion (φ̂ in the hundreds, the age explosion) was an artifact of
+  edit-triggered sampling, not the likelihood. The residual under exogenous
+  sampling is mild and within the §7 random effects' capacity. No
+  negative-binomial / frailty / time-varying-hazard likelihood is warranted on
+  the strength of the dispersion evidence.
+- **The two real, separable issues** are (a) the observation *timing* artifact,
+  fixed by calendar-grid resampling in `format_observations` (a scoped
+  data-construction follow-up), and (b) under-reporting, which makes `λ̂` a
+  lower bound on true turnover and is addressable only with external calibration
+  leverage.
+- **New code this session:** [dispersion.py](src/openpois/models/dispersion.py) +
+  [test_dispersion.py](tests/test_dispersion.py); `WeibullModel` / `LomaxModel`
+  in [osm_models.py](src/openpois/models/osm_models.py) +
+  [test_hazard_models.py](tests/test_hazard_models.py); the dispersion report
+  wiring in [osm_turnover.py](scripts/models/osm_turnover.py); and the
+  exploratory diagnostic scripts under `scripts/exploratory/`.
