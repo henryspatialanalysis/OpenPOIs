@@ -26,8 +26,10 @@ from openpois.models.osm_models import (
     MODEL_REGISTRY,
     ConstantBreakpointModel,
     ConstantModel,
+    LomaxModel,
     RandomByTypeModel,
     RandomEffectsModel,
+    WeibullModel,
     _breakpoint_integrated_hazard,
     get_model_class,
 )
@@ -405,10 +407,13 @@ def test_predictions_schema_random_by_type():
 def test_model_registry():
     """Registry exposes the supported models and rejects removed ones."""
     assert set(MODEL_REGISTRY) == {
-        "constant", "constant_breakpoint", "random_by_type", "random_effects",
+        "constant", "constant_breakpoint", "weibull", "lomax",
+        "random_by_type", "random_effects",
     }
     assert get_model_class("constant") is ConstantModel
     assert get_model_class("constant_breakpoint") is ConstantBreakpointModel
+    assert get_model_class("weibull") is WeibullModel
+    assert get_model_class("lomax") is LomaxModel
     assert get_model_class("random_by_type") is RandomByTypeModel
     assert get_model_class("random_effects") is RandomEffectsModel
     with pytest.raises(ValueError, match = "Unknown model"):

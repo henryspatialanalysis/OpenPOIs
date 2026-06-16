@@ -47,6 +47,13 @@ DEFAULT_LOGIT_DELTA_VAR_PRIOR = (-2.0, 0.5)
 # established) for ConstantBreakpointModel: (loc, scale) on log t_B. loc = 0 →
 # median t_B = exp(0) = 1 year.
 DEFAULT_T_BREAKPOINT_PRIOR = (0.0, 1.0)
+# Normal prior on log_shape for WeibullModel (p = exp(log_shape)); loc = 0 →
+# median p = 1 (constant hazard), with p < 1 (decreasing) well inside 2σ.
+DEFAULT_WEIBULL_LOG_SHAPE_PRIOR = (0.0, 1.0)
+# Normal prior on log_theta for LomaxModel (θ = exp(log_theta), the gamma-
+# frailty variance / overdispersion knob); loc = 0 → median θ = 1, θ → 0
+# recovers the constant model.
+DEFAULT_LOMAX_LOG_THETA_PRIOR = (0.0, 1.5)
 # Floor applied when taking the log of an empirical rate. Groups with zero
 # observed changes would otherwise give log(0) = -inf on init.
 _EMPIRICAL_RATE_FLOOR = 1e-8
@@ -378,7 +385,7 @@ class ConstantBreakpointModel(ConstantModel):
         for col in ("age_start", "age_end"):
             if col not in self.raw_data.columns:
                 raise ValueError(
-                    f"ConstantBreakpointModel requires an '{col}' column; run "
+                    f"{type(self).__name__} requires an '{col}' column; run "
                     "prepare_data_for_model (which emits age_start / age_end) "
                     "before fitting."
                 )
@@ -504,6 +511,276 @@ class ConstantBreakpointModel(ConstantModel):
             "dt": times,
             "age_start": jnp.zeros_like(times),
             "age_end": times,
+        }
+
+
+# Declining-hazard tag-age baselines (Weibull / Lomax) ----------------------->
+
+
+def _weibull_integrated_hazard(
+    lam: jnp.ndarray,
+    shape: jnp.ndarray,
+    age_start: jnp.ndarray,
+    age_end: jnp.ndarray,
+) -> jnp.ndarray:
+    """
+    Integral of a Weibull tag-age hazard over ``[age_start, age_end]``.
+
+    The hazard is ``λ(a) = λ·p·a^{p-1}`` with cumulative ``H(a) = λ·a^p``, so the
+    interval integral is ``λ·(age_end^p − age_start^p)``. ``p < 1`` gives a
+    decreasing ("infant-mortality") hazard; ``p = 1`` reduces to the constant
+    model's ``λ·Δt`` (since ``age_end − age_start = Δt``).
+
+    A first interval starts at ``age_start = 0``; ``0^p = 0`` is the correct term
+    but its derivative w.r.t. ``p`` is ``0·log 0`` (NaN). We use the standard
+    double-``where`` guard so the masked branch evaluates a finite power and
+    contributes zero gradient.
+    """
+    def _term(a):
+        safe_a = jnp.where(a > 0, a, 1.0)
+        return jnp.where(a > 0, lam * safe_a ** shape, 0.0)
+
+    return _term(age_end) - _term(age_start)
+
+
+def _lomax_integrated_hazard(
+    lam: jnp.ndarray,
+    theta: jnp.ndarray,
+    age_start: jnp.ndarray,
+    age_end: jnp.ndarray,
+) -> jnp.ndarray:
+    """
+    Integral of the marginal Lomax (gamma-frailty) tag-age hazard over the
+    interval.
+
+    A Gamma(mean 1, variance θ) frailty on a constant rate λ integrates to the
+    Lomax / Pareto-II marginal with cumulative hazard ``H(a) = θ^{-1}·log(1 +
+    θ·λ·a)`` and strictly decreasing marginal hazard ``λ/(1 + θ·λ·a)`` — the
+    survival analogue of Poisson → Negative-Binomial. The interval integral is
+    ``θ^{-1}·[log1p(θ·λ·age_end) − log1p(θ·λ·age_start)]``. ``θ → 0`` recovers the
+    constant model (``log1p(θλa)/θ → λa``); ``log1p`` keeps it stable for small
+    arguments.
+    """
+    return (
+        jnp.log1p(theta * lam * age_end) - jnp.log1p(theta * lam * age_start)
+    ) / theta
+
+
+class WeibullModel(ConstantBreakpointModel):
+    """
+    Weibull tag-age baseline hazard with the ZIE δ mixture.
+
+    ``λ = exp(log_lambda)``, ``p = exp(log_shape)``; the change probability over
+    an interval is ``1 − exp(−H)`` with ``H = λ·(age_end^p − age_start^p)`` (see
+    ``_weibull_integrated_hazard``). ``p < 1`` is a decreasing hazard — the
+    single-curve analogue of an early-burst-then-decline pattern; ``p = 1``
+    reduces to ``ConstantModel``. δ = sigmoid(logit_delta) carries the instant-
+    change mass on first intervals exactly as ``ConstantModel``. Toggle via
+    ``--model-type weibull``.
+
+    **Status (2026-06): parked diagnostic — registered but NOT used by the
+    pipeline.** Built to test whether a declining baseline hazard explains the
+    turnover overdispersion. It does not: nationally ``p ≈ 0.86`` (barely
+    decreasing) and School-only ``p ≈ 1.51`` (*increasing*), and neither flattens
+    the dispersion. The overdispersion turned out to be an edit-triggered
+    *informative-sampling* artifact, not a hazard-shape effect — see methodology
+    doc §9.3–9.5. Kept for reference / re-use; do not adopt without re-reading it.
+
+    Metadata keys (besides ConstantModel's):
+        weibull_log_shape_prior: (loc, scale) Normal prior on ``log_shape``
+            (default ``DEFAULT_WEIBULL_LOG_SHAPE_PRIOR`` = (0, 1) → p median 1).
+    """
+
+    def build_model(self):
+        dt_col = self.metadata.get("dt_col", "tag_years")
+        empirical_rate = _empirical_rate_from_nonfirst(self.raw_data, dt_col)
+        log_lambda_init = float(
+            np.log(max(empirical_rate, _EMPIRICAL_RATE_FLOOR))
+        )
+        logit_delta_init = float(
+            self.metadata.get("logit_delta_prior", DEFAULT_LOGIT_DELTA_PRIOR)[0]
+        )
+        self.starting_params = {
+            "log_lambda": jnp.array(log_lambda_init),
+            "log_shape": jnp.array(0.0),
+            "logit_delta": jnp.array(logit_delta_init),
+        }
+        names = ["log_lambda", "log_shape", "logit_delta",
+                 "lambda", "shape", "delta"]
+        self.param_ids = pd.DataFrame({
+            "parameter": names,
+            "param_name": names,
+            "group_id": [np.nan] * len(names),
+        })
+        self.group_lookup = None
+        self.log_likelihood_fun = self._zie_log_likelihood
+
+    @staticmethod
+    def _zie_log_likelihood(params, data, target):
+        return jnp.sum(WeibullModel._zie_pointwise(params, data, target))
+
+    @staticmethod
+    def _zie_pointwise(params, data, target):
+        rate = _weibull_integrated_hazard(
+            jnp.exp(params["log_lambda"]),
+            jnp.exp(params["log_shape"]),
+            data["age_start"],
+            data["age_end"],
+        )
+        log_1md = jax.nn.log_sigmoid(-params["logit_delta"])
+        return _zie_pointwise_loglik(
+            rate, data["is_first_interval"], log_1md, target
+        )
+
+    def pointwise_log_likelihood(self, params, data, target):
+        return WeibullModel._zie_pointwise(params, data, target)
+
+    def event_rate_fun(self, params, data):
+        return _weibull_integrated_hazard(
+            jnp.exp(params["log_lambda"]),
+            jnp.exp(params["log_shape"]),
+            data["age_start"],
+            data["age_end"],
+        )
+
+    def param_likelihood(self, params):
+        scale = self.metadata.get(
+            "log_lambda_prior_scale", DEFAULT_LOG_LAMBDA_PRIOR_SCALE
+        )
+        delta_loc, delta_scale = self.metadata.get(
+            "logit_delta_prior", DEFAULT_LOGIT_DELTA_PRIOR
+        )
+        sh_loc, sh_scale = self.metadata.get(
+            "weibull_log_shape_prior", DEFAULT_WEIBULL_LOG_SHAPE_PRIOR
+        )
+        lp = stats.norm.logpdf(
+            params["log_lambda"], loc = 0.0, scale = scale
+        ).sum()
+        lp = lp + stats.norm.logpdf(
+            params["log_shape"], loc = sh_loc, scale = sh_scale
+        ).sum()
+        lp = lp + stats.norm.logpdf(
+            params["logit_delta"], loc = delta_loc, scale = delta_scale
+        ).sum()
+        return lp
+
+    def derive_draws(self, draws):
+        """Expose natural-scale λ, p, δ alongside the raw draws."""
+        return {
+            **draws,
+            "lambda": jnp.exp(draws["log_lambda"]),
+            "shape": jnp.exp(draws["log_shape"]),
+            "delta": jax.nn.sigmoid(draws["logit_delta"]),
+        }
+
+
+class LomaxModel(ConstantBreakpointModel):
+    """
+    Marginal Gamma-frailty (Lomax / Pareto-II) tag-age hazard with ZIE δ.
+
+    A Gamma(mean 1, variance θ) frailty on a constant exponential rate λ
+    marginalises to the Lomax hazard ``λ/(1 + θ·λ·a)`` with cumulative
+    ``H(a) = θ^{-1}·log(1 + θ·λ·a)`` (see ``_lomax_integrated_hazard``) — the
+    survival analogue of Poisson → Negative-Binomial. ``λ = exp(log_lambda)``;
+    ``θ = exp(log_theta)`` is the frailty variance / overdispersion parameter,
+    and ``θ → 0`` recovers ``ConstantModel``. δ = sigmoid(logit_delta) carries
+    the instant-change mass on first intervals exactly as ``ConstantModel``.
+    Toggle via ``--model-type lomax``.
+
+    **Status (2026-06): parked diagnostic — registered but NOT used by the
+    pipeline.** Built as the explicit Poisson → Negative-Binomial (frailty)
+    response to the overdispersion question. ``θ`` collapses toward 0 (reducing to
+    ``ConstantModel``) both nationally and within a single amenity — i.e. the data
+    show no global frailty-in-tag-age once δ is present. The overdispersion turned
+    out to be an edit-triggered *informative-sampling* artifact, not unobserved
+    frailty — see methodology doc §9.3–9.6. Kept for reference; do not adopt
+    without re-reading it.
+
+    Metadata keys (besides ConstantModel's):
+        lomax_log_theta_prior: (loc, scale) Normal prior on ``log_theta``
+            (default ``DEFAULT_LOMAX_LOG_THETA_PRIOR`` = (0, 1.5) → θ median 1).
+    """
+
+    def build_model(self):
+        dt_col = self.metadata.get("dt_col", "tag_years")
+        empirical_rate = _empirical_rate_from_nonfirst(self.raw_data, dt_col)
+        log_lambda_init = float(
+            np.log(max(empirical_rate, _EMPIRICAL_RATE_FLOOR))
+        )
+        logit_delta_init = float(
+            self.metadata.get("logit_delta_prior", DEFAULT_LOGIT_DELTA_PRIOR)[0]
+        )
+        self.starting_params = {
+            "log_lambda": jnp.array(log_lambda_init),
+            "log_theta": jnp.array(0.0),
+            "logit_delta": jnp.array(logit_delta_init),
+        }
+        names = ["log_lambda", "log_theta", "logit_delta",
+                 "lambda", "theta", "delta"]
+        self.param_ids = pd.DataFrame({
+            "parameter": names,
+            "param_name": names,
+            "group_id": [np.nan] * len(names),
+        })
+        self.group_lookup = None
+        self.log_likelihood_fun = self._zie_log_likelihood
+
+    @staticmethod
+    def _zie_log_likelihood(params, data, target):
+        return jnp.sum(LomaxModel._zie_pointwise(params, data, target))
+
+    @staticmethod
+    def _zie_pointwise(params, data, target):
+        rate = _lomax_integrated_hazard(
+            jnp.exp(params["log_lambda"]),
+            jnp.exp(params["log_theta"]),
+            data["age_start"],
+            data["age_end"],
+        )
+        log_1md = jax.nn.log_sigmoid(-params["logit_delta"])
+        return _zie_pointwise_loglik(
+            rate, data["is_first_interval"], log_1md, target
+        )
+
+    def pointwise_log_likelihood(self, params, data, target):
+        return LomaxModel._zie_pointwise(params, data, target)
+
+    def event_rate_fun(self, params, data):
+        return _lomax_integrated_hazard(
+            jnp.exp(params["log_lambda"]),
+            jnp.exp(params["log_theta"]),
+            data["age_start"],
+            data["age_end"],
+        )
+
+    def param_likelihood(self, params):
+        scale = self.metadata.get(
+            "log_lambda_prior_scale", DEFAULT_LOG_LAMBDA_PRIOR_SCALE
+        )
+        delta_loc, delta_scale = self.metadata.get(
+            "logit_delta_prior", DEFAULT_LOGIT_DELTA_PRIOR
+        )
+        th_loc, th_scale = self.metadata.get(
+            "lomax_log_theta_prior", DEFAULT_LOMAX_LOG_THETA_PRIOR
+        )
+        lp = stats.norm.logpdf(
+            params["log_lambda"], loc = 0.0, scale = scale
+        ).sum()
+        lp = lp + stats.norm.logpdf(
+            params["log_theta"], loc = th_loc, scale = th_scale
+        ).sum()
+        lp = lp + stats.norm.logpdf(
+            params["logit_delta"], loc = delta_loc, scale = delta_scale
+        ).sum()
+        return lp
+
+    def derive_draws(self, draws):
+        """Expose natural-scale λ, θ, δ alongside the raw draws."""
+        return {
+            **draws,
+            "lambda": jnp.exp(draws["log_lambda"]),
+            "theta": jnp.exp(draws["log_theta"]),
+            "delta": jax.nn.sigmoid(draws["logit_delta"]),
         }
 
 
@@ -1643,7 +1920,13 @@ class RandomEffectsModel(ModelFactory):
 
 MODEL_REGISTRY = {
     "constant": ConstantModel,
+    # Parked diagnostics — registered but not used by the pipeline. The
+    # breakpoint / Weibull / Lomax families were built to probe the turnover
+    # overdispersion; it proved to be an edit-triggered informative-sampling
+    # artifact rather than a hazard-shape / frailty effect (methodology §8-§9).
     "constant_breakpoint": ConstantBreakpointModel,
+    "weibull": WeibullModel,
+    "lomax": LomaxModel,
     "random_by_type": RandomByTypeModel,
     "random_effects": RandomEffectsModel,
 }
