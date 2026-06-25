@@ -13,6 +13,11 @@ DATA_DIR = REPO_ROOT / "src/openpois/conflation/data"
 OUTPUT = REPO_ROOT / "site/public/taxonomy.html"
 OUTPUT_JS = REPO_ROOT / "site/src/taxonomy.generated.js"
 
+# Reserved sentinel in the OSM crosswalk marking a non-POI (key, value) tag
+# that is dropped rather than labelled. Kept in sync with
+# ``openpois.conflation.taxonomy.EXCLUDE_LABEL``.
+EXCLUDE_LABEL = "EXCLUDE"
+
 
 def osm_cell(group):
     """Format OSM tags for one shared_label, grouped by key."""
@@ -109,7 +114,41 @@ def build_rows(radii, osm, overture):
     return "\n".join(rows)
 
 
-def render(rows):
+def excluded_section(excluded):
+    """Build the "Excluded tags" HTML block from EXCLUDE crosswalk rows.
+
+    Returns an empty string when there are no exclusions, so the section
+    is omitted entirely.
+    """
+    if excluded.empty:
+        return ""
+    by_key = {}
+    for _, row in excluded.iterrows():
+        by_key.setdefault(row["osm_key"], []).append(row["osm_value"])
+    items = []
+    for key in sorted(by_key):
+        vals_str = ", ".join(sorted(by_key[key]))
+        wiki = f"https://wiki.openstreetmap.org/wiki/{key.capitalize()}"
+        items.append(
+            f'          <li><a href="{wiki}" target="_blank"'
+            f' rel="noopener noreferrer" class="tx-key">{key}</a>'
+            f"={vals_str}</li>"
+        )
+    lis = "\n".join(items)
+    return f"""
+    <h2 class="tx-subhead">Excluded tags</h2>
+    <p class="lead">
+      These OpenStreetMap tags describe map furniture and infrastructure
+      (parking, benches, waste baskets, …) rather than places. They are
+      dropped during ingest and never appear as POIs or in an
+      &ldquo;Other&rdquo; category.
+    </p>
+    <ul class="tx-excluded">
+{lis}
+    </ul>"""
+
+
+def render(rows, excluded_html = ""):
     return f"""<!DOCTYPE html>
 <html lang="en">
 
@@ -245,6 +284,23 @@ def render(rows):
       font-size: 12px;
     }}
 
+    .tx-subhead {{
+      font-size: 20px;
+      font-weight: 700;
+      margin: 40px 0 12px;
+      color: #111;
+    }}
+
+    .tx-excluded {{
+      list-style: none;
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 12px 18px;
+      font-size: 13px;
+      line-height: 1.9;
+    }}
+
     footer {{
       text-align: center;
       padding: 32px 24px;
@@ -305,6 +361,7 @@ def render(rows):
 {rows}
       </tbody>
     </table>
+{excluded_html}
   </main>
 
   <footer>
@@ -348,11 +405,18 @@ def render_js(radii, osm, overture):
 
 
 def main():
-    osm = pd.read_csv(DATA_DIR / "taxonomy_crosswalk_openstreetmap.csv")
+    osm_all = pd.read_csv(
+        DATA_DIR / "taxonomy_crosswalk_openstreetmap.csv"
+    ).fillna("")
     overture = pd.read_csv(DATA_DIR / "taxonomy_crosswalk_overture_maps.csv")
     radii = pd.read_csv(DATA_DIR / "match_radii.csv")
+    # Excluded (non-POI) rows are shown in their own section, never as a
+    # shared label / category.
+    excluded = osm_all[osm_all["shared_label"] == EXCLUDE_LABEL]
+    osm = osm_all[osm_all["shared_label"] != EXCLUDE_LABEL]
     rows = build_rows(radii, osm, overture)
-    OUTPUT.write_text(render(rows), encoding = "utf-8")
+    excluded_html = excluded_section(excluded)
+    OUTPUT.write_text(render(rows, excluded_html), encoding = "utf-8")
     print(f"Written: {OUTPUT}")
     OUTPUT_JS.write_text(render_js(radii, osm, overture), encoding = "utf-8")
     print(f"Written: {OUTPUT_JS}")

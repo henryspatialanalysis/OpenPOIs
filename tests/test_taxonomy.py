@@ -10,6 +10,8 @@ from openpois.conflation.taxonomy import (
     assign_overture_shared_label,
     compute_osm_l0_bits,
     compute_overture_l0_bits,
+    drop_osm_exclusions,
+    get_osm_exclusions,
     load_match_radii,
     load_osm_crosswalk,
     load_overture_crosswalk,
@@ -24,23 +26,26 @@ from openpois.conflation.taxonomy import (
 
 @pytest.fixture
 def mini_osm_crosswalk():
-    """Small OSM crosswalk for focused tests."""
+    """Small OSM crosswalk for focused tests (incl. EXCLUDE rows)."""
     return pd.DataFrame(
         {
             "osm_key": [
                 "amenity", "amenity", "amenity",
                 "shop", "shop",
                 "leisure",
+                "amenity",
             ],
             "osm_value": [
                 "restaurant", "cafe", "*",
                 "supermarket", "*",
                 "park",
+                "parking",
             ],
             "shared_label": [
                 "Restaurant", "Cafe", "Other Amenity",
                 "Supermarket", "Other Shop",
                 "Park",
+                "EXCLUDE",
             ],
         }
     )
@@ -48,20 +53,23 @@ def mini_osm_crosswalk():
 
 @pytest.fixture
 def mini_overture_crosswalk():
-    """Small Overture crosswalk covering all 4 tiers."""
+    """Small Overture crosswalk covering all 6 tiers."""
     return pd.DataFrame(
         {
             "overture_l0": [
-                # Tier 1: L0 + L1 + L2 (all populated)
+                # Tier 1 (L0+L1+L2+L3) covered implicitly; below uses
+                # the (L0, L1, L2) tier:
                 "food_and_drink", "food_and_drink",
                 "shopping", "shopping",
                 "sports_and_recreation",
-                # Tier 2: L0 + L2 (L1 empty)
+                # (L0, L2) tier — L1 empty:
                 "arts_and_entertainment",
-                # Tier 3: L0 + L1 (L2 empty, catch-all)
+                # (L0, L1) tier — L2 empty, catch-all:
                 "shopping",
-                # Tier 4: L0-only (both L1 and L2 empty)
+                # L0-only tier — L1/L2/L3 empty:
                 "shopping",
+                # (L0, L3) tier — deep leaf, ignores L1/L2:
+                "health_care",
             ],
             "overture_l1": [
                 "restaurant", "beverage_shop",
@@ -284,6 +292,64 @@ class TestAssignOsmSharedLabel:
         )
         assert labels[0] == ""
         assert labels[1] == ""
+
+
+class TestOsmExclusions:
+    """EXCLUDE sentinel: non-POI tags dropped, never labelled."""
+
+    FILTER_KEYS = ["shop", "leisure", "amenity"]
+
+    def test_get_osm_exclusions(self, mini_osm_crosswalk):
+        excl = get_osm_exclusions(mini_osm_crosswalk)
+        assert excl == {"amenity": {"parking"}}
+
+    def test_excluded_value_gets_no_label(
+        self, mini_osm_crosswalk, mini_match_radii,
+    ):
+        gdf = pd.DataFrame({"amenity": ["parking"]})
+        labels, _ = assign_osm_shared_label(
+            gdf, mini_osm_crosswalk, mini_match_radii, self.FILTER_KEYS,
+        )
+        # No specific label, and the amenity wildcard is withheld.
+        assert labels[0] == ""
+
+    def test_excluded_does_not_block_other_key(
+        self, mini_osm_crosswalk, mini_match_radii,
+    ):
+        """A higher-priority POI tag still wins over an excluded tag."""
+        gdf = pd.DataFrame(
+            {"amenity": ["parking"], "leisure": ["park"]}
+        )
+        labels, _ = assign_osm_shared_label(
+            gdf, mini_osm_crosswalk, mini_match_radii, self.FILTER_KEYS,
+        )
+        assert labels[0] == "Park"
+
+    def test_excluded_value_return_all_empty(
+        self, mini_osm_crosswalk, mini_match_radii,
+    ):
+        gdf = pd.DataFrame({"amenity": ["parking"]})
+        labels, _ = assign_osm_shared_label(
+            gdf, mini_osm_crosswalk, mini_match_radii,
+            self.FILTER_KEYS, return_all = True,
+        )
+        assert labels[0] == []
+
+    def test_drop_osm_exclusions(
+        self, mini_osm_crosswalk, mini_match_radii,
+    ):
+        gdf = pd.DataFrame(
+            {
+                "amenity": ["parking", "restaurant", "parking"],
+                "leisure": [None, None, "park"],
+            }
+        )
+        out = drop_osm_exclusions(
+            gdf, mini_osm_crosswalk, self.FILTER_KEYS, mini_match_radii,
+        )
+        # Pure parking dropped; restaurant and parking+park kept.
+        assert len(out) == 2
+        assert set(out["amenity"]) == {"restaurant", "parking"}
 
 
 class TestAssignOsmSharedLabelReturnAll:

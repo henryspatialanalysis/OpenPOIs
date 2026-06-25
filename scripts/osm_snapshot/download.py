@@ -38,6 +38,7 @@ Output file:
 from config_versioned import Config
 from openpois.conflation.taxonomy import (
     build_osm_tag_filter_expressions,
+    get_osm_exclusions,
     load_osm_crosswalk,
 )
 from openpois.io.osm_snapshot import SnapshotExtract, download_osm_snapshot
@@ -55,6 +56,9 @@ EXTRACT_KEYS = config.get("download", "osm", "extract_keys")
 # instead of dragging in every value of the key.
 _OSM_CROSSWALK = load_osm_crosswalk()
 TAG_FILTER_EXPRS = build_osm_tag_filter_expressions(_OSM_CROSSWALK)
+# Non-POI (key, value) tags (parking, benches, …) dropped from the snapshot
+# at parse time. Crosswalk rows whose shared_label is the EXCLUDE sentinel.
+EXCLUSIONS = get_osm_exclusions(_OSM_CROSSWALK)
 OVERWRITE_DOWNLOAD = config.get("download", "osm", "overwrite_download")
 OVERWRITE_FILTER = config.get("download", "osm", "overwrite_filter")
 SOURCE_LABEL = config.get("download", "osm", "source_label")
@@ -122,6 +126,7 @@ if __name__ == "__main__":
         max_area_nodes = MAX_AREA_NODES,
         chunk_dir = CHUNK_DIR,
         verbose = VERBOSE,
+        exclusions = EXCLUSIONS,
     )
 
     # -------------------------------------------------------------------------
