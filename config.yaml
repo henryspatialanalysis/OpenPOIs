@@ -137,6 +137,18 @@ download:
 # Settings for OSM exploratory data analysis
 osm_data:
   tag_key: name
+  # OSM lifecycle namespaces whose appearance on a POI's primary tag (one of
+  # download.osm.filter_keys) marks a closure — e.g. shop=supermarket becoming
+  # disused:shop=supermarket while `name` is kept plain. Treated as a turnover
+  # (soft-delete) event in observation formatting; removal is a reopening.
+  # Set to [] to disable (recovers the name-only change signal for ablation).
+  lifecycle_closure_prefixes:
+    - 'disused:'
+    - 'abandoned:'
+    - 'demolished:'
+    - 'was:'
+    - 'removed:'
+    - 'razed:'
   top_n_types: 10
   timestamp_cols:
     - obs_timestamp

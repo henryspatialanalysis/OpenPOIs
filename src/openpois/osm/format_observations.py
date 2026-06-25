@@ -20,6 +20,26 @@ import pyarrow.parquet as pq
 _SAFE_KEY_RE = re.compile(r"^[A-Za-z0-9_:]+$")
 
 
+def _lifecycle_keys(
+    lifecycle_prefixes: tuple[str, ...] | list[str] | None,
+    keep_keys: list[str],
+) -> list[str]:
+    """Cartesian product of lifecycle prefixes × POI keep_keys.
+
+    e.g. ``("disused:", "was:")`` × ``["shop", "amenity"]`` →
+    ``["disused:shop", "disused:amenity", "was:shop", "was:amenity"]``.
+
+    These are the keys whose appearance (a closure retag such as
+    ``shop=supermarket`` → ``disused:shop=supermarket``) we treat as a
+    turnover event. Returns ``[]`` when no prefixes are configured, which
+    disables lifecycle detection entirely (exact backward compatibility).
+    """
+    if not lifecycle_prefixes:
+        return []
+    keys = [f"{p}{k}" for p in lifecycle_prefixes for k in keep_keys]
+    return [_validate_key(k) for k in keys]
+
+
 def _validate_key(k: str) -> str:
     """Allow only alphanumerics, underscores, and colons in interpolated keys.
 
@@ -80,14 +100,25 @@ def _advance_scan_state(
     vis_val = row[col_idx["visible__value"]]
     vis_ch = row[col_idx["visible__change"]]
 
+    # A lifecycle prefix appearing on a POI's primary tag (e.g.
+    # ``disused:shop`` added) is a soft deletion — the business is gone but
+    # the element survives. Its removal is a reopening. Both flags are 0/NULL
+    # when lifecycle detection is disabled (columns absent from the pivot).
+    lifecycle_closed = bool(row[col_idx["lifecycle_closed"]]) \
+        if "lifecycle_closed" in col_idx else False
+    lifecycle_reopened = bool(row[col_idx["lifecycle_reopened"]]) \
+        if "lifecycle_reopened" in col_idx else False
+
     tag_added = tag_ch == "Added"
     tag_changed = tag_ch == "Changed"
     tag_deleted = tag_ch == "Deleted"
-    poi_deleted = (vis_ch is not None) and (vis_val == "false")
+    poi_deleted = ((vis_ch is not None) and (vis_val == "false")) or lifecycle_closed
     poi_re_added = (
         state["add_to_list"]
-        and (vis_ch is not None)
-        and (vis_val == "true")
+        and (
+            ((vis_ch is not None) and (vis_val == "true"))
+            or lifecycle_reopened
+        )
     )
     any_change = (
         tag_added or tag_changed or tag_deleted or poi_deleted or poi_re_added
@@ -143,6 +174,7 @@ def format_observations_duckdb(
     duckdb_threads: int | None = None,
     duckdb_temp_dir: Path | None = None,
     batch_rows: int = 100_000,
+    lifecycle_prefixes: tuple[str, ...] | list[str] | None = None,
     verbose: bool = True,
 ) -> int:
     """
@@ -175,6 +207,11 @@ def format_observations_duckdb(
             ``output_path.parent``.
         batch_rows: Rows pulled per ``fetchmany`` call; also the
             ParquetWriter flush size.
+        lifecycle_prefixes: OSM lifecycle namespaces (e.g.
+            ``("disused:", "was:")``) whose appearance on a POI keep_key is
+            treated as a closure (soft-delete) event, and whose removal is a
+            reopening. ``None``/empty disables the behavior (exact backward
+            compatibility). See :data:`openpois.osm.lifecycle.LIFECYCLE_PREFIXES`.
         verbose: Print progress.
 
     Returns:
@@ -193,6 +230,8 @@ def format_observations_duckdb(
         if k not in pivot_keys:
             pivot_keys.append(k)
 
+    lifecycle_keys = _lifecycle_keys(lifecycle_prefixes, keep_keys)
+
     threads = duckdb_threads if duckdb_threads is not None else (os.cpu_count() or 1)
     temp_dir = (
         Path(duckdb_temp_dir) if duckdb_temp_dir is not None else output_path.parent
@@ -207,6 +246,23 @@ def format_observations_duckdb(
         pivot_exprs.append(
             f"MAX(CASE WHEN key = '{k}' THEN change END) AS \"{k}__change\""
         )
+    # Two aggregate closure flags per (type, id, version), only when enabled.
+    if lifecycle_keys:
+        lc_list_sql = ", ".join(f"'{k}'" for k in lifecycle_keys)
+        pivot_exprs.append(
+            f"MAX(CASE WHEN key IN ({lc_list_sql}) "
+            f"AND change IN ('Added', 'Changed') THEN 1 ELSE 0 END) "
+            f"AS lifecycle_closed"
+        )
+        pivot_exprs.append(
+            f"MAX(CASE WHEN key IN ({lc_list_sql}) "
+            f"AND change = 'Deleted' THEN 1 ELSE 0 END) AS lifecycle_reopened"
+        )
+        where_extra = f" OR key IN ({lc_list_sql})"
+        lc_cols_sql = ", p.lifecycle_closed, p.lifecycle_reopened"
+    else:
+        where_extra = ""
+        lc_cols_sql = ""
     pivot_select = ",\n            ".join(pivot_exprs)
     key_list_sql = ", ".join(f"'{k}'" for k in pivot_keys)
     pivot_cols_sql = ", ".join(
@@ -218,11 +274,11 @@ def format_observations_duckdb(
         SELECT type, id, version,
             {pivot_select}
         FROM read_parquet('{changes_path.as_posix()}')
-        WHERE key IN ({key_list_sql})
+        WHERE (key IN ({key_list_sql}){where_extra})
         GROUP BY type, id, version
     )
     SELECT v.type, v.id, v.version, v.changeset, v.timestamp, v."user",
-           {pivot_cols_sql}
+           {pivot_cols_sql}{lc_cols_sql}
     FROM read_parquet('{versions_path.as_posix()}') v
     LEFT JOIN pivoted p USING (type, id, version)
     ORDER BY v.type, v.id, v.version
@@ -233,6 +289,9 @@ def format_observations_duckdb(
     for k in pivot_keys:
         col_idx[f"{k}__value"] = len(col_idx)
         col_idx[f"{k}__change"] = len(col_idx)
+    if lifecycle_keys:
+        col_idx["lifecycle_closed"] = len(col_idx)
+        col_idx["lifecycle_reopened"] = len(col_idx)
 
     schema_fields = [
         ("id", pa.int64()),
@@ -346,6 +405,7 @@ def _window_sql(
     keep_keys: list[str],
     num_buckets: int = 1,
     bucket: int = 0,
+    lifecycle_prefixes: tuple[str, ...] | list[str] | None = None,
 ) -> str:
     """Build the window-function SQL that reproduces the state machine.
 
@@ -377,6 +437,27 @@ def _window_sql(
         pivot_exprs.append(
             f"MAX(CASE WHEN key = '{k}' THEN change END) AS \"{k}__change\""
         )
+    # Closure flags (lifecycle prefix on a POI keep_key). Empty fragments when
+    # disabled keep the SQL output identical to the no-lifecycle path.
+    lifecycle_keys = _lifecycle_keys(lifecycle_prefixes, keep_keys)
+    if lifecycle_keys:
+        lc_list_sql = ", ".join(f"'{k}'" for k in lifecycle_keys)
+        pivot_exprs.append(
+            f"MAX(CASE WHEN key IN ({lc_list_sql}) "
+            f"AND change IN ('Added', 'Changed') THEN 1 ELSE 0 END) "
+            f"AS lifecycle_closed"
+        )
+        pivot_exprs.append(
+            f"MAX(CASE WHEN key IN ({lc_list_sql}) "
+            f"AND change = 'Deleted' THEN 1 ELSE 0 END) AS lifecycle_reopened"
+        )
+        lc_where = f" OR key IN ({lc_list_sql})"
+        lc_joined = ", p.lifecycle_closed, p.lifecycle_reopened"
+        lc_deleted = " OR COALESCE(lifecycle_closed, 0) = 1"
+        lc_reopened = " OR COALESCE(lifecycle_reopened, 0) = 1"
+    else:
+        lc_where = lc_joined = lc_deleted = lc_reopened = ""
+
     pivot_select = ",\n            ".join(pivot_exprs)
     key_list_sql = ", ".join(f"'{k}'" for k in pivot_keys)
     joined_pivot_cols = ", ".join(
@@ -476,12 +557,12 @@ def _window_sql(
         SELECT type, id, version,
             {pivot_select}
         FROM read_parquet('{changes_path.as_posix()}')
-        WHERE key IN ({key_list_sql}){changes_bucket}
+        WHERE (key IN ({key_list_sql}){lc_where}){changes_bucket}
         GROUP BY type, id, version
     ),
     joined AS (
         SELECT v.type, v.id, v.version, v.changeset, v.timestamp, v."user",
-               {joined_pivot_cols}
+               {joined_pivot_cols}{lc_joined}
         FROM read_parquet('{versions_path.as_posix()}') v
         LEFT JOIN pivoted p USING (type, id, version){versions_bucket}
     ),
@@ -490,8 +571,8 @@ def _window_sql(
             ("{tag}__change" = 'Added')   AS tag_added,
             ("{tag}__change" = 'Changed') AS tag_changed,
             ("{tag}__change" = 'Deleted') AS tag_deleted,
-            ("visible__change" IS NOT NULL AND "visible__value" = 'false')
-                AS poi_deleted,
+            (("visible__change" IS NOT NULL AND "visible__value" = 'false')
+                {lc_deleted}) AS poi_deleted,
             MAX(CASE WHEN "{tag}__change" = 'Added' THEN 1 ELSE 0 END)
                 OVER w_all AS add_to_list
         FROM joined
@@ -499,8 +580,8 @@ def _window_sql(
     ),{keep_ctes}
     tv1 AS (
         SELECT *,
-            (add_to_list = 1 AND "visible__change" IS NOT NULL
-                AND "visible__value" = 'true') AS poi_re_added
+            (add_to_list = 1 AND (("visible__change" IS NOT NULL
+                AND "visible__value" = 'true'){lc_reopened})) AS poi_re_added
         FROM {tv1_source}
     ),
     tv2 AS (
@@ -579,6 +660,7 @@ def format_observations_window(
     duckdb_threads: int | None = None,
     duckdb_temp_dir: Path | None = None,
     num_buckets: int = 16,
+    lifecycle_prefixes: tuple[str, ...] | list[str] | None = None,
     verbose: bool = True,
 ) -> int:
     """
@@ -642,6 +724,7 @@ def format_observations_window(
             sql = _window_sql(
                 changes_path, versions_path, tag_key, keep_keys,
                 num_buckets = num_buckets, bucket = bucket,
+                lifecycle_prefixes = lifecycle_prefixes,
             )
             reader = con.execute(sql).fetch_record_batch()
             for batch in reader:
