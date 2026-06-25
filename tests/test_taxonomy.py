@@ -70,6 +70,7 @@ def mini_overture_crosswalk():
                 "",
                 "market",
                 "",
+                "",
             ],
             "overture_l2": [
                 "restaurant", "cafe",
@@ -78,6 +79,16 @@ def mini_overture_crosswalk():
                 "college",
                 "",
                 "",
+                "",
+            ],
+            "overture_l3": [
+                "", "",
+                "", "",
+                "",
+                "",
+                "",
+                "",
+                "speech_therapy",
             ],
             "shared_label": [
                 "Restaurant", "Cafe",
@@ -86,6 +97,7 @@ def mini_overture_crosswalk():
                 "University",
                 "Market",
                 "Other Shop",
+                "Speech Therapist",
             ],
         }
     )
@@ -100,11 +112,13 @@ def mini_match_radii():
                 "Restaurant", "Cafe", "Other Amenity",
                 "Supermarket", "Other Shop", "Park",
                 "Farmers Market", "University", "Market",
+                "Speech Therapist",
             ],
             "match_radius_m": [
                 "100", "100", "100",
                 "200", "100", "200",
                 "100", "200", "50",
+                "50",
             ],
         }
     )
@@ -163,7 +177,7 @@ class TestLoadOvertureCrosswalk:
         cw = load_overture_crosswalk()
         assert set(cw.columns) == {
             "overture_l0", "overture_l1",
-            "overture_l2", "shared_label",
+            "overture_l2", "overture_l3", "shared_label",
         }
 
 
@@ -579,6 +593,62 @@ class TestAssignOvertureSharedLabel:
             gdf, mini_overture_crosswalk, mini_match_radii,
         )
         assert labels[0] == "Farmers Market"
+
+    def test_l0_l3_deep_leaf_wins_over_l2(
+        self, mini_overture_crosswalk, mini_match_radii,
+    ):
+        """An (L0, L3) row targets a deep leaf and wins over the
+        (L0, L2) container catch-all — e.g. speech_therapy nested
+        under physical_medicine_and_rehabilitation."""
+        cw = pd.concat(
+            [
+                mini_overture_crosswalk,
+                pd.DataFrame(
+                    {
+                        "overture_l0": ["health_care"],
+                        "overture_l1": [""],
+                        "overture_l2": [
+                            "physical_medicine_and_rehabilitation"
+                        ],
+                        "overture_l3": [""],
+                        "shared_label": ["Park"],  # stand-in container
+                    }
+                ),
+            ],
+            ignore_index = True,
+        )
+        gdf = pd.DataFrame(
+            {
+                "taxonomy_l0": ["health_care"],
+                "taxonomy_l1": ["outpatient_care_facility"],
+                "taxonomy_l2": [
+                    "physical_medicine_and_rehabilitation"
+                ],
+                "taxonomy_l3": ["speech_therapy"],
+            }
+        )
+        labels, radii = assign_overture_shared_label(
+            gdf, cw, mini_match_radii,
+        )
+        assert labels[0] == "Speech Therapist"
+        assert radii[0] == 50.0
+
+    def test_backward_compat_no_l3_column(
+        self, mini_overture_crosswalk, mini_match_radii,
+    ):
+        """A GeoDataFrame without taxonomy_l3 still resolves the
+        shallower tiers."""
+        gdf = pd.DataFrame(
+            {
+                "taxonomy_l0": ["food_and_drink"],
+                "taxonomy_l1": ["restaurant"],
+                "taxonomy_l2": ["restaurant"],
+            }
+        )
+        labels, _ = assign_overture_shared_label(
+            gdf, mini_overture_crosswalk, mini_match_radii,
+        )
+        assert labels[0] == "Restaurant"
 
 
 # -----------------------------------------------------------------

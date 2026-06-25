@@ -103,7 +103,7 @@ def build_osm_tag_filter_expressions(
 def load_overture_crosswalk() -> pd.DataFrame:
     """Load the Overture Maps taxonomy crosswalk CSV.
 
-    Columns: ``overture_l0, overture_l1, overture_l2,
+    Columns: ``overture_l0, overture_l1, overture_l2, overture_l3,
     shared_label``.
     """
     return _load_csv("taxonomy_crosswalk_overture_maps.csv")
@@ -368,18 +368,28 @@ def assign_overture_shared_label(
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Assign a ``shared_label`` and ``match_radius_m`` to each
-    Overture POI using a 4-tier cascade from most to least specific.
+    Overture POI using a 6-tier cascade from most to least specific.
+
+    The Overture ``taxonomy.hierarchy`` is a path from general (L0) to
+    specific; we read up to four levels (``taxonomy_l0/l1/l2/l3`` =
+    ``hierarchy[1..4]``). Crosswalk rows leave deeper columns blank to
+    match a whole subtree, and an ``(L0, L3)`` row targets a single
+    deep leaf regardless of its intermediate parents.
 
     Tiers (applied in order, each only to unmatched rows):
 
-    1. **(L0, L1, L2)** — crosswalk rows with all three populated.
-    2. **(L0, L2)** — L1 empty in crosswalk; matches any L1.
-    3. **(L0, L1)** — L2 empty in crosswalk; catch-all for an L1.
-    4. **L0-only** — both L1 and L2 empty in crosswalk.
+    1. **(L0, L1, L2, L3)** — all four populated; exact path.
+    2. **(L0, L3)** — only L0 and L3 populated; a deep leaf, ignoring
+       L1/L2 (e.g. ``health_care`` + ``speech_therapy``). Runs before
+       the L2 tiers so a leaf wins over its container's catch-all.
+    3. **(L0, L1, L2)** — L1 and L2 populated, L3 blank.
+    4. **(L0, L2)** — only L0 and L2 populated; matches any L1.
+    5. **(L0, L1)** — only L0 and L1 populated; catch-all for an L1.
+    6. **L0-only** — L1, L2, L3 all blank.
 
-    Backward-compatible: if the GeoDataFrame has no
-    ``taxonomy_l2`` column, tiers 1-2 produce no matches and
-    behaviour falls back to the old (L0, L1) + L0 logic.
+    Backward-compatible: if the GeoDataFrame lacks ``taxonomy_l3`` /
+    ``taxonomy_l2`` columns, the tiers that need them produce no
+    matches and behaviour degrades gracefully to the shallower logic.
 
     Returns:
         (shared_label ndarray of object, match_radius_m ndarray of
@@ -391,8 +401,11 @@ def assign_overture_shared_label(
     matched = np.zeros(n, dtype = bool)
 
     cw = overture_crosswalk.copy()
+    if "overture_l3" not in cw.columns:
+        cw["overture_l3"] = ""
     has_l1 = cw["overture_l1"] != ""
     has_l2 = cw["overture_l2"] != ""
+    has_l3 = cw["overture_l3"] != ""
 
     # Build radius dict
     radii_dict: dict[str, float] = {}
@@ -401,41 +414,45 @@ def assign_overture_shared_label(
             row["match_radius_m"]
         )
 
+    def _lookup(mask: pd.Series, key_cols: list[str]) -> pd.Series:
+        """Build a label lookup keyed on ``key_cols`` joined by ``|``."""
+        sub = cw[mask].copy()
+        if sub.empty:
+            return pd.Series(dtype = object)
+        key = sub[key_cols[0]].astype(str)
+        for col in key_cols[1:]:
+            key = key + "|" + sub[col].astype(str)
+        sub["_key"] = key
+        return (
+            sub.drop_duplicates("_key")
+            .set_index("_key")["shared_label"]
+        )
+
     # -- Build lookup tables for each tier --------------------------
 
-    # Tier 1: (L0, L1, L2) — all three populated
-    t1 = cw[has_l1 & has_l2].copy()
-    t1["_key"] = (
-        t1["overture_l0"] + "|"
-        + t1["overture_l1"] + "|"
-        + t1["overture_l2"]
+    t_full_lkp = _lookup(
+        has_l1 & has_l2 & has_l3,
+        ["overture_l0", "overture_l1", "overture_l2", "overture_l3"],
     )
-    t1_lkp = (
-        t1.drop_duplicates("_key")
-        .set_index("_key")["shared_label"]
+    t_l0l3_lkp = _lookup(
+        ~has_l1 & ~has_l2 & has_l3,
+        ["overture_l0", "overture_l3"],
     )
-
-    # Tier 2: (L0, L2) — L1 empty, L2 populated
-    t2 = cw[~has_l1 & has_l2].copy()
-    t2["_key"] = t2["overture_l0"] + "|" + t2["overture_l2"]
-    t2_lkp = (
-        t2.drop_duplicates("_key")
-        .set_index("_key")["shared_label"]
+    t1_lkp = _lookup(
+        has_l1 & has_l2 & ~has_l3,
+        ["overture_l0", "overture_l1", "overture_l2"],
     )
-
-    # Tier 3: (L0, L1) — L1 populated, L2 empty
-    t3 = cw[has_l1 & ~has_l2].copy()
-    t3["_key"] = t3["overture_l0"] + "|" + t3["overture_l1"]
-    t3_lkp = (
-        t3.drop_duplicates("_key")
-        .set_index("_key")["shared_label"]
+    t2_lkp = _lookup(
+        ~has_l1 & has_l2 & ~has_l3,
+        ["overture_l0", "overture_l2"],
     )
-
-    # Tier 4: L0-only — both L1 and L2 empty
-    t4 = cw[~has_l1 & ~has_l2].copy()
-    t4_lkp = (
-        t4.drop_duplicates("overture_l0")
-        .set_index("overture_l0")["shared_label"]
+    t3_lkp = _lookup(
+        has_l1 & ~has_l2 & ~has_l3,
+        ["overture_l0", "overture_l1"],
+    )
+    t4_lkp = _lookup(
+        ~has_l1 & ~has_l2 & ~has_l3,
+        ["overture_l0"],
     )
 
     # -- Extract columns from the data ------------------------------
@@ -448,6 +465,7 @@ def assign_overture_shared_label(
     l0 = _col("taxonomy_l0")
     l1 = _col("taxonomy_l1")
     l2 = _col("taxonomy_l2")
+    l3 = _col("taxonomy_l3")
 
     # -- Helper to apply a tier ------------------------------------
 
@@ -468,30 +486,44 @@ def assign_overture_shared_label(
         )
         matched[idx] = True
 
-    # -- Apply tiers in order --------------------------------------
+    # -- Apply tiers in order (most to least specific) -------------
 
-    # Tier 1: (L0, L1, L2)
+    # Tier 1: (L0, L1, L2, L3)
+    _apply_tier(
+        l0 + "|" + l1 + "|" + l2 + "|" + l3,
+        t_full_lkp,
+        ~matched & (l3 != ""),
+    )
+
+    # Tier 2: (L0, L3) — a deep leaf, ignoring L1/L2
+    _apply_tier(
+        l0 + "|" + l3,
+        t_l0l3_lkp,
+        ~matched & (l3 != ""),
+    )
+
+    # Tier 3: (L0, L1, L2)
     _apply_tier(
         l0 + "|" + l1 + "|" + l2,
         t1_lkp,
-        ~matched & (l0 != ""),
+        ~matched & (l2 != ""),
     )
 
-    # Tier 2: (L0, L2) — ignores L1 in the data
+    # Tier 4: (L0, L2) — ignores L1 in the data
     _apply_tier(
         l0 + "|" + l2,
         t2_lkp,
         ~matched & (l2 != ""),
     )
 
-    # Tier 3: (L0, L1) — catch-all for an L1 group
+    # Tier 5: (L0, L1) — catch-all for an L1 group
     _apply_tier(
         l0 + "|" + l1,
         t3_lkp,
         ~matched & (l1 != ""),
     )
 
-    # Tier 4: L0-only
+    # Tier 6: L0-only
     _apply_tier(
         l0,
         t4_lkp,

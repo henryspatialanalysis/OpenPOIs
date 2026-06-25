@@ -52,23 +52,26 @@ def overture_cell(group):
         l0 = row["overture_l0"]
         l1 = row.get("overture_l1", "")
         l2 = row.get("overture_l2", "")
+        l3 = row.get("overture_l3", "")
         l1 = l1 if pd.notna(l1) and l1 != "" else None
         l2 = l2 if pd.notna(l2) and l2 != "" else None
-        depth = (1 if l1 else 0) + (1 if l2 else 0)
-        if l1 and l2:
+        l3 = l3 if pd.notna(l3) and l3 != "" else None
+        # Deepest specified node carries the label; show it after the L0.
+        leaf = l3 or l2 or l1
+        mid = l1 if (l1 and (l2 or l3)) else None
+        depth = (1 if l1 else 0) + (1 if l2 else 0) + (1 if l3 else 0)
+        if leaf and mid:
             html = (
                 f'<span class="tx-key">{l0} &rsaquo;'
-                f' {l1}:</span> {l2}'
+                f' {mid}:</span> {leaf}'
             )
-        elif l1:
-            html = f'<span class="tx-key">{l0}:</span> {l1}'
-        elif l2:
-            html = f'<span class="tx-key">{l0}:</span> {l2}'
+        elif leaf:
+            html = f'<span class="tx-key">{l0}:</span> {leaf}'
         else:
             html = f'<span class="tx-key">{l0}</span>'
-        entries.append((depth, l0, l1 or "", l2 or "", html))
-    entries.sort(key = lambda e: (e[0], e[1], e[2], e[3]))
-    return "<br>".join(e[4] for e in entries)
+        entries.append((depth, l0, l1 or "", l2 or "", l3 or "", html))
+    entries.sort(key = lambda e: (e[0], e[1], e[2], e[3], e[4]))
+    return "<br>".join(e[5] for e in entries)
 
 
 def build_rows(radii, osm, overture):

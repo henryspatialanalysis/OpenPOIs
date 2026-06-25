@@ -3,7 +3,7 @@ versions:
   osm_data: "20260521"
   model_output: "20260422_by_shared_label"
   snapshot_osm: "20260521"
-  snapshot_overture: "20260521"
+  snapshot_overture: "20260617"
   conflation: "20260521"
   source_coop: "2026-05-21-v0"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
   # Ghost POI dataset reconstructed from OSM history (one row per
@@ -80,14 +80,14 @@ download:
       'website','wikidata','wikipedia'
     ]
   overture:
-    release_date: "2026-05-20.0"  # pin for determinism; null = auto-detect latest
+    release_date: "2026-06-17.0"  # pin for determinism; null = auto-detect latest
     s3_bucket: "overturemaps-us-west-2"
     s3_region: "us-west-2"
     # DuckDB resource caps for the per-part S3 scans and the final polygon
     # filter. Peak host RAM ~= workers * memory_limit, peak CPU ~= workers *
     # threads. Scale per-worker values down if raising workers above 1.
     duckdb:
-      memory_limit: "4GB"
+      memory_limit: "8GB"  # raised from 4GB to cut disk spill in the finalize polygon-filter step
       threads: 2
       workers: 2
     # (L0, L1) allowlist. L1 = null means "all of this L0".
@@ -425,7 +425,7 @@ publish:
   # pipeline captures them automatically — see .claude/TODO.md.
   version_metadata:
     osm_snapshot_date: "2026-04-17"   # YYYY-MM-DD Geofabrik download date
-    overture_release: "2026-04-15.0"  # Overture Maps release ID, https://docs.overturemaps.org/release-calendar/
+    overture_release: "2026-06-17.0"  # Overture Maps release ID, https://docs.overturemaps.org/release-calendar/
     model_commit: null                # null → use current git HEAD; set a short SHA to pin
   # PMTiles generation — multi-zoom archive z10–z14 for both OSM and conflated.
   # Site's View.minZoom is 10 (full-metro view). z10–z14 are served directly

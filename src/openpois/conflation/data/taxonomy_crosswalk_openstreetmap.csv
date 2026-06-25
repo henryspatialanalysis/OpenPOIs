@@ -46,7 +46,7 @@ healthcare,dentist,Dentist
 healthcare,dialysis,Other Healthcare
 healthcare,doctor,Clinic
 healthcare,hospice,Other Healthcare
-healthcare,hospital,Clinic
+healthcare,hospital,Hospital
 healthcare,laboratory,Other Healthcare
 healthcare,midwife,Maternity Center
 healthcare,occupational_therapist,Occupational Therapy
@@ -80,7 +80,7 @@ amenity,food_court,Restaurant
 amenity,fuel,Gas Station
 amenity,funeral_hall,Cemetery
 amenity,grave_yard,Cemetery
-amenity,hospital,Clinic
+amenity,hospital,Hospital
 amenity,ice_cream,Dessert Shop
 amenity,kindergarten,Kindergarten
 amenity,library,Library
