@@ -143,6 +143,7 @@ def filter_pbf(
     output_pbf: Path,
     osm_keys: list[str],
     overwrite: bool = False,
+    tag_filter_exprs: list[str] | None = None,
 ) -> Path:
     """
     Runs osmium tags-filter to extract nodes, ways, and relations matching the
@@ -157,8 +158,15 @@ def filter_pbf(
     Args:
         input_pbf: Path to the full PBF extract.
         output_pbf: Path to write the filtered output PBF.
-        osm_keys: OSM tag keys to retain (e.g., ['amenity', 'shop']).
+        osm_keys: OSM tag keys to retain (e.g., ['amenity', 'shop']). Used to
+            build key-level ``nwr/<key>`` expressions when ``tag_filter_exprs``
+            is not supplied.
         overwrite: If False and output_pbf exists, skip filtering.
+        tag_filter_exprs: Optional pre-built osmium filter expressions (e.g.
+            ``["nwr/amenity", "nwr/landuse=cemetery,religious"]``). When given,
+            these are used verbatim instead of ``osm_keys`` — letting callers
+            value-scope individual keys to the taxonomy crosswalk values via
+            ``taxonomy.build_osm_tag_filter_expressions``.
 
     Returns:
         Path to the filtered PBF file.
@@ -178,7 +186,11 @@ def filter_pbf(
     osmium_bin = (
         shutil.which("osmium") or (str(_env_bin) if _env_bin.exists() else "osmium")
     )
-    key_args = [f"nwr/{key}" for key in osm_keys]
+    key_args = (
+        list(tag_filter_exprs)
+        if tag_filter_exprs is not None
+        else [f"nwr/{key}" for key in osm_keys]
+    )
     cmd = [
         osmium_bin, "tags-filter", "--overwrite", "-o", str(output_pbf), str(input_pbf)
     ] + key_args

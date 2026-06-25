@@ -36,6 +36,10 @@ Output file:
         plus all extract_keys columns
 """
 from config_versioned import Config
+from openpois.conflation.taxonomy import (
+    build_osm_tag_filter_expressions,
+    load_osm_crosswalk,
+)
 from openpois.io.osm_snapshot import SnapshotExtract, download_osm_snapshot
 
 # -----------------------------------------------------------------------------
@@ -46,6 +50,11 @@ config = Config("~/repos/openpois/config.yaml")
 
 FILTER_KEYS = config.get("download", "osm", "filter_keys")
 EXTRACT_KEYS = config.get("download", "osm", "extract_keys")
+# osmium tags-filter expressions derived from the taxonomy crosswalk, so we
+# value-scope keys that have no wildcard row (e.g. landuse=cemetery,religious)
+# instead of dragging in every value of the key.
+_OSM_CROSSWALK = load_osm_crosswalk()
+TAG_FILTER_EXPRS = build_osm_tag_filter_expressions(_OSM_CROSSWALK)
 OVERWRITE_DOWNLOAD = config.get("download", "osm", "overwrite_download")
 OVERWRITE_FILTER = config.get("download", "osm", "overwrite_filter")
 SOURCE_LABEL = config.get("download", "osm", "source_label")
@@ -104,6 +113,7 @@ if __name__ == "__main__":
         output_path = OUTPUT_PATH,
         filter_keys = FILTER_KEYS,
         extract_keys = EXTRACT_KEYS,
+        tag_filter_exprs = TAG_FILTER_EXPRS,
         overwrite_download = OVERWRITE_DOWNLOAD,
         overwrite_filter = OVERWRITE_FILTER,
         source_label = SOURCE_LABEL,

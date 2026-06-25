@@ -294,6 +294,7 @@ def filter_history_pbf(
     output_pbf: Path,
     osm_keys: list[str],
     overwrite: bool = False,
+    tag_filter_exprs: list[str] | None = None,
 ) -> Path:
     """
     Two-pass POI extraction from a full-history PBF.
@@ -322,8 +323,15 @@ def filter_history_pbf(
     Args:
         input_pbf: Path to the raw history PBF.
         output_pbf: Path to write the final two-pass filtered PBF.
-        osm_keys: OSM tag keys identifying POIs.
+        osm_keys: OSM tag keys identifying POIs. Used to build key-level
+            ``nwr/<key>`` expressions when ``tag_filter_exprs`` is not given.
         overwrite: If False and ``output_pbf`` exists, skip filtering.
+        tag_filter_exprs: Optional pre-built osmium filter expressions (e.g.
+            ``["nwr/amenity", "nwr/landuse=cemetery,religious"]``) used
+            verbatim instead of ``osm_keys``. Lets callers value-scope keys
+            to the taxonomy crosswalk values via
+            ``taxonomy.build_osm_tag_filter_expressions``, keeping the
+            history POI set aligned with the snapshot.
 
     Returns:
         Path to the filtered PBF file.
@@ -342,7 +350,11 @@ def filter_history_pbf(
 
     output_pbf.parent.mkdir(parents=True, exist_ok=True)
     osmium_bin = _resolve_osmium()
-    key_args = [f"nwr/{key}" for key in osm_keys]
+    key_args = (
+        list(tag_filter_exprs)
+        if tag_filter_exprs is not None
+        else [f"nwr/{key}" for key in osm_keys]
+    )
 
     # Intermediate paths under the same directory as the final output.
     stem = output_pbf.stem  # e.g. "us-pois"
@@ -765,6 +777,7 @@ def _download_filter_timefilter_parse(
     overwrite_parse: bool,
     chunk_size: int,
     verbose: bool,
+    tag_filter_exprs: list[str] | None = None,
 ) -> tuple[Path, Path]:
     """Download + tags-filter + time-filter + parse one history PBF."""
     download_history_pbf(
@@ -778,6 +791,7 @@ def _download_filter_timefilter_parse(
         output_pbf=filtered_pbf_path,
         osm_keys=filter_keys,
         overwrite=overwrite_filter,
+        tag_filter_exprs=tag_filter_exprs,
     )
     time_filter_history_pbf(
         input_pbf=filtered_pbf_path,
@@ -809,6 +823,7 @@ def download_osm_history(
     overwrite_parse: bool = False,
     chunk_size: int = 500_000,
     verbose: bool = True,
+    tag_filter_exprs: list[str] | None = None,
 ) -> tuple[Path, Path]:
     """
     End-to-end orchestrator: download each Geofabrik full-history PBF in
@@ -832,7 +847,11 @@ def download_osm_history(
             full-history PBF). Names must be unique within the list.
         output_versions_path: Final concatenated osm_versions.parquet.
         output_changes_path: Final concatenated osm_changes.parquet.
-        filter_keys: OSM tag keys passed to ``tags-filter``.
+        filter_keys: OSM tag keys passed to ``tags-filter`` (fallback when
+            ``tag_filter_exprs`` is not given).
+        tag_filter_exprs: Optional pre-built osmium filter expressions (see
+            ``filter_history_pbf``) used to value-scope keys to the taxonomy
+            crosswalk, keeping the history POI set aligned with the snapshot.
         start_date: Start of the time-filter window.
         end_date: End of the time-filter window.
         cookie_file: Netscape-format cookie jar for Geofabrik OAuth.
@@ -870,6 +889,7 @@ def download_osm_history(
                 versions_path=spec.versions_path,
                 changes_path=spec.changes_path,
                 filter_keys=filter_keys,
+                tag_filter_exprs=tag_filter_exprs,
                 start_date=start_date,
                 end_date=end_date,
                 cookie_file=cookie_file,

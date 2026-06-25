@@ -64,6 +64,42 @@ def load_osm_crosswalk() -> pd.DataFrame:
     return _load_csv("taxonomy_crosswalk_openstreetmap.csv")
 
 
+def build_osm_tag_filter_expressions(
+    osm_crosswalk: pd.DataFrame,
+) -> list[str]:
+    """Build ``osmium tags-filter`` expressions from the OSM crosswalk.
+
+    The crosswalk is the single source of truth for which OSM tags we
+    care about. For each ``osm_key``:
+
+    - If the crosswalk has a wildcard row (``osm_value == "*"``), the
+      whole key is matched: ``nwr/<key>``.
+    - Otherwise only the specific listed values are matched:
+      ``nwr/<key>=<v1>,<v2>,...``.
+
+    This keeps PBF ingest aligned with the taxonomy — we only pull
+    elements whose (key, value) is actually mapped to a shared label
+    (or a key-level wildcard), instead of every element carrying the
+    key (which would drag in e.g. all ``landuse=*`` polygons).
+
+    Returns:
+        A list of ``nwr/...`` expression strings, one per key, ordered
+        by key name. Pass these to ``filter_pbf`` /
+        ``filter_history_pbf`` via ``tag_filter_exprs``.
+    """
+    exprs: list[str] = []
+    for key, grp in osm_crosswalk.groupby("osm_key", sort = True):
+        values = grp["osm_value"].tolist()
+        if WILDCARD in values:
+            exprs.append(f"nwr/{key}")
+        else:
+            specific = sorted(
+                str(v) for v in values if v and v != WILDCARD
+            )
+            exprs.append(f"nwr/{key}={','.join(specific)}")
+    return exprs
+
+
 def load_overture_crosswalk() -> pd.DataFrame:
     """Load the Overture Maps taxonomy crosswalk CSV.
 

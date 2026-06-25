@@ -61,7 +61,12 @@ download:
     chunk_size: 100_000
     max_area_nodes: 1_000
     verbose: true
-    filter_keys: ['shop', 'healthcare', 'leisure', 'amenity', 'tourism', 'office', 'craft', 'historic']
+    # Priority order for shared-label assignment (first non-null wins). The
+    # osmium ingest filter is derived separately from the taxonomy crosswalk
+    # (taxonomy.build_osm_tag_filter_expressions), which value-scopes keys
+    # lacking a wildcard row (landuse -> cemetery,religious; craft -> listed
+    # values) so we don't drag in every value of those keys.
+    filter_keys: ['shop', 'healthcare', 'leisure', 'amenity', 'tourism', 'office', 'craft', 'historic', 'landuse']
     extract_keys: [
       'addr:city','addr:country','addr:housename','addr:housenumber','addr:postcode',
       'addr:state','addr:street','addr:unit','access','amenity','atm','bar','bicycle',
