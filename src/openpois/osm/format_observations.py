@@ -493,9 +493,6 @@ def _window_sql(
         f'last_value("{k}__kl_event" IGNORE NULLS) OVER w_all AS "{k}__kl_carried"'
         for k in keep_keys
     )
-    keep_passthrough = ", ".join(
-        f'"{k}__kc_carried", "{k}__kl_carried"' for k in keep_keys
-    )
     keep_out_current = ",\n        ".join(
         f'NULLIF("{k}__kc_carried", \'{_NULL_SENTINEL}\') AS "{k}"'
         for k in keep_keys

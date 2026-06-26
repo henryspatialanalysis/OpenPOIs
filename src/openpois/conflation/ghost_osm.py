@@ -51,10 +51,8 @@ from pathlib import Path
 
 import duckdb
 import geopandas as gpd
-import numpy as np
 import pandas as pd
 from rapidfuzz import fuzz
-from shapely.geometry import Point
 
 from openpois.conflation.taxonomy import (
     assign_osm_shared_label,

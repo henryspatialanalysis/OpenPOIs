@@ -269,10 +269,10 @@ class TestFormatObservationsDuckdb:
         seq = [
             ("Added",   "foo", None,    None),     # v1
             (None,      None,  "false", "Added"),  # v2 delete
-            (None,      None,  "true",  "Changed"),# v3 re-add → restore "foo"
+            (None,      None,  "true",  "Changed"),  # v3 re-add → restore "foo"
             ("Changed", "baz", None,    None),     # v4 rename
             (None,      None,  "false", "Added"),  # v5 delete
-            (None,      None,  "true",  "Changed"),# v6 re-add → restore "baz"
+            (None,      None,  "true",  "Changed"),  # v6 re-add → restore "baz"
         ]
         for ver, (tag_ch, tag_val, vis_val, vis_ch) in enumerate(seq, start = 1):
             versions.append({
