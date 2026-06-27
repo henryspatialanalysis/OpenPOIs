@@ -83,6 +83,20 @@ if N_SAMPLES is None:
 if N_CHAINS is None:
     N_CHAINS = 1
 SAVE_FULL_MODEL = config.get("osm_turnover_model", "save_full_model")
+# Standard POI subsampling: fit on a simple random sample of POIs rather than
+# the full ~10M observations. A 1% sample gives essentially the same parameter
+# estimates for a fraction of the NUTS cost (the likelihood is evaluated over
+# far fewer rows). null / 1.0 = no sampling. The sample is taken at the POI
+# level (all observation rows of a sampled POI are kept) and is deterministic
+# given the seed, so every model type and rerun fits the identical POIs.
+POI_SAMPLE_FRACTION = config.get(
+    "osm_turnover_model", "poi_sample_fraction", fail_if_none = False
+)
+POI_SAMPLE_SEED = config.get(
+    "osm_turnover_model", "poi_sample_seed", fail_if_none = False
+)
+if POI_SAMPLE_SEED is None:
+    POI_SAMPLE_SEED = 0
 
 
 def flatten_param_draws(
@@ -107,6 +121,39 @@ def flatten_param_draws(
                 label = f"{name}[{','.join(str(k) for k in idx)}]"
             columns[label] = flat[:, i]
     return pd.DataFrame(columns)
+
+
+def sample_pois(
+    df: pd.DataFrame, fraction: float, seed: int
+) -> pd.DataFrame:
+    """Return a simple random sample of ``fraction`` of the POIs in ``df``.
+
+    Sampling is at the POI level — a POI is one unique OSM element
+    (``osm_type`` + ``id``) — and every observation row of a sampled POI is
+    kept, preserving each POI's full version history for the per-row
+    likelihood. The unique POIs are sorted before sampling so the draw is
+    independent of input row order and fully reproducible for a given
+    ``seed``; this means the constant and random_effects fits (and any rerun)
+    train on the identical POI set.
+    """
+    key_cols = [c for c in ("osm_type", "id") if c in df.columns]
+    if not key_cols:
+        raise KeyError(
+            "Cannot POI-sample: observations lack 'osm_type'/'id' columns "
+            f"(have {list(df.columns)})"
+        )
+    pois = (
+        df[key_cols].drop_duplicates().sort_values(key_cols).reset_index(drop = True)
+    )
+    rng = np.random.default_rng(seed)
+    keep = pois[rng.random(len(pois)) < fraction]
+    sampled = df.merge(keep, on = key_cols, how = "inner")
+    print(
+        f"POI sample: {len(keep):,}/{len(pois):,} POIs "
+        f"({fraction:.2%}, seed={seed}) -> "
+        f"{len(sampled):,}/{len(df):,} observations"
+    )
+    return sampled
 
 
 if __name__ == "__main__":
@@ -140,6 +187,15 @@ if __name__ == "__main__":
             "versions.model_output (avoids clobbering a pinned fit)."
         ),
     )
+    parser.add_argument(
+        "--sample-fraction",
+        type = float,
+        default = None,
+        help = (
+            "Override osm_turnover_model.poi_sample_fraction for this run. "
+            "Use 1.0 to fit on the full dataset (no POI subsampling)."
+        ),
+    )
     args = parser.parse_args()
 
     model_version = args.model_version
@@ -150,6 +206,17 @@ if __name__ == "__main__":
     # Data preparation ------------------------------------------------------>
     observations_path = args.observations or OBSERVATIONS_PATH
     observations_df = pd.read_parquet(observations_path)
+    # Standard 1% POI subsample (config: poi_sample_fraction) — a simple random
+    # sample of POIs that yields essentially the same estimates far cheaper.
+    sample_fraction = (
+        args.sample_fraction
+        if args.sample_fraction is not None
+        else POI_SAMPLE_FRACTION
+    )
+    if sample_fraction is not None and sample_fraction < 1.0:
+        observations_df = sample_pois(
+            observations_df, sample_fraction, POI_SAMPLE_SEED
+        )
     # t1_col defaults to "last_obs_timestamp" in prepare_data_for_model, so
     # tag_years is the inter-observation interval the per-row Bernoulli-on-
     # Poisson likelihood requires (methodology §1.2).

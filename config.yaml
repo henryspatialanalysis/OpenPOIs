@@ -1,16 +1,16 @@
 # Versioned directories (used with config.get_dir_path())
 versions:
-  osm_data: "20260521"
-  model_output: "20260422_by_shared_label"
-  snapshot_osm: "20260521"
+  osm_data: "20260625"
+  model_output: "20260625_by_shared_label"
+  snapshot_osm: "20260625"
   snapshot_overture: "20260617"
-  conflation: "20260521"
-  source_coop: "2026-05-21-v0"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
+  conflation: "20260625"
+  source_coop: "2026-06-27-v0"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
   # Ghost POI dataset reconstructed from OSM history (one row per
   # detected previous-state event). Pinned to the same value as
   # ``osm_data`` since it is derived from the same history parquets,
   # and regenerated together with the monthly snapshot refresh.
-  ghost_osm: "20260521"
+  ghost_osm: "20260625"
 
 # Settings for downloading data
 download:
@@ -155,13 +155,16 @@ osm_data:
     - last_obs_timestamp
     - last_tag_timestamp
   apply_model:
-    model_stub: '20260422'
+    model_stub: '20260625'
 
 # Settings for scripts/models/osm_turnover.py (JAX turnover model)
 osm_turnover_model:
   # Overridable at the CLI via --model-type
   # {constant,constant_breakpoint,random_by_type,random_effects}.
-  default_model_type: constant
+  # random_effects is the production model (location-aware: λ on POI type +
+  # MSA + urbanicity + interaction). Rate the snapshot with
+  # apply_model_random_effects.py, NOT apply_model.py (which is per-group only).
+  default_model_type: random_effects
   var_prior: [-1.0, 5.0]
   # Time-varying λ — only used by --model-type constant_breakpoint. Log-normal
   # prior on the breakpoint age t_B (years since the tag was established):
@@ -176,6 +179,18 @@ osm_turnover_model:
   group_key: shared_label
   group_values: null
   min_value_count: 5
+  # Standard POI subsampling for the fit. A simple random sample of this
+  # fraction of POIs (unique osm_type+id, all their observation rows kept)
+  # gives essentially the same parameter estimates at a fraction of the NUTS
+  # cost — the full-data fit ran ~5 h, the 1% sample runs in minutes. The draw
+  # is deterministic given poi_sample_seed, so the constant and random_effects
+  # fits (and reruns) train on identical POIs. Set to 1.0 (or null), or pass
+  # --sample-fraction 1.0, to fit on the full dataset.
+  # NOTE: at 1% the random_effects amenity_msa interaction (needs
+  # interaction_min_count POIs per cell) thins out — lower interaction_min_count
+  # if you want the interaction active on sampled fits.
+  poi_sample_fraction: 0.01
+  poi_sample_seed: 0
   # NUTS warmup (window adaptation) and retained-sample counts. Warmup should
   # generally be >= n_samples for hierarchical models.
   n_warmup: 500
@@ -344,6 +359,10 @@ directories:
 conflation:
   overture_confidence_weight: 0.7
   min_match_score: 0.50
+  # Drop conflated points that never received a shared_label (uncategorized
+  # POIs) from the canonical conflated.parquet. Applied in the change-detection
+  # step; conflated_baseline.parquet keeps the full unfiltered set.
+  drop_unlabeled: true
   max_radius_m: 200
   default_radius_m: 100
   distance_weight: 0.0
@@ -382,8 +401,8 @@ conflation:
     name_change_similarity_threshold: 50
     # Fallback delta for ghosts whose shared_label isn't in the fitted
     # model's per-group params. Equals sigmoid(logit_delta_0) for the
-    # current 20260422_by_shared_label fit (logit_delta_0 = -2.72).
-    default_delta: 0.062
+    # current 20260625_by_shared_label fit (logit_delta_0 = -1.834).
+    default_delta: 0.138
     # Hard gate on Overture-name vs ghost-prior-name token_set_ratio
     # (0-100), applied *before* the composite-score-based shadow
     # matcher. The default 0 keeps the loose matcher: any spatial +
@@ -424,7 +443,7 @@ publish:
   # Values surfaced in the per-version README. Set each round until the
   # pipeline captures them automatically — see .claude/TODO.md.
   version_metadata:
-    osm_snapshot_date: "2026-04-17"   # YYYY-MM-DD Geofabrik download date
+    osm_snapshot_date: "2026-06-25"   # YYYY-MM-DD Geofabrik download date
     overture_release: "2026-06-17.0"  # Overture Maps release ID, https://docs.overturemaps.org/release-calendar/
     model_commit: null                # null → use current git HEAD; set a short SHA to pin
   # PMTiles generation — multi-zoom archive z10–z14 for both OSM and conflated.

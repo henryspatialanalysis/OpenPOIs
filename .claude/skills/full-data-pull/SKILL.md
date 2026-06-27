@@ -48,9 +48,12 @@ Downloads the snapshot sources (50 US states + DC + 5 inhabited territories: PR,
 
 3. **Apply the rating model to OSM** → `osm_snapshot_rated.parquet`:
    ```bash
-   python scripts/osm_snapshot/apply_model.py
+   make rate     # scripts/osm_snapshot/apply_model_random_effects.py
    ```
-   Uses `osm_data.apply_model.model_stub` to pick the model family.
+   Rates each POI from its own `(shared_label, MSA, urban_rural)` cell using the
+   production `random_effects` fit at `{osm_data.apply_model.model_stub}_by_shared_label`.
+   **Do not use `apply_model.py`** — it's the legacy per-group rater and mis-rates
+   the random_effects model.
 
 4. **Optional schema snapshot** — produces small CSV snippets for spec review:
    ```bash

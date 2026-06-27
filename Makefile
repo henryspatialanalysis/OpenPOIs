@@ -83,7 +83,17 @@ TEST_FLAG := $(if $(TEST),--test,)
 LOG_DIR := $(HOME)/data/openpois/logs
 LOG_TS := $(shell date +%Y%m%d_%H%M%S)
 
-.PHONY: conflate build_ghosts conflate_baseline apply_cd
+.PHONY: rate conflate build_ghosts conflate_baseline apply_cd
+
+# Rate the OSM snapshot with the production random_effects model (per-POI cell
+# reconstruction). Uses apply_model.model_stub from config; pass MODEL_VERSION=
+# to override. NOTE: this is the correct rater for random_effects — the older
+# apply_model.py is per-group only and must not be used for it.
+rate:
+	@mkdir -p $(LOG_DIR)
+	@$(CONDA_PYTHON) -u scripts/osm_snapshot/apply_model_random_effects.py \
+		$(if $(MODEL_VERSION),--model-version $(MODEL_VERSION),) $(TEST_FLAG) \
+		2>&1 | tee $(LOG_DIR)/rate_$(LOG_TS).log
 
 build_ghosts:
 	@mkdir -p $(LOG_DIR)

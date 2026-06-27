@@ -35,15 +35,16 @@ End-to-end: Geofabrik full-history PBFs → observations table → fitted λ →
 
 3. **Pick a modeling config and fit λ** — see [skills/iterate-model-types](../iterate-model-types/SKILL.md) for choosing `model_type` / `group_key`.
    ```bash
-   python scripts/models/osm_turnover.py
+   python scripts/models/osm_turnover.py            # default_model_type: random_effects
    ```
-   Writes `fitted_params.csv`, `param_draws.csv`, `predictions.csv` to `{date}_by_shared_label` (the unified random-effects model) or `{date}_constant` (single-rate baseline) under `directories.model_output.path`.
+   The config default is now `random_effects` (location-aware: λ on POI type + MSA + urbanicity + interaction), written to `versions.model_output` (`{date}_by_shared_label`). The fit takes a standard **1% POI sample** (`osm_turnover_model.poi_sample_fraction`) — near-identical estimates, minutes instead of hours; pass `--sample-fraction 1.0` for the full dataset. The `{date}_constant` single-rate baseline is **no longer required** (the random_effects rater partial-pools unseen cells) — fit it only for A/B comparison via `--model-type constant --model-version {date}_constant`.
 
 4. **Apply predictions to the OSM snapshot** → `osm_snapshot_rated.parquet`
    ```bash
-   python scripts/osm_snapshot/apply_model.py
+   make rate                 # = scripts/osm_snapshot/apply_model_random_effects.py
    ```
-   Reads the `osm_data.apply_model.model_stub` date, loads the `{stub}_by_shared_label` random-effects model (if present), falls back to `{stub}_constant` for rows with no matching taxonomy label, and rates every POI in `osm_snapshot.parquet`.
+   **Use the random_effects rater, not `apply_model.py`.** The production model is multi-factor `random_effects`, whose predictions are per `(shared_label, MSA, urban_rural)` cell. `apply_model_random_effects.py` enriches each snapshot POI with its MSA/urbanicity and reconstructs that POI's **own cell curve** from the posterior draws (unseen levels partial-pool back to the mean — no `_constant` fallback needed). Defaults to the `{apply_model.model_stub}_by_shared_label` fit; override with `make rate MODEL_VERSION=...`.
+   `apply_model.py` is the legacy **per-group** rater (constant / random_by_type only) and will mis-rate a random_effects fit — do not use it here.
 
 ## Verification
 
