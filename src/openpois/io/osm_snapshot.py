@@ -57,6 +57,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import requests
 
+from openpois.io._download import download_resilient
 from openpois.io._osm_poi_handler import POIRecordBuilder
 
 
@@ -101,37 +102,10 @@ def download_pbf(
     Raises:
         requests.HTTPError: If the HTTP request fails.
     """
-    output_path = Path(output_path)
-    if output_path.exists() and not overwrite:
-        print(f"PBF already exists at {output_path}; skipping download.")
-        return output_path
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"Downloading PBF from {url} to {output_path}...")
-    # Write to a temp file in the same directory, then rename atomically so
-    # that a partial download never masquerades as a complete file.
-    with tempfile.NamedTemporaryFile(
-        dir=output_path.parent, delete=False, suffix=".tmp"
-    ) as tmp:
-        tmp_path = Path(tmp.name)
-    try:
-        with requests.get(url, stream=True, timeout=(30, None)) as resp:
-            resp.raise_for_status()
-            total = int(resp.headers.get("content-length", 0))
-            downloaded = 0
-            with open(tmp_path, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=8 * 1024 * 1024):
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total:
-                        pct = 100 * downloaded / total
-                        print(f"  {pct:.1f}%", end="\r")
-        tmp_path.rename(output_path)
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise
-    print(f"\nDownload complete: {output_path}")
-    return output_path
+    # Geofabrik throttles ~1 MB/s per connection and drops the TLS stream
+    # mid-transfer on these multi-GB extracts; download_resilient parallelises
+    # across byte ranges and resumes across drops instead of restarting.
+    return download_resilient(url, output_path, overwrite=overwrite, label="PBF")
 
 
 # -----------------------------------------------------------------------------

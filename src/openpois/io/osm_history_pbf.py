@@ -53,11 +53,9 @@ the current POI snapshot only.
 from __future__ import annotations
 
 import datetime
-import http.cookiejar
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import NamedTuple
 
@@ -65,6 +63,8 @@ import osmium
 import pyarrow as pa
 import pyarrow.parquet as pq
 import requests
+
+from openpois.io._download import download_resilient
 
 
 class HistoryExtract(NamedTuple):
@@ -173,36 +173,6 @@ def _diff_tag_sets(
 # -----------------------------------------------------------------------------
 
 
-def _load_cookie_session(cookie_file: Path | None) -> requests.Session:
-    """
-    Build a requests.Session with cookies loaded from a Netscape-format jar.
-
-    Args:
-        cookie_file: Path to a Netscape (Mozilla) cookie jar, or None for an
-            unauthenticated session.
-
-    Returns:
-        Configured requests.Session.
-
-    Raises:
-        FileNotFoundError: If cookie_file is given but does not exist.
-    """
-    session = requests.Session()
-    if cookie_file is None:
-        return session
-    cookie_path = Path(cookie_file).expanduser()
-    if not cookie_path.exists():
-        raise FileNotFoundError(
-            f"Geofabrik cookie file not found: {cookie_path}. Generate one by "
-            "logging in at https://osm-internal.download.geofabrik.de/ and "
-            "exporting cookies, or run Geofabrik's oauth_cookie_client.py."
-        )
-    jar = http.cookiejar.MozillaCookieJar(str(cookie_path))
-    jar.load(ignore_discard=True, ignore_expires=True)
-    session.cookies = jar
-    return session
-
-
 def download_history_pbf(
     url: str,
     output_path: Path,
@@ -235,31 +205,16 @@ def download_history_pbf(
         print(f"History PBF already exists at {output_path}; skipping download.")
         return output_path
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    session = _load_cookie_session(cookie_file)
-    print(f"Downloading history PBF from {url} to {output_path}...")
-    with tempfile.NamedTemporaryFile(
-        dir=output_path.parent, delete=False, suffix=".tmp"
-    ) as tmp:
-        tmp_path = Path(tmp.name)
-    try:
-        with session.get(url, stream=True, timeout=(30, None)) as resp:
-            resp.raise_for_status()
-            total = int(resp.headers.get("content-length", 0))
-            downloaded = 0
-            with open(tmp_path, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=8 * 1024 * 1024):
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total:
-                        pct = 100 * downloaded / total
-                        print(f"  {pct:.1f}%", end="\r")
-        tmp_path.rename(output_path)
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise
-    print(f"\nDownload complete: {output_path}")
-    return output_path
+    # The full-history extracts are ~23 GB and ride the same throttled, TLS-flaky
+    # Geofabrik path as the snapshot PBFs; parallelise across byte ranges and
+    # resume across drops rather than restarting a multi-hour download.
+    return download_resilient(
+        url,
+        output_path,
+        cookie_file=cookie_file,
+        overwrite=overwrite,
+        label="history PBF",
+    )
 
 
 # -----------------------------------------------------------------------------
