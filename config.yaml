@@ -1,16 +1,16 @@
 # Versioned directories (used with config.get_dir_path())
 versions:
-  osm_data: "20260521"
-  model_output: "20260422_by_shared_label"
-  snapshot_osm: "20260521"
-  snapshot_overture: "20260521"
-  conflation: "20260521"
-  source_coop: "2026-05-21-v0"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
+  osm_data: "20260625"
+  model_output: "20260625_by_shared_label"
+  snapshot_osm: "20260625"
+  snapshot_overture: "20260617"
+  conflation: "20260625"
+  source_coop: "2026-06-27-v0"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
   # Ghost POI dataset reconstructed from OSM history (one row per
   # detected previous-state event). Pinned to the same value as
   # ``osm_data`` since it is derived from the same history parquets,
   # and regenerated together with the monthly snapshot refresh.
-  ghost_osm: "20260521"
+  ghost_osm: "20260625"
 
 # Settings for downloading data
 download:
@@ -61,7 +61,12 @@ download:
     chunk_size: 100_000
     max_area_nodes: 1_000
     verbose: true
-    filter_keys: ['shop', 'healthcare', 'leisure', 'amenity', 'tourism', 'office', 'craft', 'historic']
+    # Priority order for shared-label assignment (first non-null wins). The
+    # osmium ingest filter is derived separately from the taxonomy crosswalk
+    # (taxonomy.build_osm_tag_filter_expressions), which value-scopes keys
+    # lacking a wildcard row (landuse -> cemetery,religious; craft -> listed
+    # values) so we don't drag in every value of those keys.
+    filter_keys: ['shop', 'healthcare', 'leisure', 'amenity', 'tourism', 'office', 'craft', 'historic', 'landuse']
     extract_keys: [
       'addr:city','addr:country','addr:housename','addr:housenumber','addr:postcode',
       'addr:state','addr:street','addr:unit','access','amenity','atm','bar','bicycle',
@@ -75,14 +80,14 @@ download:
       'website','wikidata','wikipedia'
     ]
   overture:
-    release_date: "2026-05-20.0"  # pin for determinism; null = auto-detect latest
+    release_date: "2026-06-17.0"  # pin for determinism; null = auto-detect latest
     s3_bucket: "overturemaps-us-west-2"
     s3_region: "us-west-2"
     # DuckDB resource caps for the per-part S3 scans and the final polygon
     # filter. Peak host RAM ~= workers * memory_limit, peak CPU ~= workers *
     # threads. Scale per-worker values down if raising workers above 1.
     duckdb:
-      memory_limit: "4GB"
+      memory_limit: "8GB"  # raised from 4GB to cut disk spill in the finalize polygon-filter step
       threads: 2
       workers: 2
     # (L0, L1) allowlist. L1 = null means "all of this L0".
@@ -132,19 +137,34 @@ download:
 # Settings for OSM exploratory data analysis
 osm_data:
   tag_key: name
+  # OSM lifecycle namespaces whose appearance on a POI's primary tag (one of
+  # download.osm.filter_keys) marks a closure — e.g. shop=supermarket becoming
+  # disused:shop=supermarket while `name` is kept plain. Treated as a turnover
+  # (soft-delete) event in observation formatting; removal is a reopening.
+  # Set to [] to disable (recovers the name-only change signal for ablation).
+  lifecycle_closure_prefixes:
+    - 'disused:'
+    - 'abandoned:'
+    - 'demolished:'
+    - 'was:'
+    - 'removed:'
+    - 'razed:'
   top_n_types: 10
   timestamp_cols:
     - obs_timestamp
     - last_obs_timestamp
     - last_tag_timestamp
   apply_model:
-    model_stub: '20260422'
+    model_stub: '20260625'
 
 # Settings for scripts/models/osm_turnover.py (JAX turnover model)
 osm_turnover_model:
   # Overridable at the CLI via --model-type
   # {constant,constant_breakpoint,random_by_type,random_effects}.
-  default_model_type: constant
+  # random_effects is the production model (location-aware: λ on POI type +
+  # MSA + urbanicity + interaction). Rate the snapshot with
+  # apply_model_random_effects.py, NOT apply_model.py (which is per-group only).
+  default_model_type: random_effects
   var_prior: [-1.0, 5.0]
   # Time-varying λ — only used by --model-type constant_breakpoint. Log-normal
   # prior on the breakpoint age t_B (years since the tag was established):
@@ -159,6 +179,18 @@ osm_turnover_model:
   group_key: shared_label
   group_values: null
   min_value_count: 5
+  # Standard POI subsampling for the fit. A simple random sample of this
+  # fraction of POIs (unique osm_type+id, all their observation rows kept)
+  # gives essentially the same parameter estimates at a fraction of the NUTS
+  # cost — the full-data fit ran ~5 h, the 1% sample runs in minutes. The draw
+  # is deterministic given poi_sample_seed, so the constant and random_effects
+  # fits (and reruns) train on identical POIs. Set to 1.0 (or null), or pass
+  # --sample-fraction 1.0, to fit on the full dataset.
+  # NOTE: at 1% the random_effects amenity_msa interaction (needs
+  # interaction_min_count POIs per cell) thins out — lower interaction_min_count
+  # if you want the interaction active on sampled fits.
+  poi_sample_fraction: 0.01
+  poi_sample_seed: 0
   # NUTS warmup (window adaptation) and retained-sample counts. Warmup should
   # generally be >= n_samples for hierarchical models.
   n_warmup: 500
@@ -327,6 +359,10 @@ directories:
 conflation:
   overture_confidence_weight: 0.7
   min_match_score: 0.50
+  # Drop conflated points that never received a shared_label (uncategorized
+  # POIs) from the canonical conflated.parquet. Applied in the change-detection
+  # step; conflated_baseline.parquet keeps the full unfiltered set.
+  drop_unlabeled: true
   max_radius_m: 200
   default_radius_m: 100
   distance_weight: 0.0
@@ -365,8 +401,8 @@ conflation:
     name_change_similarity_threshold: 50
     # Fallback delta for ghosts whose shared_label isn't in the fitted
     # model's per-group params. Equals sigmoid(logit_delta_0) for the
-    # current 20260422_by_shared_label fit (logit_delta_0 = -2.72).
-    default_delta: 0.062
+    # current 20260625_by_shared_label fit (logit_delta_0 = -1.834).
+    default_delta: 0.138
     # Hard gate on Overture-name vs ghost-prior-name token_set_ratio
     # (0-100), applied *before* the composite-score-based shadow
     # matcher. The default 0 keeps the loose matcher: any spatial +
@@ -407,8 +443,8 @@ publish:
   # Values surfaced in the per-version README. Set each round until the
   # pipeline captures them automatically — see .claude/TODO.md.
   version_metadata:
-    osm_snapshot_date: "2026-04-17"   # YYYY-MM-DD Geofabrik download date
-    overture_release: "2026-04-15.0"  # Overture Maps release ID, https://docs.overturemaps.org/release-calendar/
+    osm_snapshot_date: "2026-06-25"   # YYYY-MM-DD Geofabrik download date
+    overture_release: "2026-06-17.0"  # Overture Maps release ID, https://docs.overturemaps.org/release-calendar/
     model_commit: null                # null → use current git HEAD; set a short SHA to pin
   # PMTiles generation — multi-zoom archive z10–z14 for both OSM and conflated.
   # Site's View.minZoom is 10 (full-metro view). z10–z14 are served directly

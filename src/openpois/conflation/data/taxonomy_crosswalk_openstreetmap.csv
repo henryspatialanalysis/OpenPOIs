@@ -46,7 +46,7 @@ healthcare,dentist,Dentist
 healthcare,dialysis,Other Healthcare
 healthcare,doctor,Clinic
 healthcare,hospice,Other Healthcare
-healthcare,hospital,Clinic
+healthcare,hospital,Hospital
 healthcare,laboratory,Other Healthcare
 healthcare,midwife,Maternity Center
 healthcare,occupational_therapist,Occupational Therapy
@@ -80,7 +80,7 @@ amenity,food_court,Restaurant
 amenity,fuel,Gas Station
 amenity,funeral_hall,Cemetery
 amenity,grave_yard,Cemetery
-amenity,hospital,Clinic
+amenity,hospital,Hospital
 amenity,ice_cream,Dessert Shop
 amenity,kindergarten,Kindergarten
 amenity,library,Library
@@ -201,6 +201,26 @@ craft,window_construction,Home Service
 craft,winery,Bar
 landuse,cemetery,Cemetery
 landuse,religious,Place of Worship
+amenity,bbq,EXCLUDE
+amenity,bench,EXCLUDE
+amenity,bicycle_parking,EXCLUDE
+amenity,drinking_water,EXCLUDE
+amenity,letter_box,EXCLUDE
+amenity,loading_dock,EXCLUDE
+amenity,parking,EXCLUDE
+amenity,parking_entrance,EXCLUDE
+amenity,parking_space,EXCLUDE
+amenity,post_box,EXCLUDE
+amenity,shelter,EXCLUDE
+amenity,vending_machine,EXCLUDE
+amenity,waste_basket,EXCLUDE
+amenity,waste_disposal,EXCLUDE
+leisure,bleachers,EXCLUDE
+leisure,firepit,EXCLUDE
+leisure,outdoor_seating,EXCLUDE
+leisure,picnic_table,EXCLUDE
+leisure,slipway,EXCLUDE
+tourism,camp_pitch,EXCLUDE
 amenity,*,Other Amenity
 healthcare,*,Other Healthcare
 shop,*,Other Shop

@@ -53,11 +53,9 @@ the current POI snapshot only.
 from __future__ import annotations
 
 import datetime
-import http.cookiejar
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import NamedTuple
 
@@ -65,6 +63,8 @@ import osmium
 import pyarrow as pa
 import pyarrow.parquet as pq
 import requests
+
+from openpois.io._download import download_resilient
 
 
 class HistoryExtract(NamedTuple):
@@ -173,36 +173,6 @@ def _diff_tag_sets(
 # -----------------------------------------------------------------------------
 
 
-def _load_cookie_session(cookie_file: Path | None) -> requests.Session:
-    """
-    Build a requests.Session with cookies loaded from a Netscape-format jar.
-
-    Args:
-        cookie_file: Path to a Netscape (Mozilla) cookie jar, or None for an
-            unauthenticated session.
-
-    Returns:
-        Configured requests.Session.
-
-    Raises:
-        FileNotFoundError: If cookie_file is given but does not exist.
-    """
-    session = requests.Session()
-    if cookie_file is None:
-        return session
-    cookie_path = Path(cookie_file).expanduser()
-    if not cookie_path.exists():
-        raise FileNotFoundError(
-            f"Geofabrik cookie file not found: {cookie_path}. Generate one by "
-            "logging in at https://osm-internal.download.geofabrik.de/ and "
-            "exporting cookies, or run Geofabrik's oauth_cookie_client.py."
-        )
-    jar = http.cookiejar.MozillaCookieJar(str(cookie_path))
-    jar.load(ignore_discard=True, ignore_expires=True)
-    session.cookies = jar
-    return session
-
-
 def download_history_pbf(
     url: str,
     output_path: Path,
@@ -235,31 +205,16 @@ def download_history_pbf(
         print(f"History PBF already exists at {output_path}; skipping download.")
         return output_path
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    session = _load_cookie_session(cookie_file)
-    print(f"Downloading history PBF from {url} to {output_path}...")
-    with tempfile.NamedTemporaryFile(
-        dir=output_path.parent, delete=False, suffix=".tmp"
-    ) as tmp:
-        tmp_path = Path(tmp.name)
-    try:
-        with session.get(url, stream=True, timeout=(30, None)) as resp:
-            resp.raise_for_status()
-            total = int(resp.headers.get("content-length", 0))
-            downloaded = 0
-            with open(tmp_path, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=8 * 1024 * 1024):
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total:
-                        pct = 100 * downloaded / total
-                        print(f"  {pct:.1f}%", end="\r")
-        tmp_path.rename(output_path)
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise
-    print(f"\nDownload complete: {output_path}")
-    return output_path
+    # The full-history extracts are ~23 GB and ride the same throttled, TLS-flaky
+    # Geofabrik path as the snapshot PBFs; parallelise across byte ranges and
+    # resume across drops rather than restarting a multi-hour download.
+    return download_resilient(
+        url,
+        output_path,
+        cookie_file=cookie_file,
+        overwrite=overwrite,
+        label="history PBF",
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -294,6 +249,7 @@ def filter_history_pbf(
     output_pbf: Path,
     osm_keys: list[str],
     overwrite: bool = False,
+    tag_filter_exprs: list[str] | None = None,
 ) -> Path:
     """
     Two-pass POI extraction from a full-history PBF.
@@ -322,8 +278,15 @@ def filter_history_pbf(
     Args:
         input_pbf: Path to the raw history PBF.
         output_pbf: Path to write the final two-pass filtered PBF.
-        osm_keys: OSM tag keys identifying POIs.
+        osm_keys: OSM tag keys identifying POIs. Used to build key-level
+            ``nwr/<key>`` expressions when ``tag_filter_exprs`` is not given.
         overwrite: If False and ``output_pbf`` exists, skip filtering.
+        tag_filter_exprs: Optional pre-built osmium filter expressions (e.g.
+            ``["nwr/amenity", "nwr/landuse=cemetery,religious"]``) used
+            verbatim instead of ``osm_keys``. Lets callers value-scope keys
+            to the taxonomy crosswalk values via
+            ``taxonomy.build_osm_tag_filter_expressions``, keeping the
+            history POI set aligned with the snapshot.
 
     Returns:
         Path to the filtered PBF file.
@@ -342,7 +305,11 @@ def filter_history_pbf(
 
     output_pbf.parent.mkdir(parents=True, exist_ok=True)
     osmium_bin = _resolve_osmium()
-    key_args = [f"nwr/{key}" for key in osm_keys]
+    key_args = (
+        list(tag_filter_exprs)
+        if tag_filter_exprs is not None
+        else [f"nwr/{key}" for key in osm_keys]
+    )
 
     # Intermediate paths under the same directory as the final output.
     stem = output_pbf.stem  # e.g. "us-pois"
@@ -765,6 +732,7 @@ def _download_filter_timefilter_parse(
     overwrite_parse: bool,
     chunk_size: int,
     verbose: bool,
+    tag_filter_exprs: list[str] | None = None,
 ) -> tuple[Path, Path]:
     """Download + tags-filter + time-filter + parse one history PBF."""
     download_history_pbf(
@@ -778,6 +746,7 @@ def _download_filter_timefilter_parse(
         output_pbf=filtered_pbf_path,
         osm_keys=filter_keys,
         overwrite=overwrite_filter,
+        tag_filter_exprs=tag_filter_exprs,
     )
     time_filter_history_pbf(
         input_pbf=filtered_pbf_path,
@@ -809,6 +778,7 @@ def download_osm_history(
     overwrite_parse: bool = False,
     chunk_size: int = 500_000,
     verbose: bool = True,
+    tag_filter_exprs: list[str] | None = None,
 ) -> tuple[Path, Path]:
     """
     End-to-end orchestrator: download each Geofabrik full-history PBF in
@@ -832,7 +802,11 @@ def download_osm_history(
             full-history PBF). Names must be unique within the list.
         output_versions_path: Final concatenated osm_versions.parquet.
         output_changes_path: Final concatenated osm_changes.parquet.
-        filter_keys: OSM tag keys passed to ``tags-filter``.
+        filter_keys: OSM tag keys passed to ``tags-filter`` (fallback when
+            ``tag_filter_exprs`` is not given).
+        tag_filter_exprs: Optional pre-built osmium filter expressions (see
+            ``filter_history_pbf``) used to value-scope keys to the taxonomy
+            crosswalk, keeping the history POI set aligned with the snapshot.
         start_date: Start of the time-filter window.
         end_date: End of the time-filter window.
         cookie_file: Netscape-format cookie jar for Geofabrik OAuth.
@@ -870,6 +844,7 @@ def download_osm_history(
                 versions_path=spec.versions_path,
                 changes_path=spec.changes_path,
                 filter_keys=filter_keys,
+                tag_filter_exprs=tag_filter_exprs,
                 start_date=start_date,
                 end_date=end_date,
                 cookie_file=cookie_file,

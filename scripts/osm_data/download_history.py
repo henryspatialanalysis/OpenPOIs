@@ -46,6 +46,10 @@ import datetime
 
 from config_versioned import Config
 
+from openpois.conflation.taxonomy import (
+    build_osm_tag_filter_expressions,
+    load_osm_crosswalk,
+)
 from openpois.io.osm_history_pbf import HistoryExtract, download_osm_history
 
 # -----------------------------------------------------------------------------
@@ -58,6 +62,9 @@ HISTORY_COOKIE_FILE = config.get(
     "download", "osm", "history_cookie_file", fail_if_none = False
 )
 FILTER_KEYS = config.get("download", "osm", "filter_keys")
+# Value-scope keys to the taxonomy crosswalk (e.g. landuse=cemetery,religious)
+# so the history POI set matches the snapshot ingest filter.
+TAG_FILTER_EXPRS = build_osm_tag_filter_expressions(load_osm_crosswalk())
 START_DATE = datetime.datetime.combine(
     config.get("download", "osm", "start_date"), datetime.time.min
 )
@@ -144,6 +151,7 @@ if __name__ == "__main__":
         output_versions_path = OUTPUT_VERSIONS,
         output_changes_path = OUTPUT_CHANGES,
         filter_keys = FILTER_KEYS,
+        tag_filter_exprs = TAG_FILTER_EXPRS,
         start_date = START_DATE,
         end_date = END_DATE,
         cookie_file = HISTORY_COOKIE_FILE,

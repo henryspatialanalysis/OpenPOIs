@@ -57,20 +57,44 @@ def load_delta_lookup(
 ) -> tuple[dict[str, float], float]:
     """Load per-shared_label delta from fitted_params.csv.
 
+    Handles both fit formats:
+
+    * Legacy ``random_by_type`` — one ``delta`` row per group, keyed by
+      ``group_name``.
+    * Multi-factor ``random_effects`` — per-shared_label delta is
+      ``sigmoid(logit_delta_0 + eta_amenity[label])``, where the ``eta_amenity``
+      rows (``factor == "delta_amenity"``) carry the shared_label in
+      ``level_name``.
+
     Returns:
-        (lookup, default) where ``lookup[shared_label]`` is the
-        fitted ``delta`` posterior mean for that group, and
-        ``default`` is the configured fallback for groups absent
-        from the fit.
+        (lookup, default) where ``lookup[shared_label]`` is the fitted delta
+        posterior mean for that group, and ``default`` is the configured
+        fallback for groups absent from the fit.
     """
     df = pd.read_csv(fitted_params_path)
-    delta_rows = df[df["param_name"] == "delta"]
-    lookup = {
-        str(row["group_name"]): float(row["mean"])
-        for _, row in delta_rows.iterrows()
-        if pd.notna(row["group_name"])
-    }
-    return lookup, float(default_delta)
+    if "group_name" in df.columns:
+        delta_rows = df[df["param_name"] == "delta"]
+        lookup = {
+            str(row["group_name"]): float(row["mean"])
+            for _, row in delta_rows.iterrows()
+            if pd.notna(row["group_name"])
+        }
+        if lookup:
+            return lookup, float(default_delta)
+    eta = df[df["param_name"] == "eta_amenity"]
+    if len(eta) and "logit_delta_0" in set(df["param_name"]):
+        logit_delta_0 = float(
+            df.loc[df["param_name"] == "logit_delta_0", "mean"].iloc[0]
+        )
+        lookup = {
+            str(row["level_name"]): float(
+                1.0 / (1.0 + np.exp(-(logit_delta_0 + float(row["mean"]))))
+            )
+            for _, row in eta.iterrows()
+            if pd.notna(row["level_name"])
+        }
+        return lookup, float(default_delta)
+    return {}, float(default_delta)
 
 
 def _to_str_array(s: pd.Series) -> np.ndarray:
@@ -443,6 +467,7 @@ def apply_shadow_match(
     rated_snapshot_path: Path | None = None,
     survivor_filter: dict | None = None,
     min_prior_name_match_score: float = 0.0,
+    drop_unlabeled: bool = False,
     verbose: bool = True,
 ) -> dict:
     """Post-process a conflated dataset with the change-detection penalty.
@@ -477,6 +502,17 @@ def apply_shadow_match(
     conflated = gpd.read_parquet(conflated_path)
     if verbose:
         print(f"  {len(conflated):,} rows")
+
+    if drop_unlabeled:
+        sl = conflated["shared_label"]
+        keep = sl.notna() & (sl.astype(str).str.strip() != "")
+        n_drop = int((~keep).sum())
+        conflated = conflated.loc[keep].reset_index(drop = True)
+        if verbose:
+            print(
+                f"  Dropped {n_drop:,} rows without a shared_label "
+                f"-> {len(conflated):,} remain"
+            )
 
     if verbose:
         print(f"Reading ghosts from {ghosts_path} ...")

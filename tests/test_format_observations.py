@@ -269,10 +269,10 @@ class TestFormatObservationsDuckdb:
         seq = [
             ("Added",   "foo", None,    None),     # v1
             (None,      None,  "false", "Added"),  # v2 delete
-            (None,      None,  "true",  "Changed"),# v3 re-add → restore "foo"
+            (None,      None,  "true",  "Changed"),  # v3 re-add → restore "foo"
             ("Changed", "baz", None,    None),     # v4 rename
             (None,      None,  "false", "Added"),  # v5 delete
-            (None,      None,  "true",  "Changed"),# v6 re-add → restore "baz"
+            (None,      None,  "true",  "Changed"),  # v6 re-add → restore "baz"
         ]
         for ver, (tag_ch, tag_val, vis_val, vis_ch) in enumerate(seq, start = 1):
             versions.append({
@@ -464,6 +464,141 @@ def test_window_matches_state_machine(tmp_path, scenario, num_buckets):
     win = (
         pd.read_parquet(win_path).sort_values(sort_cols).reset_index(drop = True)
     )
+    sm = sm[sorted(sm.columns)]
+    win = win[sorted(win.columns)]
+    pd.testing.assert_frame_equal(sm, win, check_dtype = False)
+
+
+# Lifecycle-prefix closure detection ----------------------------------------->
+
+
+def _build_versions_changes(elem_id, per_version, month = "07"):
+    """Build (versions, changes) from explicit per-version tag diffs.
+
+    ``per_version`` is a list (one entry per version, 1-indexed) of
+    ``[(key, value, change), ...]`` tuples written verbatim into the changes
+    table; an empty list is a version with no tag diffs.
+    """
+    versions, changes = [], []
+    for ver, diffs in enumerate(per_version, start = 1):
+        versions.append({
+            "id": elem_id, "version": ver, "changeset": 5000 + ver,
+            "timestamp": f"2024-{month}-{ver:02d}T00:00:00+00:00",
+            "user": f"u{ver}", "uid": ver, "type": "node",
+        })
+        for key, value, change in diffs:
+            changes.append({
+                "key": key, "value": value, "change": change,
+                "id": elem_id, "version": ver, "type": "node",
+            })
+    return versions, changes
+
+
+# A supermarket that is named (v1), closed via a disused: retag with the name
+# kept plain (v2), then reopened (v3). Shared by the closure + ablation tests.
+_CLOSURE_SEQ = [
+    [("name", "Corner Mart", "Added"), ("shop", "supermarket", "Added")],
+    [("shop", "supermarket", "Deleted"), ("disused:shop", "supermarket", "Added")],
+    [("disused:shop", "supermarket", "Deleted"), ("shop", "supermarket", "Added")],
+]
+
+
+class TestLifecycleClosure:
+    """A lifecycle prefix on the primary tag is a soft-delete turnover event."""
+
+    def test_disused_retag_is_a_change(self, tmp_path):
+        versions, changes = _build_versions_changes(500, _CLOSURE_SEQ)
+        v_path, c_path = _write_parquets(tmp_path, versions, changes)
+        out_path = tmp_path / "obs.parquet"
+        format_observations_duckdb(
+            changes_path = c_path, versions_path = v_path, output_path = out_path,
+            tag_key = "name", keep_keys = ["shop"],
+            lifecycle_prefixes = ("disused:",), verbose = False,
+        )
+        out = pd.read_parquet(out_path).sort_values("version").reset_index(drop = True)
+        assert list(out["version"]) == [1, 2, 3]
+        # v1 name Added; v2 closure (soft delete → tag_value null); v3 reopen.
+        assert list(out["changed"]) == [1, 1, 1]
+        assert list(out["tag_value"].fillna("")) == ["Corner Mart", "", "Corner Mart"]
+
+    def test_disabled_by_default_no_spurious_change(self, tmp_path):
+        """Without lifecycle_prefixes the closure/reopen are invisible (the
+        current name-only signal): only the v1 name Added counts."""
+        versions, changes = _build_versions_changes(500, _CLOSURE_SEQ)
+        v_path, c_path = _write_parquets(tmp_path, versions, changes)
+        out_path = tmp_path / "obs.parquet"
+        format_observations_duckdb(
+            changes_path = c_path, versions_path = v_path, output_path = out_path,
+            tag_key = "name", keep_keys = ["shop"], verbose = False,
+        )
+        out = pd.read_parquet(out_path).sort_values("version").reset_index(drop = True)
+        assert list(out["changed"]) == [1, 0, 0]
+        # name carries forward untouched across the (ignored) retag.
+        assert list(out["tag_value"].fillna("")) == ["Corner Mart"] * 3
+
+    def test_only_primary_tag_prefix_counts_not_name(self, tmp_path):
+        """A ``disused:name`` diff is NOT a closure (the spec targets the
+        primary *type* tag); a plain non-prefixed keep-key delete alone is also
+        not a closure without an accompanying lifecycle add."""
+        versions, changes = _build_versions_changes(501, [
+            [("name", "Cafe", "Added"), ("amenity", "cafe", "Added")],
+            [("disused:name", "Cafe", "Added")],   # lifecycle on name only
+            [("amenity", "cafe", "Deleted")],       # bare type delete, no add
+        ])
+        v_path, c_path = _write_parquets(tmp_path, versions, changes)
+        out_path = tmp_path / "obs.parquet"
+        format_observations_duckdb(
+            changes_path = c_path, versions_path = v_path, output_path = out_path,
+            tag_key = "name", keep_keys = ["amenity"],
+            lifecycle_prefixes = ("disused:",), verbose = False,
+        )
+        out = pd.read_parquet(out_path).sort_values("version").reset_index(drop = True)
+        assert list(out["changed"]) == [1, 0, 0]
+
+
+def _lifecycle_scenario_close_reopen():
+    v, c = _build_versions_changes(600, _CLOSURE_SEQ)
+    return v, c, "name", ["shop"], ("disused:", "was:")
+
+
+def _lifecycle_scenario_multi_prefix_keys():
+    """Closure on amenity via ``was:`` while a shop keep-key rides along."""
+    v, c = _build_versions_changes(601, [
+        [("name", "Bar", "Added"), ("amenity", "bar", "Added")],
+        [("amenity", "bar", "Deleted"), ("was:amenity", "bar", "Added")],
+    ])
+    return v, c, "name", ["amenity", "shop"], ("disused:", "was:")
+
+
+_LIFECYCLE_SCENARIOS = {
+    "close_reopen": _lifecycle_scenario_close_reopen,
+    "multi_prefix_keys": _lifecycle_scenario_multi_prefix_keys,
+}
+
+
+@pytest.mark.parametrize("scenario", list(_LIFECYCLE_SCENARIOS))
+@pytest.mark.parametrize("num_buckets", [1, 3])
+def test_window_matches_state_machine_lifecycle(tmp_path, scenario, num_buckets):
+    """The two engines must still agree byte-for-byte with lifecycle detection on."""
+    versions, changes, tag_key, keep_keys, prefixes = (
+        _LIFECYCLE_SCENARIOS[scenario]()
+    )
+    v_path, c_path = _write_parquets(tmp_path, versions, changes)
+
+    sm_path = tmp_path / "state_machine.parquet"
+    win_path = tmp_path / "window.parquet"
+    format_observations_duckdb(
+        c_path, v_path, sm_path, tag_key, keep_keys,
+        lifecycle_prefixes = prefixes, verbose = False,
+    )
+    format_observations_window(
+        c_path, v_path, win_path, tag_key, keep_keys,
+        num_buckets = num_buckets, lifecycle_prefixes = prefixes, verbose = False,
+    )
+
+    sort_cols = ["osm_type", "id", "version"]
+    sm = pd.read_parquet(sm_path).sort_values(sort_cols).reset_index(drop = True)
+    win = pd.read_parquet(win_path).sort_values(sort_cols).reset_index(drop = True)
     sm = sm[sorted(sm.columns)]
     win = win[sorted(win.columns)]
     pd.testing.assert_frame_equal(sm, win, check_dtype = False)

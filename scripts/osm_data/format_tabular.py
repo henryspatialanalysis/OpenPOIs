@@ -35,6 +35,11 @@ Config keys used (config.yaml):
                                     by taxonomy assignment)
     osm_data.tag_key              — single tag key whose changes define
                                     observation events (e.g. "name")
+    osm_data.lifecycle_closure_prefixes
+                                  — lifecycle namespaces (disused:, was:, …)
+                                    whose appearance on a primary filter_keys
+                                    tag is a closure (soft-delete) event; []
+                                    disables (name-only signal, for ablation)
 
 Prerequisites:
     Run osm_data/download_history.py first to produce osm_versions.parquet and
@@ -72,6 +77,12 @@ config = Config("~/repos/openpois/config.yaml")
 SAVE_DIR = config.get_dir_path("osm_data")
 OSM_KEYS = config.get("download", "osm", "filter_keys")
 TAG_KEY = config.get("osm_data", "tag_key")
+# Lifecycle prefixes whose appearance on a POI primary tag is a closure event.
+# Optional; an empty list / missing key disables the behavior (ablation).
+LIFECYCLE_PREFIXES = (
+    config.get("osm_data", "lifecycle_closure_prefixes", fail_if_none = False)
+    or []
+)
 
 CHANGES_PATH = config.get_file_path("osm_data", "osm_changes")
 VERSIONS_PATH = config.get_file_path("osm_data", "osm_versions")
@@ -145,6 +156,7 @@ if __name__ == "__main__":
         output_path = RAW_PATH,
         tag_key = TAG_KEY,
         keep_keys = OSM_KEYS,
+        lifecycle_prefixes = LIFECYCLE_PREFIXES,
         duckdb_memory_limit = DUCKDB_MEMORY_LIMIT,
         duckdb_threads = DUCKDB_THREADS,
     )

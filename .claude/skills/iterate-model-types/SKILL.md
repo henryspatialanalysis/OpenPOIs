@@ -32,11 +32,13 @@ Rerun just the modeling step (step 3 of the full pipeline) for a fixed source-da
    python scripts/models/osm_turnover.py
    ```
 
-5. **Re-rate the snapshot (optional)** — if the rated snapshot should use a different model family, update `osm_data.apply_model.model_stub` and rerun:
+5. **Re-rate the snapshot (optional)** — if the rated snapshot should use this fit, update `osm_data.apply_model.model_stub` and rerun the matching rater:
    ```bash
-   python scripts/osm_snapshot/apply_model.py
+   make rate                                       # random_effects (per-cell) — the default
+   # or, for a legacy constant / random_by_type fit:
+   python scripts/osm_snapshot/apply_model.py      # per-group lookup
    ```
-   `apply_model.py` loads a single `{stub}_by_shared_label` random-effects model (if present) and falls back to `{stub}_constant` for rows with no matching taxonomy label.
+   `make rate` (`apply_model_random_effects.py`) rates each POI from its own `(shared_label, MSA, urban_rural)` cell — use it for any `random_effects` fit. `apply_model.py` is per-group and only valid for `constant`/`random_by_type` fits.
 
 ## Comparing variants
 

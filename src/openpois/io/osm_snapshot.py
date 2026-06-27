@@ -50,12 +50,14 @@ from pathlib import Path
 from typing import NamedTuple
 
 import geopandas as gpd
+import numpy as np
 import osmium
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import requests
 
+from openpois.io._download import download_resilient
 from openpois.io._osm_poi_handler import POIRecordBuilder
 
 
@@ -100,37 +102,10 @@ def download_pbf(
     Raises:
         requests.HTTPError: If the HTTP request fails.
     """
-    output_path = Path(output_path)
-    if output_path.exists() and not overwrite:
-        print(f"PBF already exists at {output_path}; skipping download.")
-        return output_path
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    print(f"Downloading PBF from {url} to {output_path}...")
-    # Write to a temp file in the same directory, then rename atomically so
-    # that a partial download never masquerades as a complete file.
-    with tempfile.NamedTemporaryFile(
-        dir=output_path.parent, delete=False, suffix=".tmp"
-    ) as tmp:
-        tmp_path = Path(tmp.name)
-    try:
-        with requests.get(url, stream=True, timeout=(30, None)) as resp:
-            resp.raise_for_status()
-            total = int(resp.headers.get("content-length", 0))
-            downloaded = 0
-            with open(tmp_path, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=8 * 1024 * 1024):
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total:
-                        pct = 100 * downloaded / total
-                        print(f"  {pct:.1f}%", end="\r")
-        tmp_path.rename(output_path)
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise
-    print(f"\nDownload complete: {output_path}")
-    return output_path
+    # Geofabrik throttles ~1 MB/s per connection and drops the TLS stream
+    # mid-transfer on these multi-GB extracts; download_resilient parallelises
+    # across byte ranges and resumes across drops instead of restarting.
+    return download_resilient(url, output_path, overwrite=overwrite, label="PBF")
 
 
 # -----------------------------------------------------------------------------
@@ -143,6 +118,7 @@ def filter_pbf(
     output_pbf: Path,
     osm_keys: list[str],
     overwrite: bool = False,
+    tag_filter_exprs: list[str] | None = None,
 ) -> Path:
     """
     Runs osmium tags-filter to extract nodes, ways, and relations matching the
@@ -157,8 +133,15 @@ def filter_pbf(
     Args:
         input_pbf: Path to the full PBF extract.
         output_pbf: Path to write the filtered output PBF.
-        osm_keys: OSM tag keys to retain (e.g., ['amenity', 'shop']).
+        osm_keys: OSM tag keys to retain (e.g., ['amenity', 'shop']). Used to
+            build key-level ``nwr/<key>`` expressions when ``tag_filter_exprs``
+            is not supplied.
         overwrite: If False and output_pbf exists, skip filtering.
+        tag_filter_exprs: Optional pre-built osmium filter expressions (e.g.
+            ``["nwr/amenity", "nwr/landuse=cemetery,religious"]``). When given,
+            these are used verbatim instead of ``osm_keys`` — letting callers
+            value-scope individual keys to the taxonomy crosswalk values via
+            ``taxonomy.build_osm_tag_filter_expressions``.
 
     Returns:
         Path to the filtered PBF file.
@@ -178,7 +161,11 @@ def filter_pbf(
     osmium_bin = (
         shutil.which("osmium") or (str(_env_bin) if _env_bin.exists() else "osmium")
     )
-    key_args = [f"nwr/{key}" for key in osm_keys]
+    key_args = (
+        list(tag_filter_exprs)
+        if tag_filter_exprs is not None
+        else [f"nwr/{key}" for key in osm_keys]
+    )
     cmd = [
         osmium_bin, "tags-filter", "--overwrite", "-o", str(output_pbf), str(input_pbf)
     ] + key_args
@@ -193,14 +180,59 @@ def filter_pbf(
 # -----------------------------------------------------------------------------
 
 
+def _drop_excluded_rows(
+    gdf: gpd.GeoDataFrame,
+    exclusions: dict[str, set[str]] | None,
+    filter_keys: list[str] | None,
+) -> gpd.GeoDataFrame:
+    """Drop non-POI rows whose only taxonomy tag(s) are excluded.
+
+    A row is dropped iff it carries at least one excluded ``(key,
+    value)`` tag and has *no* non-excluded value among ``filter_keys``
+    — so a feature that also carries a genuine POI tag (e.g. a
+    restaurant tagged with a picnic table) is kept. ``exclusions`` is
+    the ``{key: {values}}`` mapping from
+    ``taxonomy.get_osm_exclusions``.
+    """
+    if not exclusions or not filter_keys:
+        return gdf
+    n = len(gdf)
+    has_excluded = np.zeros(n, dtype = bool)
+    has_kept = np.zeros(n, dtype = bool)
+    for key in filter_keys:
+        if key not in gdf.columns:
+            continue
+        col = gdf[key]
+        present = col.notna() & (col.astype(str) != "")
+        excl_vals = exclusions.get(key)
+        is_excl = (
+            col.isin(excl_vals)
+            if excl_vals
+            else pd.Series(False, index = col.index)
+        )
+        has_excluded |= (present & is_excl).to_numpy()
+        has_kept |= (present & ~is_excl).to_numpy()
+    drop = has_excluded & ~has_kept
+    if not drop.any():
+        return gdf
+    return gdf.loc[~drop]
+
+
 def _flush_chunk(
     records: list[dict],
     chunk_dir: Path,
     chunk_idx: int,
+    exclusions: dict[str, set[str]] | None = None,
+    filter_keys: list[str] | None = None,
 ) -> Path:
-    """Write a list of record dicts to a temporary GeoParquet chunk file."""
+    """Write a list of record dicts to a temporary GeoParquet chunk file.
+
+    Excluded non-POI rows (see :func:`_drop_excluded_rows`) are filtered
+    out before the chunk is written, keeping them out of the snapshot.
+    """
     df = pd.DataFrame(records)
     gdf = gpd.GeoDataFrame(df, geometry = "geometry", crs = "EPSG:4326")
+    gdf = _drop_excluded_rows(gdf, exclusions, filter_keys)
     chunk_path = chunk_dir / f"chunk_{chunk_idx:04d}.parquet"
     gdf.to_parquet(chunk_path)
     return chunk_path
@@ -267,6 +299,7 @@ def parse_pbf_to_parquet(
     max_area_nodes: int | None = None,
     chunk_dir: Path | None = None,
     verbose: bool = True,
+    exclusions: dict[str, set[str]] | None = None,
 ) -> Path:
     """
     Parses a filtered PBF file with pyosmium and writes the result as a
@@ -333,7 +366,10 @@ def parse_pbf_to_parquet(
             if rec is not None:
                 records.append(rec)
                 if len(records) >= chunk_size:
-                    _flush_chunk(records, work_dir, chunk_idx)
+                    _flush_chunk(
+                        records, work_dir, chunk_idx,
+                        exclusions = exclusions, filter_keys = filter_keys,
+                    )
                     total_records += len(records)
                     if verbose:
                         print(
@@ -345,7 +381,10 @@ def parse_pbf_to_parquet(
 
         # Flush remaining records
         if records:
-            _flush_chunk(records, work_dir, chunk_idx)
+            _flush_chunk(
+                records, work_dir, chunk_idx,
+                exclusions = exclusions, filter_keys = filter_keys,
+            )
             total_records += len(records)
 
         if total_records == 0:
@@ -438,6 +477,8 @@ def _download_filter_parse_to_parquet(
     max_area_nodes: int | None,
     chunk_dir: Path | None,
     verbose: bool,
+    tag_filter_exprs: list[str] | None = None,
+    exclusions: dict[str, set[str]] | None = None,
 ) -> Path:
     """Download a single Geofabrik PBF, filter it, and parse it to a parquet
     file at `parsed_parquet_path` without materialising a GeoDataFrame."""
@@ -451,6 +492,7 @@ def _download_filter_parse_to_parquet(
         output_pbf = filtered_pbf_path,
         osm_keys = filter_keys,
         overwrite = overwrite_filter,
+        tag_filter_exprs = tag_filter_exprs,
     )
     return parse_pbf_to_parquet(
         pbf_path = filtered_pbf_path,
@@ -462,6 +504,7 @@ def _download_filter_parse_to_parquet(
         max_area_nodes = max_area_nodes,
         chunk_dir = chunk_dir,
         verbose = verbose,
+        exclusions = exclusions,
     )
 
 
@@ -478,6 +521,8 @@ def download_osm_snapshot(
     max_area_nodes: int | None = None,
     chunk_dir: Path | None = None,
     verbose: bool = True,
+    tag_filter_exprs: list[str] | None = None,
+    exclusions: dict[str, set[str]] | None = None,
 ) -> Path:
     """
     End-to-end orchestrator: download each Geofabrik extract in ``extracts``,
@@ -505,6 +550,12 @@ def download_osm_snapshot(
             lacking all of these keys are excluded.
         extract_keys: OSM tag keys to include as output columns. If None, all
             tags on accepted elements are extracted.
+        tag_filter_exprs: Optional pre-built osmium ``tags-filter``
+            expressions (see ``filter_pbf``). When given, they replace the
+            key-level expressions derived from ``filter_keys`` for the osmium
+            pass, enabling per-key value scoping to the taxonomy crosswalk.
+            ``filter_keys`` is still used as the element-level filter during
+            parsing.
         overwrite_download: Re-download even if raw paths exist.
         overwrite_filter: Re-filter even if filtered paths exist.
         source_label: Value for the output 'source' column.
@@ -560,6 +611,8 @@ def download_osm_snapshot(
             max_area_nodes = max_area_nodes,
             chunk_dir = chunk_dir,
             verbose = verbose,
+            tag_filter_exprs = tag_filter_exprs,
+            exclusions = exclusions,
         )
         parsed_paths.append(parsed_path)
 

@@ -55,6 +55,11 @@ FILTER_KEYS = config.get("download", "osm", "filter_keys")
 SNAPSHOT_PATH = config.get_file_path("snapshot_osm", "snapshot")
 OUTPUT_PATH = config.get_file_path("snapshot_osm", "rated_snapshot")
 MODEL_BASE = Path(config.get_dir_path("model_output")).parent
+# Default model to rate with: the by_shared_label random_effects fit at the
+# configured apply_model.model_stub (overridable via --model-version).
+DEFAULT_MODEL_VERSION = (
+    f"{config.get('osm_data', 'apply_model', 'model_stub')}_by_shared_label"
+)
 DELTA_GROUP = config.get(
     "osm_turnover_model", "random_effects", "delta_group", fail_if_none = False
 ) or "shared_label"
@@ -153,14 +158,19 @@ if __name__ == "__main__":
         description = "Rate the OSM snapshot with a fitted random_effects model."
     )
     parser.add_argument(
-        "--model-version", required = True,
-        help = "model_output version directory holding the random_effects fit.",
+        "--model-version", default = None,
+        help = (
+            "model_output version directory holding the random_effects fit. "
+            f"Defaults to {DEFAULT_MODEL_VERSION} "
+            "(apply_model.model_stub + '_by_shared_label')."
+        ),
     )
     parser.add_argument(
         "--test", action = "store_true",
         help = "Process only the first 10,000 snapshot rows.",
     )
     args = parser.parse_args()
+    model_version = args.model_version or DEFAULT_MODEL_VERSION
 
     # In --test mode, write beside the real output (don't clobber the
     # production rated snapshot) using a "_test" suffix.
@@ -170,7 +180,7 @@ if __name__ == "__main__":
             f"{OUTPUT_PATH.stem}_test{OUTPUT_PATH.suffix}"
         )
 
-    model_dir = MODEL_BASE / args.model_version
+    model_dir = MODEL_BASE / model_version
     # Resolves Parquet (preferred) or legacy CSV; raises if neither is present.
     reconstruct.resolve_param_draws(model_dir)
     print(f"Loading random_effects artifacts from {model_dir} ...")
@@ -245,7 +255,7 @@ if __name__ == "__main__":
                 values = {
                     "t2_years": t2_years, "conf_mean": cm,
                     "conf_lower": cl, "conf_upper": cu,
-                    "model_version": np.full(len(df), args.model_version, object),
+                    "model_version": np.full(len(df), model_version, object),
                     "model_group": np.asarray(groups, dtype = object),
                 }[field.name]
                 tbl = tbl.append_column(

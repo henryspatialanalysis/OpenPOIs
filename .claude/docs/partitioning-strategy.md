@@ -29,8 +29,8 @@ Confirmed on the real data: `WHERE shared_label = 'Pharmacy'` on the 17.8 M-row 
 | | |
 |---|---|
 | Path | `~/data/openpois/snapshots/osm/<versions.osm_data>/osm_snapshot_partitioned/` |
-| Partition column | derived `primary_tag` ∈ {shop, healthcare, leisure, amenity, tourism, office, craft, historic} |
-| Partitions | 8 |
+| Partition column | derived `primary_tag` ∈ {shop, healthcare, leisure, amenity, tourism, office, craft, historic, landuse} (`landuse` added by the crosswalk-derived value-scoped ingest filter; it appears from the next data pull onward — `20260417` predates it) |
+| Partitions | 8 for `20260417` (9 once `landuse` lands) |
 | Rows | 8,708,504 total for `20260417`. Distribution: amenity 4.90 M, leisure 2.22 M, shop 0.79 M, tourism 0.38 M, office 0.16 M, historic 0.12 M, healthcare 0.11 M, craft 0.03 M |
 | Within-partition sort | ascending `geohash` (precision 6, retained as a column) |
 | Dropped at write | `primary_tag` (lives in the Hive dir name) |
@@ -41,8 +41,10 @@ Confirmed on the real data: `WHERE shared_label = 'Pharmacy'` on the 17.8 M-row 
 ~1.9% of rated OSM POIs carry more than one top-level tag (e.g., OSM id `25603734` has both `shop=convenience` and `amenity=fuel`). To pick one partition per POI we apply the same **first-non-null priority** already used by [assign_osm_shared_label()](../../src/openpois/conflation/taxonomy.py), sourced from [`config.yaml` `download.osm.filter_keys`](../../config.yaml):
 
 ```
-shop > healthcare > leisure > amenity > tourism > office > craft > historic
+shop > healthcare > leisure > amenity > tourism > office > craft > historic > landuse
 ```
+
+`landuse` sits last (lowest priority), so a cemetery also tagged with a more specific POI key is labeled by that key; only `landuse`-only features (value-scoped to `cemetery` / `religious` at ingest) land under `primary_tag=landuse/`.
 
 This keeps OSM-only queries and conflation-side labeling consistent: a shop+amenity POI sits under `primary_tag=shop/` and the conflation side labels it via the `shop` crosswalk. All filter-key tag columns (`shop`, `amenity`, etc.) are retained inside the files, so a secondary filter like `primary_tag = 'shop' AND shop = 'bakery'` still works within the one partition that was opened.
 

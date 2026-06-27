@@ -51,26 +51,16 @@ from pathlib import Path
 
 import duckdb
 import geopandas as gpd
-import numpy as np
 import pandas as pd
 from rapidfuzz import fuzz
-from shapely.geometry import Point
 
 from openpois.conflation.taxonomy import (
     assign_osm_shared_label,
     load_match_radii,
     load_osm_crosswalk,
 )
+from openpois.osm.lifecycle import LIFECYCLE_PREFIXES, is_lifecycle_key
 
-
-LIFECYCLE_PREFIXES = (
-    "disused:",
-    "abandoned:",
-    "demolished:",
-    "was:",
-    "removed:",
-    "razed:",
-)
 
 # Keys we track in the rolling tag dict per element. POI keys come from
 # the caller's ``filter_keys`` (matches ``download.osm.filter_keys`` in
@@ -79,10 +69,6 @@ LIFECYCLE_PREFIXES = (
 _GEOMETRY_KEYS = ("lat", "lon")
 _IDENTITY_KEYS = ("name", "brand")
 _LIFECYCLE_PSEUDO_KEYS = ("visible",)
-
-
-def _is_lifecycle_key(key: str) -> bool:
-    return any(key.startswith(p) for p in LIFECYCLE_PREFIXES)
 
 
 _NAME_TOKEN_SPLIT = re.compile(r"[^a-z0-9]+")
@@ -309,7 +295,7 @@ def _scan_all_changes(
 
         if change == "Added" or change == "Changed":
             state[key] = value
-            if _is_lifecycle_key(key):
+            if is_lifecycle_key(key):
                 added_lifecycle_keys.append(key)
             if key == "name":
                 new_name = value

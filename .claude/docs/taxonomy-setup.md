@@ -19,8 +19,20 @@ All four live at [src/openpois/conflation/data/](../../src/openpois/conflation/d
 
 - Loaders: `load_osm_crosswalk`, `load_overture_crosswalk`, `load_match_radii`, `load_top_level_matches`
 - Assigners: `assign_osm_shared_label`, `assign_overture_shared_label`
+- Ingest filter: `build_osm_tag_filter_expressions`
 
 OSM key priority order for label assignment: **shop > healthcare > leisure > amenity** (specific tags win over generic).
+
+### The crosswalk also drives PBF ingest
+
+`build_osm_tag_filter_expressions(load_osm_crosswalk())` turns the OSM crosswalk into `osmium tags-filter` expressions, so we only ingest tag *values* the taxonomy actually maps. Per `osm_key`:
+
+- has a wildcard `*` row → matched at key level (`nwr/amenity`)
+- no wildcard row → **value-scoped** to the listed values (`nwr/landuse=cemetery,religious`, `nwr/craft=<28 values>`)
+
+Both ingest pipelines consume these via the `tag_filter_exprs` argument — snapshot (`scripts/osm_snapshot/download.py` → `download_osm_snapshot` → `filter_pbf`) and history (`scripts/osm_data/download_history.py` → `download_osm_history` → `filter_history_pbf`). This keeps both POI sets aligned with the taxonomy and avoids dragging in every value of a broad key (e.g. all `landuse=*` polygons).
+
+Consequence when editing the CSV: adding a row under a **wildcard-less** key (currently `landuse`, `craft`) widens what gets ingested on the next data pull; removing one narrows it. Adding a value under a key that has a `*` row changes only the label, not ingest. `config.yaml` `download.osm.filter_keys` must still list every `osm_key` (it sets the label-assignment priority order and the parse-time element gate).
 
 ## Regenerating the site's taxonomy artifacts
 

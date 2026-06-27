@@ -931,6 +931,29 @@ Closing the gap to λ_true requires an independent calibration source we do not
 currently have, and is a fundamental limit of the data source — shared by any
 method built on OSM alone — not a deficiency of the likelihood.
 
+**Partial mitigation — lifecycle-prefix closures (2026-06).** One concrete,
+in-channel way to *raise* `q` for the closure subset: the community marks a
+permanently-closed POI by moving its **primary function tag** into a lifecycle
+namespace (`shop=supermarket` → `disused:shop=supermarket`) while deliberately
+keeping `name` **plain** as a re-map safeguard (per the Close.City editing
+playbook, `wtm.ingest .claude/docs/osm_location_report_edits.md` §3). Because the
+turnover model keys change events off `name`, these closures were previously
+**invisible** — a recorded real-world change scored `changed = 0`. Observation
+formatting now treats a configured lifecycle prefix appearing on any
+`download.osm.filter_keys` tag as a **soft-delete turnover event** (set
+`changed = 1`, null `tag_value`, mirroring the existing `poi_deleted` path); the
+prefix's removal mirrors `poi_re_added`. This is gated on
+`osm_data.lifecycle_closure_prefixes` (default: the six namespaces in
+`openpois.osm.lifecycle.LIFECYCLE_PREFIXES`; set `[]` to ablate). It does **not**
+close the under-reporting gap in general — it only recovers the changes that
+*were* edited but happened to leave `name` untouched — but it is a free,
+data-side correction that nudges `λ̂` upward toward `λ_true` for closures.
+Implementation: `openpois.osm.format_observations` (both the Python state machine
+and the window-SQL engine, kept byte-identical by
+`tests/test_format_observations.py`). The same `LIFECYCLE_PREFIXES` already drive
+the separate ghost-POI / change-detection pipeline
+(`openpois.conflation.ghost_osm`).
+
 ### 9.7 References (new this section)
 
 Overdispersion / dispersion checking:

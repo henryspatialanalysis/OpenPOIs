@@ -135,6 +135,12 @@ def main() -> None:
     identifier_weight = float(
         config.get("conflation", "identifier_weight")
     )
+    # Drop conflated points that never got a shared_label (uncategorized
+    # POIs). Default on; the canonical conflated.parquet is label-only.
+    drop_unlabeled = config.get(
+        "conflation", "drop_unlabeled", fail_if_none = False
+    )
+    drop_unlabeled = True if drop_unlabeled is None else bool(drop_unlabeled)
 
     # R1 needs the rated snapshot; no other auxiliary inputs are
     # needed by the simplified pipeline.
@@ -178,6 +184,7 @@ def main() -> None:
         rated_snapshot_path = rated_snapshot_path,
         survivor_filter = survivor_filter,
         min_prior_name_match_score = min_prior_name_match_score,
+        drop_unlabeled = drop_unlabeled,
     )
     elapsed = time.time() - t0
 

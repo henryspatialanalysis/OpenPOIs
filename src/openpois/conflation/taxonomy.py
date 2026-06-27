@@ -19,6 +19,13 @@ import pandas as pd
 
 WILDCARD = "*"
 
+# Reserved ``shared_label`` sentinel marking an OSM (key, value) pair as a
+# non-POI to be dropped: it never becomes a POI, never inherits the key's
+# ``*`` wildcard label, and is hidden from the public taxonomy category list
+# (shown instead in a dedicated "excluded tags" section). See
+# ``get_osm_exclusions`` / ``drop_osm_exclusions``.
+EXCLUDE_LABEL = "EXCLUDE"
+
 # Bit flags for the Overture L0 categories.  Used by
 # ``compute_osm_l0_bits`` / ``compute_overture_l0_bits`` for
 # fast vectorised broad-match checks in type scoring. Backing
@@ -64,10 +71,113 @@ def load_osm_crosswalk() -> pd.DataFrame:
     return _load_csv("taxonomy_crosswalk_openstreetmap.csv")
 
 
+def build_osm_tag_filter_expressions(
+    osm_crosswalk: pd.DataFrame,
+) -> list[str]:
+    """Build ``osmium tags-filter`` expressions from the OSM crosswalk.
+
+    The crosswalk is the single source of truth for which OSM tags we
+    care about. For each ``osm_key``:
+
+    - If the crosswalk has a wildcard row (``osm_value == "*"``), the
+      whole key is matched: ``nwr/<key>``.
+    - Otherwise only the specific listed values are matched:
+      ``nwr/<key>=<v1>,<v2>,...``.
+
+    This keeps PBF ingest aligned with the taxonomy — we only pull
+    elements whose (key, value) is actually mapped to a shared label
+    (or a key-level wildcard), instead of every element carrying the
+    key (which would drag in e.g. all ``landuse=*`` polygons).
+
+    ``EXCLUDE``-labelled rows are skipped when building value-scoped
+    expressions for keys without a wildcard. (Keys *with* a wildcard
+    still ingest the whole key, including excluded values, which are
+    dropped post-parse by :func:`drop_osm_exclusions`.)
+
+    Returns:
+        A list of ``nwr/...`` expression strings, one per key, ordered
+        by key name. Pass these to ``filter_pbf`` /
+        ``filter_history_pbf`` via ``tag_filter_exprs``.
+    """
+    exprs: list[str] = []
+    for key, grp in osm_crosswalk.groupby("osm_key", sort = True):
+        values = grp["osm_value"].tolist()
+        if WILDCARD in values:
+            exprs.append(f"nwr/{key}")
+        else:
+            not_excluded = grp[grp["shared_label"] != EXCLUDE_LABEL]
+            specific = sorted(
+                str(v) for v in not_excluded["osm_value"].tolist()
+                if v and v != WILDCARD
+            )
+            exprs.append(f"nwr/{key}={','.join(specific)}")
+    return exprs
+
+
+def get_osm_exclusions(
+    osm_crosswalk: pd.DataFrame,
+) -> dict[str, set[str]]:
+    """Return excluded OSM values grouped by key.
+
+    Maps each ``osm_key`` to the set of ``osm_value`` strings whose
+    ``shared_label`` is :data:`EXCLUDE_LABEL` — i.e. non-POI tags
+    (parking, benches, picnic tables, …) that should never produce a
+    POI or an ``Other <X>`` wildcard label.
+    """
+    excl = osm_crosswalk[
+        osm_crosswalk["shared_label"] == EXCLUDE_LABEL
+    ]
+    out: dict[str, set[str]] = {}
+    for key, grp in excl.groupby("osm_key"):
+        out[key] = set(grp["osm_value"].tolist())
+    return out
+
+
+def drop_osm_exclusions(
+    gdf: pd.DataFrame,
+    osm_crosswalk: pd.DataFrame,
+    filter_keys: list[str],
+    match_radii: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Drop non-POI rows whose only taxonomy signal is an excluded tag.
+
+    A row is dropped iff it carries at least one ``EXCLUDE``-labelled
+    ``(key, value)`` tag *and* :func:`assign_osm_shared_label` resolves
+    it to no label (``""``) — so a feature that also carries a genuine
+    POI tag (e.g. a restaurant that happens to be tagged with a picnic
+    table) is preserved, and rows that are unlabelled for unrelated
+    reasons are left untouched.
+
+    Returns a new GeoDataFrame with the offending rows removed and the
+    index reset. ``match_radii`` is only needed to satisfy
+    :func:`assign_osm_shared_label`; radius values are not used here.
+    """
+    exclusions = get_osm_exclusions(osm_crosswalk)
+    if not exclusions:
+        return gdf
+
+    has_excluded = np.zeros(len(gdf), dtype = bool)
+    for key, vals in exclusions.items():
+        if key in gdf.columns:
+            has_excluded |= gdf[key].isin(vals).to_numpy()
+    if not has_excluded.any():
+        return gdf
+
+    if match_radii is None:
+        match_radii = load_match_radii()
+    labels, _ = assign_osm_shared_label(
+        gdf, osm_crosswalk, match_radii, filter_keys,
+    )
+    drop = has_excluded & (labels == "")
+    if not drop.any():
+        return gdf
+    return gdf.loc[~drop].reset_index(drop = True)
+
+
 def load_overture_crosswalk() -> pd.DataFrame:
     """Load the Overture Maps taxonomy crosswalk CSV.
 
-    Columns: ``overture_l0, overture_l1, overture_l2,
+    Columns: ``overture_l0, overture_l1, overture_l2, overture_l3,
     shared_label``.
     """
     return _load_csv("taxonomy_crosswalk_overture_maps.csv")
@@ -193,7 +303,13 @@ def assign_osm_shared_label(
                 mapped_label = (
                     pd.Series(eligible_vals, dtype = str).map(lkp)
                 )
-                found = mapped_label.notna().to_numpy()
+                # EXCLUDE values match the crosswalk but are non-POI:
+                # assign no label, skip the wildcard, and leave the row
+                # unmatched so a lower-priority key can still label it.
+                is_excl = (
+                    mapped_label == EXCLUDE_LABEL
+                ).to_numpy()
+                found = mapped_label.notna().to_numpy() & ~is_excl
                 pos = eligible_idx[found]
                 labels_found = mapped_label.to_numpy()[found]
                 label[pos] = labels_found
@@ -205,7 +321,11 @@ def assign_osm_shared_label(
                 )
                 matched[pos] = True
 
-                not_found = eligible_idx[~found]
+                # Only genuinely-unmapped values (NaN) fall to the
+                # wildcard; excluded values are withheld from it.
+                not_found = eligible_idx[
+                    mapped_label.isna().to_numpy()
+                ]
             else:
                 not_found = eligible_idx
 
@@ -235,7 +355,12 @@ def assign_osm_shared_label(
         eligible_idx = np.where(mask)[0]
         eligible_vals = col.to_numpy()[eligible_idx]
         mapped = pd.Series(eligible_vals, dtype = str).map(lkp)
-        hit = mapped.notna().to_numpy()
+        # Drop EXCLUDE matches: excluded tags are non-POI and must not
+        # count as a specific match (nor fall to the pass-2 wildcard).
+        hit = (
+            mapped.notna().to_numpy()
+            & (mapped.to_numpy() != EXCLUDE_LABEL)
+        )
         if not hit.any():
             continue
         specific_frames.append(
@@ -264,11 +389,19 @@ def assign_osm_shared_label(
         if key not in gdf.columns:
             continue
         col = gdf[key]
+        # Withhold the wildcard from excluded values (non-POI tags).
+        lkp = lookups.get(key)
+        excl_mask = (
+            (col.map(lkp) == EXCLUDE_LABEL)
+            if lkp is not None
+            else pd.Series(False, index = col.index)
+        )
         mask = (
             col.notna()
             & (col != "")
             & ~rows_with_specific
             & ~wildcard_assigned
+            & ~excl_mask
         )
         if not mask.any():
             continue
@@ -332,18 +465,28 @@ def assign_overture_shared_label(
 ) -> tuple[np.ndarray, np.ndarray]:
     """
     Assign a ``shared_label`` and ``match_radius_m`` to each
-    Overture POI using a 4-tier cascade from most to least specific.
+    Overture POI using a 6-tier cascade from most to least specific.
+
+    The Overture ``taxonomy.hierarchy`` is a path from general (L0) to
+    specific; we read up to four levels (``taxonomy_l0/l1/l2/l3`` =
+    ``hierarchy[1..4]``). Crosswalk rows leave deeper columns blank to
+    match a whole subtree, and an ``(L0, L3)`` row targets a single
+    deep leaf regardless of its intermediate parents.
 
     Tiers (applied in order, each only to unmatched rows):
 
-    1. **(L0, L1, L2)** — crosswalk rows with all three populated.
-    2. **(L0, L2)** — L1 empty in crosswalk; matches any L1.
-    3. **(L0, L1)** — L2 empty in crosswalk; catch-all for an L1.
-    4. **L0-only** — both L1 and L2 empty in crosswalk.
+    1. **(L0, L1, L2, L3)** — all four populated; exact path.
+    2. **(L0, L3)** — only L0 and L3 populated; a deep leaf, ignoring
+       L1/L2 (e.g. ``health_care`` + ``speech_therapy``). Runs before
+       the L2 tiers so a leaf wins over its container's catch-all.
+    3. **(L0, L1, L2)** — L1 and L2 populated, L3 blank.
+    4. **(L0, L2)** — only L0 and L2 populated; matches any L1.
+    5. **(L0, L1)** — only L0 and L1 populated; catch-all for an L1.
+    6. **L0-only** — L1, L2, L3 all blank.
 
-    Backward-compatible: if the GeoDataFrame has no
-    ``taxonomy_l2`` column, tiers 1-2 produce no matches and
-    behaviour falls back to the old (L0, L1) + L0 logic.
+    Backward-compatible: if the GeoDataFrame lacks ``taxonomy_l3`` /
+    ``taxonomy_l2`` columns, the tiers that need them produce no
+    matches and behaviour degrades gracefully to the shallower logic.
 
     Returns:
         (shared_label ndarray of object, match_radius_m ndarray of
@@ -355,8 +498,11 @@ def assign_overture_shared_label(
     matched = np.zeros(n, dtype = bool)
 
     cw = overture_crosswalk.copy()
+    if "overture_l3" not in cw.columns:
+        cw["overture_l3"] = ""
     has_l1 = cw["overture_l1"] != ""
     has_l2 = cw["overture_l2"] != ""
+    has_l3 = cw["overture_l3"] != ""
 
     # Build radius dict
     radii_dict: dict[str, float] = {}
@@ -365,41 +511,45 @@ def assign_overture_shared_label(
             row["match_radius_m"]
         )
 
+    def _lookup(mask: pd.Series, key_cols: list[str]) -> pd.Series:
+        """Build a label lookup keyed on ``key_cols`` joined by ``|``."""
+        sub = cw[mask].copy()
+        if sub.empty:
+            return pd.Series(dtype = object)
+        key = sub[key_cols[0]].astype(str)
+        for col in key_cols[1:]:
+            key = key + "|" + sub[col].astype(str)
+        sub["_key"] = key
+        return (
+            sub.drop_duplicates("_key")
+            .set_index("_key")["shared_label"]
+        )
+
     # -- Build lookup tables for each tier --------------------------
 
-    # Tier 1: (L0, L1, L2) — all three populated
-    t1 = cw[has_l1 & has_l2].copy()
-    t1["_key"] = (
-        t1["overture_l0"] + "|"
-        + t1["overture_l1"] + "|"
-        + t1["overture_l2"]
+    t_full_lkp = _lookup(
+        has_l1 & has_l2 & has_l3,
+        ["overture_l0", "overture_l1", "overture_l2", "overture_l3"],
     )
-    t1_lkp = (
-        t1.drop_duplicates("_key")
-        .set_index("_key")["shared_label"]
+    t_l0l3_lkp = _lookup(
+        ~has_l1 & ~has_l2 & has_l3,
+        ["overture_l0", "overture_l3"],
     )
-
-    # Tier 2: (L0, L2) — L1 empty, L2 populated
-    t2 = cw[~has_l1 & has_l2].copy()
-    t2["_key"] = t2["overture_l0"] + "|" + t2["overture_l2"]
-    t2_lkp = (
-        t2.drop_duplicates("_key")
-        .set_index("_key")["shared_label"]
+    t1_lkp = _lookup(
+        has_l1 & has_l2 & ~has_l3,
+        ["overture_l0", "overture_l1", "overture_l2"],
     )
-
-    # Tier 3: (L0, L1) — L1 populated, L2 empty
-    t3 = cw[has_l1 & ~has_l2].copy()
-    t3["_key"] = t3["overture_l0"] + "|" + t3["overture_l1"]
-    t3_lkp = (
-        t3.drop_duplicates("_key")
-        .set_index("_key")["shared_label"]
+    t2_lkp = _lookup(
+        ~has_l1 & has_l2 & ~has_l3,
+        ["overture_l0", "overture_l2"],
     )
-
-    # Tier 4: L0-only — both L1 and L2 empty
-    t4 = cw[~has_l1 & ~has_l2].copy()
-    t4_lkp = (
-        t4.drop_duplicates("overture_l0")
-        .set_index("overture_l0")["shared_label"]
+    t3_lkp = _lookup(
+        has_l1 & ~has_l2 & ~has_l3,
+        ["overture_l0", "overture_l1"],
+    )
+    t4_lkp = _lookup(
+        ~has_l1 & ~has_l2 & ~has_l3,
+        ["overture_l0"],
     )
 
     # -- Extract columns from the data ------------------------------
@@ -412,6 +562,7 @@ def assign_overture_shared_label(
     l0 = _col("taxonomy_l0")
     l1 = _col("taxonomy_l1")
     l2 = _col("taxonomy_l2")
+    l3 = _col("taxonomy_l3")
 
     # -- Helper to apply a tier ------------------------------------
 
@@ -432,30 +583,44 @@ def assign_overture_shared_label(
         )
         matched[idx] = True
 
-    # -- Apply tiers in order --------------------------------------
+    # -- Apply tiers in order (most to least specific) -------------
 
-    # Tier 1: (L0, L1, L2)
+    # Tier 1: (L0, L1, L2, L3)
+    _apply_tier(
+        l0 + "|" + l1 + "|" + l2 + "|" + l3,
+        t_full_lkp,
+        ~matched & (l3 != ""),
+    )
+
+    # Tier 2: (L0, L3) — a deep leaf, ignoring L1/L2
+    _apply_tier(
+        l0 + "|" + l3,
+        t_l0l3_lkp,
+        ~matched & (l3 != ""),
+    )
+
+    # Tier 3: (L0, L1, L2)
     _apply_tier(
         l0 + "|" + l1 + "|" + l2,
         t1_lkp,
-        ~matched & (l0 != ""),
+        ~matched & (l2 != ""),
     )
 
-    # Tier 2: (L0, L2) — ignores L1 in the data
+    # Tier 4: (L0, L2) — ignores L1 in the data
     _apply_tier(
         l0 + "|" + l2,
         t2_lkp,
         ~matched & (l2 != ""),
     )
 
-    # Tier 3: (L0, L1) — catch-all for an L1 group
+    # Tier 5: (L0, L1) — catch-all for an L1 group
     _apply_tier(
         l0 + "|" + l1,
         t3_lkp,
         ~matched & (l1 != ""),
     )
 
-    # Tier 4: L0-only
+    # Tier 6: L0-only
     _apply_tier(
         l0,
         t4_lkp,

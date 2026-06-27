@@ -10,6 +10,8 @@ from openpois.conflation.taxonomy import (
     assign_overture_shared_label,
     compute_osm_l0_bits,
     compute_overture_l0_bits,
+    drop_osm_exclusions,
+    get_osm_exclusions,
     load_match_radii,
     load_osm_crosswalk,
     load_overture_crosswalk,
@@ -24,23 +26,26 @@ from openpois.conflation.taxonomy import (
 
 @pytest.fixture
 def mini_osm_crosswalk():
-    """Small OSM crosswalk for focused tests."""
+    """Small OSM crosswalk for focused tests (incl. EXCLUDE rows)."""
     return pd.DataFrame(
         {
             "osm_key": [
                 "amenity", "amenity", "amenity",
                 "shop", "shop",
                 "leisure",
+                "amenity",
             ],
             "osm_value": [
                 "restaurant", "cafe", "*",
                 "supermarket", "*",
                 "park",
+                "parking",
             ],
             "shared_label": [
                 "Restaurant", "Cafe", "Other Amenity",
                 "Supermarket", "Other Shop",
                 "Park",
+                "EXCLUDE",
             ],
         }
     )
@@ -48,20 +53,23 @@ def mini_osm_crosswalk():
 
 @pytest.fixture
 def mini_overture_crosswalk():
-    """Small Overture crosswalk covering all 4 tiers."""
+    """Small Overture crosswalk covering all 6 tiers."""
     return pd.DataFrame(
         {
             "overture_l0": [
-                # Tier 1: L0 + L1 + L2 (all populated)
+                # Tier 1 (L0+L1+L2+L3) covered implicitly; below uses
+                # the (L0, L1, L2) tier:
                 "food_and_drink", "food_and_drink",
                 "shopping", "shopping",
                 "sports_and_recreation",
-                # Tier 2: L0 + L2 (L1 empty)
+                # (L0, L2) tier — L1 empty:
                 "arts_and_entertainment",
-                # Tier 3: L0 + L1 (L2 empty, catch-all)
+                # (L0, L1) tier — L2 empty, catch-all:
                 "shopping",
-                # Tier 4: L0-only (both L1 and L2 empty)
+                # L0-only tier — L1/L2/L3 empty:
                 "shopping",
+                # (L0, L3) tier — deep leaf, ignores L1/L2:
+                "health_care",
             ],
             "overture_l1": [
                 "restaurant", "beverage_shop",
@@ -69,6 +77,7 @@ def mini_overture_crosswalk():
                 "park",
                 "",
                 "market",
+                "",
                 "",
             ],
             "overture_l2": [
@@ -78,6 +87,16 @@ def mini_overture_crosswalk():
                 "college",
                 "",
                 "",
+                "",
+            ],
+            "overture_l3": [
+                "", "",
+                "", "",
+                "",
+                "",
+                "",
+                "",
+                "speech_therapy",
             ],
             "shared_label": [
                 "Restaurant", "Cafe",
@@ -86,6 +105,7 @@ def mini_overture_crosswalk():
                 "University",
                 "Market",
                 "Other Shop",
+                "Speech Therapist",
             ],
         }
     )
@@ -100,11 +120,13 @@ def mini_match_radii():
                 "Restaurant", "Cafe", "Other Amenity",
                 "Supermarket", "Other Shop", "Park",
                 "Farmers Market", "University", "Market",
+                "Speech Therapist",
             ],
             "match_radius_m": [
                 "100", "100", "100",
                 "200", "100", "200",
                 "100", "200", "50",
+                "50",
             ],
         }
     )
@@ -163,7 +185,7 @@ class TestLoadOvertureCrosswalk:
         cw = load_overture_crosswalk()
         assert set(cw.columns) == {
             "overture_l0", "overture_l1",
-            "overture_l2", "shared_label",
+            "overture_l2", "overture_l3", "shared_label",
         }
 
 
@@ -270,6 +292,64 @@ class TestAssignOsmSharedLabel:
         )
         assert labels[0] == ""
         assert labels[1] == ""
+
+
+class TestOsmExclusions:
+    """EXCLUDE sentinel: non-POI tags dropped, never labelled."""
+
+    FILTER_KEYS = ["shop", "leisure", "amenity"]
+
+    def test_get_osm_exclusions(self, mini_osm_crosswalk):
+        excl = get_osm_exclusions(mini_osm_crosswalk)
+        assert excl == {"amenity": {"parking"}}
+
+    def test_excluded_value_gets_no_label(
+        self, mini_osm_crosswalk, mini_match_radii,
+    ):
+        gdf = pd.DataFrame({"amenity": ["parking"]})
+        labels, _ = assign_osm_shared_label(
+            gdf, mini_osm_crosswalk, mini_match_radii, self.FILTER_KEYS,
+        )
+        # No specific label, and the amenity wildcard is withheld.
+        assert labels[0] == ""
+
+    def test_excluded_does_not_block_other_key(
+        self, mini_osm_crosswalk, mini_match_radii,
+    ):
+        """A higher-priority POI tag still wins over an excluded tag."""
+        gdf = pd.DataFrame(
+            {"amenity": ["parking"], "leisure": ["park"]}
+        )
+        labels, _ = assign_osm_shared_label(
+            gdf, mini_osm_crosswalk, mini_match_radii, self.FILTER_KEYS,
+        )
+        assert labels[0] == "Park"
+
+    def test_excluded_value_return_all_empty(
+        self, mini_osm_crosswalk, mini_match_radii,
+    ):
+        gdf = pd.DataFrame({"amenity": ["parking"]})
+        labels, _ = assign_osm_shared_label(
+            gdf, mini_osm_crosswalk, mini_match_radii,
+            self.FILTER_KEYS, return_all = True,
+        )
+        assert labels[0] == []
+
+    def test_drop_osm_exclusions(
+        self, mini_osm_crosswalk, mini_match_radii,
+    ):
+        gdf = pd.DataFrame(
+            {
+                "amenity": ["parking", "restaurant", "parking"],
+                "leisure": [None, None, "park"],
+            }
+        )
+        out = drop_osm_exclusions(
+            gdf, mini_osm_crosswalk, self.FILTER_KEYS, mini_match_radii,
+        )
+        # Pure parking dropped; restaurant and parking+park kept.
+        assert len(out) == 2
+        assert set(out["amenity"]) == {"restaurant", "parking"}
 
 
 class TestAssignOsmSharedLabelReturnAll:
@@ -579,6 +659,62 @@ class TestAssignOvertureSharedLabel:
             gdf, mini_overture_crosswalk, mini_match_radii,
         )
         assert labels[0] == "Farmers Market"
+
+    def test_l0_l3_deep_leaf_wins_over_l2(
+        self, mini_overture_crosswalk, mini_match_radii,
+    ):
+        """An (L0, L3) row targets a deep leaf and wins over the
+        (L0, L2) container catch-all — e.g. speech_therapy nested
+        under physical_medicine_and_rehabilitation."""
+        cw = pd.concat(
+            [
+                mini_overture_crosswalk,
+                pd.DataFrame(
+                    {
+                        "overture_l0": ["health_care"],
+                        "overture_l1": [""],
+                        "overture_l2": [
+                            "physical_medicine_and_rehabilitation"
+                        ],
+                        "overture_l3": [""],
+                        "shared_label": ["Park"],  # stand-in container
+                    }
+                ),
+            ],
+            ignore_index = True,
+        )
+        gdf = pd.DataFrame(
+            {
+                "taxonomy_l0": ["health_care"],
+                "taxonomy_l1": ["outpatient_care_facility"],
+                "taxonomy_l2": [
+                    "physical_medicine_and_rehabilitation"
+                ],
+                "taxonomy_l3": ["speech_therapy"],
+            }
+        )
+        labels, radii = assign_overture_shared_label(
+            gdf, cw, mini_match_radii,
+        )
+        assert labels[0] == "Speech Therapist"
+        assert radii[0] == 50.0
+
+    def test_backward_compat_no_l3_column(
+        self, mini_overture_crosswalk, mini_match_radii,
+    ):
+        """A GeoDataFrame without taxonomy_l3 still resolves the
+        shallower tiers."""
+        gdf = pd.DataFrame(
+            {
+                "taxonomy_l0": ["food_and_drink"],
+                "taxonomy_l1": ["restaurant"],
+                "taxonomy_l2": ["restaurant"],
+            }
+        )
+        labels, _ = assign_overture_shared_label(
+            gdf, mini_overture_crosswalk, mini_match_radii,
+        )
+        assert labels[0] == "Restaurant"
 
 
 # -----------------------------------------------------------------
