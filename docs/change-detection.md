@@ -136,9 +136,11 @@ does three things:
    nationwide cost ~90 s, ~3-5 GB peak memory.
 
 3. **Penalty** — multiply Overture's `conf_mean` by the fitted δ for the
-   ghost's `shared_label`. δ is the per-group `delta` posterior mean from the
-   `RandomByTypeModel` fit (read from `fitted_params.csv`); falls back to
-   `default_delta` (0.062) for groups absent from the fit. Audit columns are
+   ghost's `shared_label`. δ is the per-shared_label delta from the fit (read
+   from `fitted_params.csv` — `delta` rows for a `random_by_type` fit, or
+   `sigmoid(logit_delta_0 + eta_amenity[label])` for the production
+   `random_effects` fit); falls back to `default_delta` (0.138) for groups
+   absent from the fit. Audit columns are
    appended on penalized rows: `shadow_matched`, `shadow_ghost_id`,
    `shadow_event_type`, `shadow_event_timestamp`, `shadow_score`,
    `shadow_distance_m`, `original_conf_mean`.
@@ -160,7 +162,7 @@ Under `conflation.change_detection` in [config.yaml](../config.yaml):
 | `enabled` | `false` | Reserved; the production gate is the matcher itself, not this flag. |
 | `min_shadow_match_score` | `0.50` | Composite score threshold for the shadow matcher. |
 | `name_change_similarity_threshold` | `50` | Below this `token_set_ratio`, a name change becomes a `substantial_rename` ghost. |
-| `default_delta` | `0.062` | Fallback δ for `shared_label` values absent from the fitted model. Equals `sigmoid(logit_delta_0)` for the current fit. |
+| `default_delta` | `0.138` | Fallback δ for `shared_label` values absent from the fitted model. Equals `sigmoid(logit_delta_0)` for the current fit (`logit_delta_0 = -1.834`, 20260625 random_effects). |
 | `min_prior_name_match_score` | `0` | Hard gate on Overture-vs-prior-name `token_set_ratio` before any composite scoring. **Leave at 0** — values ≥ 70 produce high precision but miss real closures where Overture has updated to a different current business name at a churned address. |
 | `suppress_if_current_survivor.enabled` | `true` | R1 filter on/off. |
 | `suppress_if_current_survivor.radius_m` | `50` | R1 search radius (meters). |

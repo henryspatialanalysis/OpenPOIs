@@ -159,12 +159,16 @@ snapshot (Pipeline 1) to assign a confidence score to every POI.
 
 .. code-block:: bash
 
-   python scripts/osm_snapshot/apply_model.py
-   python scripts/osm_snapshot/apply_model.py --test   # first 10 k rows only
+   make rate            # scripts/osm_snapshot/apply_model_random_effects.py
+   make rate TEST=1     # first 10 k rows only
 
-Matches each POI to its best-fit model group (by tag key priority), then
-looks up the predicted change probability at the POI's age. Adds columns
-``conf_mean``, ``conf_lower``, ``conf_upper``, ``t2_years``,
+The production model is ``random_effects`` (location-aware), so rate with the
+per-cell rater ``apply_model_random_effects.py`` (wrapped by ``make rate``) —
+**not** ``apply_model.py``, which is per-group only and cannot apply the
+multi-factor fit. It enriches each POI with its MSA / urbanicity, reconstructs
+that POI's own ``(shared_label, MSA, urban_rural)`` cell curve from the
+posterior draws, and looks up the predicted change probability at the POI's
+age. Adds columns ``conf_mean``, ``conf_lower``, ``conf_upper``, ``t2_years``,
 ``model_version``, and ``model_group``. Output: ``osm_snapshot_rated.parquet``.
 
 See :mod:`openpois.models.apply`.
