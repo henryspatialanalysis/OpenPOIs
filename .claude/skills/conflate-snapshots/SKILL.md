@@ -112,7 +112,11 @@ upload for web consumption.
 
 ## Next
 
-- Bump the frontend: [skills/update-site](../update-site/SKILL.md).
+- **Always bump the frontend after a successful upload** — the site's PMTiles
+  URLs are pinned to a version folder and do **not** auto-follow new uploads, so
+  a refresh isn't complete until the frontend points at the new
+  `versions.source_coop`. Treat this as a required step of every monthly refresh,
+  not an optional follow-up: [skills/update-site](../update-site/SKILL.md).
 
 ## Key code
 

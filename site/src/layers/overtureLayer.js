@@ -1,5 +1,7 @@
 import VectorTileLayer from 'ol/layer/VectorTile'
 import { PMTilesVectorSource } from 'ol-pmtiles'
+import { createXYZ } from 'ol/tilegrid'
+import { get as getProjection } from 'ol/proj'
 import { Style, Circle, Fill, Stroke } from 'ol/style'
 import {
   confidenceColor,
@@ -14,14 +16,35 @@ let layer = null
 // Style cache keyed by conf bucket (same discretisation as OSM layer)
 const styleCache = {}
 
+// Overture's hosted PMTiles archive contains tiles at z14 ONLY (unlike our
+// OSM/conflated archives, which carry a z10–z14 pyramid). OpenLayers does not
+// down-sample vector tiles, so without intervention Overture renders nothing
+// below z14. We pin the source tile grid to a single z14 level so OL reuses
+// the z14 tiles at lower view zooms (under-zoom), and floor rendering at
+// OVERTURE_MIN_ZOOM so we don't try to load a metro's worth of z14 tiles when
+// zoomed way out. Below the floor the UI shows a "zoom in" hint instead.
+export const OVERTURE_MIN_ZOOM = 13
+
+const overtureTileGrid = createXYZ({
+  extent: getProjection('EPSG:3857').getExtent(),
+  minZoom: 14,
+  maxZoom: 14,
+  tileSize: 512,
+})
+
 export function getOvertureLayer() {
   if (layer) return layer
 
   layer = new VectorTileLayer({
-    source: new PMTilesVectorSource({ url: OVERTURE_PMTILES_URL }),
+    source: new PMTilesVectorSource({
+      url: OVERTURE_PMTILES_URL,
+      tileGrid: overtureTileGrid,
+    }),
     style: overtureTileStyle,
     zIndex: 10,
     visible: false,
+    // minZoom is exclusive: the layer renders only at view zoom > OVERTURE_MIN_ZOOM.
+    minZoom: OVERTURE_MIN_ZOOM,
   })
   return layer
 }
