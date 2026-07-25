@@ -43,6 +43,27 @@ Reference for every external data source openpois ingests. For the workflow that
   - Geofabrik extracts are pre-cut to admin boundaries → no polygon post-filter needed. `american-oceania-latest.osm.pbf` ships a few non-target uninhabited US Pacific possessions (Wake, Midway, Howland, Baker, Jarvis, Palmyra, Kingman); they contain near-zero POIs and pass through as bonus coverage. **Note**: these POIs are *not* in the Census boundary polygon, so they pass through OSM but get dropped by Overture's `ST_Within` and won't appear in the conflated output. Any per-state rollup of the OSM-only snapshot will show them with an unrecognized `addr:state` (or no value) — expected, not a bug.
   - **Config key naming asymmetry**: `usvi_*` (lowercase abbrev) and `american_oceania_*` (underscored words). Easy to mistype. If a future extract is added, pick the convention that matches the closest existing key.
 
+### Exclusion: unnamed private / no-access POIs
+
+Added 2026-07-25. OSM POIs that are **unnamed** (no `name` tag) **and** tagged
+`access=private` or `access=no` are excluded from the published dataset. In the
+July 2026 snapshot this drops **477,287 POIs (8.7%)** — 471,483 unnamed
+`access=private` plus 5,804 unnamed `access=no` — leaving 5,015,126. The removed
+set is overwhelmingly `leisure=swimming_pool` residential / HOA pools (the
+`Swimming Pool` shared_label alone is ~470K of them, ~99% unnamed).
+
+Rationale: these are anonymous, non-public features that add noise without value.
+They are also irrelevant to the turnover model, which measures **name changes** —
+a POI with no name contributes no name-change signal — so excluding them leaves
+the fitted λ essentially unchanged and the model is **not** re-fit for this
+filter. `access=restricted` is intentionally **not** excluded: those rows are
+mostly named facilities (only ~10% unnamed).
+
+For the 2026-07 run the filter was applied post-hoc, by subsetting the
+probability-scored snapshot (`osm_snapshot_rated.parquet`) before re-running
+conflation. Future runs should apply it at ingest so the snapshot, rating, and
+conflation all see the reduced set from the start — tracked in [TODO.md](../TODO.md).
+
 ## Overture Maps
 
 **Used by**: current-state Overture snapshot (`overture_snapshot.parquet`).
