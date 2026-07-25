@@ -60,6 +60,7 @@ from openpois.conflation.merge import (
     build_merge_parts_chunked,
     save_conflated_from_parts,
 )
+from openpois.conflation.spill import spill_rows
 from openpois.conflation.taxonomy import (
     assign_osm_shared_label,
     assign_overture_shared_label,
@@ -167,9 +168,9 @@ OVERTURE_MATCH_COLS = [
     "overture_id", "taxonomy_l0", "taxonomy_l1", "taxonomy_l2", "taxonomy_l3",
     "overture_name", "brand_name", "confidence", "geometry",
 ]
-# Columns needed downstream by ``build_merge_parts*``. Reloaded into
-# memory after the chunked matcher returns so the matching phase can
-# run without the full source GeoDataFrames resident.
+# Columns needed downstream by ``build_merge_parts*``. Always
+# reloaded from disk after matching completes so the matching phase
+# can run without the full source GeoDataFrames resident.
 OSM_MERGE_COLS = [
     "osm_id", "osm_type", "name", "brand",
     "conf_mean", "conf_lower", "conf_upper", "geometry",
@@ -189,6 +190,16 @@ OVERTURE_MERGE_COLS = [
     # Contact arrays + alternates
     "overture_websites", "overture_phones", "overture_socials",
     "overture_categories_alternate",
+]
+# Column set for the post-dedup Overture spill: the union of the
+# match and merge schemas. The spill backs BOTH the resume path
+# (match columns, incl. taxonomy_l*) and the merge-phase reload
+# (contact + address columns), so it must carry the full union.
+# Writing it from the narrow in-memory match frame is the bug that
+# silently nulled every Overture contact/address field in the
+# conflated output.
+OVERTURE_SPILL_COLS = OVERTURE_MATCH_COLS + [
+    c for c in OVERTURE_MERGE_COLS if c not in OVERTURE_MATCH_COLS
 ]
 
 
@@ -240,28 +251,53 @@ def _write_dedup_audit(
 
 
 def _load_gdf(
-    path, columns, test_bbox = None, label = "dataset"
+    path, columns, test_bbox = None, label = "dataset",
+    require_all = False, return_source_rows = False,
 ):
-    """Load a GeoParquet, optionally filtering to a test bbox."""
+    """Load a GeoParquet, optionally filtering to a test bbox.
+
+    Args:
+        require_all: If True, raise when any requested column is
+            missing from the file instead of silently loading the
+            intersection. Used for merge-phase reloads, where a
+            missing column would otherwise surface as silent nulls
+            in the conflated output.
+        return_source_rows: If True, also return the positional
+            indices of the loaded rows within the on-disk file
+            (identity unless ``test_bbox`` filters rows).
+    """
     print(f"Loading {label} from {path} ...")
     # Read only needed columns
     avail_cols = pq.read_schema(path).names
+    missing = [c for c in columns if c not in avail_cols]
+    if missing and require_all:
+        raise ValueError(
+            f"{label} at {path} is missing required columns: "
+            f"{missing}"
+        )
+    if missing:
+        print(
+            f"  WARNING: columns not in file, skipped: {missing}"
+        )
     cols = [c for c in columns if c in avail_cols]
     gdf = gpd.read_parquet(path, columns = cols)
     print(f"  Loaded {len(gdf):,} rows ({len(cols)} columns)")
 
+    source_rows = np.arange(len(gdf), dtype = np.int64)
     if test_bbox is not None:
         bbox_geom = box(
             test_bbox["xmin"], test_bbox["ymin"],
             test_bbox["xmax"], test_bbox["ymax"],
         )
-        gdf = gdf[gdf.geometry.within(bbox_geom)].reset_index(
-            drop = True
-        )
+        within = gdf.geometry.within(bbox_geom).to_numpy()
+        source_rows = source_rows[within]
+        gdf = gdf[within].reset_index(drop = True)
         print(
             f"  Filtered to test bbox: {len(gdf):,} rows"
         )
 
+    if return_source_rows:
+        return gdf, source_rows
     return gdf
 
 
@@ -315,9 +351,10 @@ if __name__ == "__main__":
         test_bbox = test_bbox, label = "OSM rated",
     )
     log_rss("after OSM load")
-    overture_gdf = _load_gdf(
+    overture_gdf, overture_source_rows = _load_gdf(
         OVERTURE_PATH, OVERTURE_MATCH_COLS,
         test_bbox = test_bbox, label = "Overture",
+        return_source_rows = True,
     )
     log_rss("after Overture load")
 
@@ -355,15 +392,37 @@ if __name__ == "__main__":
     # indices match the match-phase output.
     overture_merge_source_path = OVERTURE_PATH
     overture_merge_needs_test_bbox = True
-    post_dedup_resume_path = conflation_dir / DEDUP_POST_FILTER_FILE
+    # Keep test-bbox spills separate from full-run spills so a --test
+    # run can never seed the full run's resume path (or vice versa)
+    # with a mismatched row set.
+    dedup_spill_name = (
+        "overture_post_dedup_test.parquet" if args.test
+        else DEDUP_POST_FILTER_FILE
+    )
+    post_dedup_resume_path = conflation_dir / dedup_spill_name
     if DEDUP_ENABLED and post_dedup_resume_path.exists():
         print(
             f"\nReusing post-dedup Overture from "
             f"{post_dedup_resume_path} (skipping dedup pass)."
         )
-        overture_gdf = (
-            gpd.read_parquet(post_dedup_resume_path)
-            .reset_index(drop = True)
+        # Fail fast on a spill written by an older run that lacked
+        # the merge columns — reusing one would null every Overture
+        # contact/address field at merge time.
+        spill_cols = pq.read_schema(post_dedup_resume_path).names
+        stale = [
+            c for c in OVERTURE_SPILL_COLS if c not in spill_cols
+        ]
+        if stale:
+            raise ValueError(
+                f"Post-dedup spill {post_dedup_resume_path} is "
+                f"missing columns {stale} — it was written by an "
+                f"older run. Delete it and re-run to regenerate."
+            )
+        del overture_source_rows
+        overture_gdf = _load_gdf(
+            post_dedup_resume_path, OVERTURE_MATCH_COLS,
+            label = "Overture (post-dedup spill)",
+            require_all = True,
         )
         overture_shared_labels, overture_radii = (
             assign_overture_shared_label(
@@ -425,9 +484,10 @@ if __name__ == "__main__":
         overture_shared_labels = overture_shared_labels[keep_mask]
         overture_radii = overture_radii[keep_mask]
         overture_l0_bits = overture_l0_bits[keep_mask]
+        kept_source_rows = overture_source_rows[keep_mask]
         del (
             no_conflate, dedup_components,
-            dedup_pairs, keep_mask,
+            dedup_pairs, keep_mask, overture_source_rows,
         )
         gc.collect()
         if dedup_checkpoint_dir.exists():
@@ -440,21 +500,42 @@ if __name__ == "__main__":
         # Spill post-dedup Overture to disk so the later merge-phase
         # reload sees rows whose indices match the match-phase output
         # (the pre-dedup snapshot on disk would misalign against
-        # ``matches.overture_idx``). Minimal column set — merge adds
-        # no metadata beyond what's already here.
-        overture_merge_source_path = (
-            conflation_dir / DEDUP_POST_FILTER_FILE
-        )
+        # ``matches.overture_idx``). The kept rows are streamed
+        # straight from the source snapshot with the full match+merge
+        # column union — the in-memory frame only holds the narrow
+        # match schema, and spilling it would (and previously did)
+        # null every Overture contact/address column downstream.
+        overture_merge_source_path = post_dedup_resume_path
         overture_merge_source_path.parent.mkdir(
             parents = True, exist_ok = True,
         )
-        overture_gdf.to_parquet(
-            overture_merge_source_path, compression = "zstd",
+        # ``spill_rows`` emits rows in ascending source order; the
+        # in-memory frame must share that order or ``overture_idx``
+        # would scramble at merge time. Load + boolean filters
+        # preserve it — guard against a future upstream reorder.
+        if not np.all(np.diff(kept_source_rows) > 0):
+            raise RuntimeError(
+                "kept_source_rows is not strictly increasing — "
+                "overture_gdf was reordered before the spill."
+            )
+        n_spilled = spill_rows(
+            OVERTURE_PATH,
+            overture_merge_source_path,
+            kept_source_rows,
+            OVERTURE_SPILL_COLS,
         )
+        if n_spilled != len(overture_gdf):
+            raise RuntimeError(
+                f"Post-dedup spill wrote {n_spilled:,} rows but "
+                f"{len(overture_gdf):,} survived dedup in memory — "
+                f"row indices would misalign at merge time."
+            )
+        del kept_source_rows
         overture_merge_needs_test_bbox = False
         log_rss("after Overture dedup filter")
     else:
         print("\nOverture internal deduplication disabled.")
+        del overture_source_rows
 
     # -- OSM taxonomy assignment -----------------------------------
     print("\nAssigning OSM shared labels ...")
@@ -641,26 +722,50 @@ if __name__ == "__main__":
     )
     n_matches = len(matches)
 
-    if chunk_summary is not None:
-        # Reload only the columns the merge needs — the matching
-        # phase has already returned the dedup-resolved matches, so
-        # we no longer need the wide load schema.
-        print("  Reloading source frames for merge ...")
-        osm_gdf = _load_gdf(
-            OSM_PATH, OSM_MERGE_COLS,
-            test_bbox = test_bbox, label = "OSM (merge cols)",
+    # Reload both source frames with the merge schema. Matching runs
+    # on a narrow match-only column set (and the chunked driver frees
+    # the frames entirely), so the merge always re-reads from disk to
+    # pick up the contact/address columns. ``require_all`` turns a
+    # missing merge column into a hard error instead of silent nulls
+    # in the conflated output.
+    if chunk_summary is None:
+        del osm_gdf, overture_gdf
+        gc.collect()
+    print("  Reloading source frames for merge ...")
+    osm_gdf = _load_gdf(
+        OSM_PATH, OSM_MERGE_COLS,
+        test_bbox = test_bbox, label = "OSM (merge cols)",
+        require_all = True,
+    )
+    overture_gdf = _load_gdf(
+        overture_merge_source_path,
+        OVERTURE_MERGE_COLS,
+        test_bbox = (
+            test_bbox if overture_merge_needs_test_bbox
+            else None
+        ),
+        label = "Overture (merge cols)",
+        require_all = True,
+    )
+    # The reloaded frames must line up row-for-row with the arrays
+    # the match phase indexed into; anything else silently scrambles
+    # matched attributes.
+    if len(osm_gdf) != len(osm_shared_labels):
+        raise RuntimeError(
+            f"OSM merge reload returned {len(osm_gdf):,} rows but "
+            f"matching ran on {len(osm_shared_labels):,} — did "
+            f"{OSM_PATH} change mid-run?"
         )
-        overture_gdf = _load_gdf(
-            overture_merge_source_path,
-            OVERTURE_MERGE_COLS,
-            test_bbox = (
-                test_bbox if overture_merge_needs_test_bbox
-                else None
-            ),
-            label = "Overture (merge cols)",
+    if len(overture_gdf) != len(overture_shared_labels):
+        raise RuntimeError(
+            f"Overture merge reload returned "
+            f"{len(overture_gdf):,} rows but matching ran on "
+            f"{len(overture_shared_labels):,} — did "
+            f"{overture_merge_source_path} change mid-run?"
         )
-        log_rss("after reload for merge")
+    log_rss("after reload for merge")
 
+    if chunk_summary is not None:
         part_paths = build_merge_parts_chunked(
             osm_gdf = osm_gdf,
             overture_gdf = overture_gdf,
