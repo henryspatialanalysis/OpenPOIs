@@ -76,6 +76,13 @@ Confirm `conf_mean`, `conf_lower`, `conf_upper` columns are populated for every 
 ```
 
 - Match rate per label in `summary_by_label.csv` should resemble prior run. Large drifts → parameter regression or crosswalk edit.
+- **Attribute-coverage check** (added 2026-07 after the merge-phase column bug): non-null share of contact/address columns per `source` class must be far from zero.
+  ```python
+  import pandas as pd
+  df = pd.read_parquet(path, columns = ["source", "phone", "website", "addr_street"])
+  print(df.groupby("source").agg(lambda s: s.notna().mean()))
+  ```
+  Overture-sourced rows should sit near the snapshot's coverage (~90% phone, ~80% website, ~98% street as of 2026-07); OSM-sourced rows are much sparser but still nonzero. **Near-0% on any source class** means merge-phase column plumbing regressed again (see `spill_rows` + `require_all` in `conflate.py`). Caveat: conflated outputs from **before 2026-07-24 carry this bug** (0% on Overture rows) — don't baseline coverage against them.
 - `match_diagnostics.parquet` for per-pair forensics when specific matches look wrong.
 - **Territory match rates**: expect **lower** OSM × Overture match rates in territories than in CONUS — smaller mapper communities on both sides mean more source-only POIs. A territory match rate that looks CONUS-like is suspicious (possibly accepting cross-territory candidates with overly loose thresholds, or the conflation polygon clip missed a region).
 

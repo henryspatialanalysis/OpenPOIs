@@ -214,7 +214,12 @@ reading `/proc/self/status`. Key memory tactics:
   parquet glob, instead of pandas concat + sort + drop_duplicates
 - `osm_gdf` / `overture_gdf` are dropped during chunked matching (only
   centroids are kept for the BallTree) and reloaded with narrow merge-only
-  columns before the merge step
+  columns before the merge step. The post-dedup Overture spill backing that
+  reload is streamed row-group-by-row-group from the source snapshot with the
+  full match+merge column union (`spill.py`) — never from the narrow in-memory
+  match frame, which would (and once did) silently null every Overture
+  contact/address column in the output. The merge reload hard-fails on any
+  missing column or row-count misalignment instead of null-filling
 - Name scoring uses rapidfuzz (C++ backend, ~100x faster than difflib)
 - Output is Hilbert-sorted for efficient cloud-native range reads
 
@@ -227,6 +232,7 @@ src/openpois/conflation/
     taxonomy.py                     # Crosswalk loading and category assignment
     match.py                        # Spatial search, scoring, match selection
     merge.py                        # Confidence blending and output assembly
+    spill.py                        # Row-filtered streaming spill (post-dedup Overture)
 
 scripts/conflation/
     conflate.py                     # Driver script (loads config, calls library)
