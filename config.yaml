@@ -1,16 +1,16 @@
 # Versioned directories (used with config.get_dir_path())
 versions:
-  osm_data: "20260625"
-  model_output: "20260625_by_shared_label"
-  snapshot_osm: "20260625"
-  snapshot_overture: "20260617"
-  conflation: "20260625"
+  osm_data: "20260724"
+  model_output: "20260724_by_shared_label"
+  snapshot_osm: "20260724"
+  snapshot_overture: "20260722"
+  conflation: "20260724"
   source_coop: "2026-06-27-v0"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
   # Ghost POI dataset reconstructed from OSM history (one row per
   # detected previous-state event). Pinned to the same value as
   # ``osm_data`` since it is derived from the same history parquets,
   # and regenerated together with the monthly snapshot refresh.
-  ghost_osm: "20260625"
+  ghost_osm: "20260724"
 
 # Settings for downloading data
 download:
@@ -28,7 +28,7 @@ download:
       coastline_buffer_m: 100
   osm:
     start_date: 2016-01-01
-    end_date: 2025-12-31
+    end_date: 2026-07-22
     # Snapshot extracts. Geofabrik publishes a dedicated PBF for PR and USVI
     # under north-america/us/, but the western-Pacific inhabited territories
     # (Guam, Northern Mariana Islands, American Samoa) have no per-territory
@@ -80,7 +80,7 @@ download:
       'website','wikidata','wikipedia'
     ]
   overture:
-    release_date: "2026-06-17.0"  # pin for determinism; null = auto-detect latest
+    release_date: "2026-07-22.0"  # pin for determinism; null = auto-detect latest
     s3_bucket: "overturemaps-us-west-2"
     s3_region: "us-west-2"
     # DuckDB resource caps for the per-part S3 scans and the final polygon
@@ -155,7 +155,7 @@ osm_data:
     - last_obs_timestamp
     - last_tag_timestamp
   apply_model:
-    model_stub: '20260625'
+    model_stub: '20260724'
 
 # Settings for scripts/models/osm_turnover.py (JAX turnover model)
 osm_turnover_model:
@@ -401,8 +401,8 @@ conflation:
     name_change_similarity_threshold: 50
     # Fallback delta for ghosts whose shared_label isn't in the fitted
     # model's per-group params. Equals sigmoid(logit_delta_0) for the
-    # current 20260625_by_shared_label fit (logit_delta_0 = -1.834).
-    default_delta: 0.138
+    # current 20260724_by_shared_label fit (logit_delta_0 = -1.809).
+    default_delta: 0.141
     # Hard gate on Overture-name vs ghost-prior-name token_set_ratio
     # (0-100), applied *before* the composite-score-based shadow
     # matcher. The default 0 keeps the loose matcher: any spatial +
@@ -443,8 +443,8 @@ publish:
   # Values surfaced in the per-version README. Set each round until the
   # pipeline captures them automatically — see .claude/TODO.md.
   version_metadata:
-    osm_snapshot_date: "2026-06-25"   # YYYY-MM-DD Geofabrik download date
-    overture_release: "2026-06-17.0"  # Overture Maps release ID, https://docs.overturemaps.org/release-calendar/
+    osm_snapshot_date: "2026-07-24"   # YYYY-MM-DD Geofabrik download date
+    overture_release: "2026-07-22.0"  # Overture Maps release ID, https://docs.overturemaps.org/release-calendar/
     model_commit: null                # null → use current git HEAD; set a short SHA to pin
   # PMTiles generation — multi-zoom archive z10–z14 for both OSM and conflated.
   # Site's View.minZoom is 10 (full-metro view). z10–z14 are served directly
