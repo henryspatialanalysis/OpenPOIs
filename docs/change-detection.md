@@ -139,11 +139,24 @@ does three things:
    ghost's `shared_label`. δ is the per-shared_label delta from the fit (read
    from `fitted_params.csv` — `delta` rows for a `random_by_type` fit, or
    `sigmoid(logit_delta_0 + eta_amenity[label])` for the production
-   `random_effects` fit); falls back to `default_delta` (0.138) for groups
+   `random_effects` fit); falls back to `default_delta` (0.141) for groups
    absent from the fit. Audit columns are
    appended on penalized rows: `shadow_matched`, `shadow_ghost_id`,
    `shadow_event_type`, `shadow_event_timestamp`, `shadow_score`,
    `shadow_distance_m`, `original_conf_mean`.
+
+**Memory-bounded I/O.** `apply_shadow_match` never materializes the full
+conflated baseline. It reads only the columns the shadow matcher needs
+(`geometry`, `source`, `shared_label`, `name`, `brand`, and the three `conf_*`
+columns), computes the per-row confidence updates and audit arrays, then streams
+the baseline back out row-group by row-group via `_write_cd_output` — copying the
+~40 pass-through Overture attribute columns straight from disk and overwriting
+only the confidence + audit columns per batch (unlabeled rows are dropped on the
+way out). A single-shot `gpd.read_parquet` of the wide baseline (49 columns once
+every Overture contact/address field is retained) materializes ~22 GB of shapely
+geometry plus object strings and OOM-crashes the 24 GB WSL guest; the streamed
+path holds one batch at a time and peaks near 10 GB. The pass-through columns are
+copied as raw Arrow, so geometry is byte-preserved with no shapely round-trip.
 
 ### 4. Downstream consumption
 
@@ -162,7 +175,7 @@ Under `conflation.change_detection` in [config.yaml](../config.yaml):
 | `enabled` | `false` | Reserved; the production gate is the matcher itself, not this flag. |
 | `min_shadow_match_score` | `0.50` | Composite score threshold for the shadow matcher. |
 | `name_change_similarity_threshold` | `50` | Below this `token_set_ratio`, a name change becomes a `substantial_rename` ghost. |
-| `default_delta` | `0.138` | Fallback δ for `shared_label` values absent from the fitted model. Equals `sigmoid(logit_delta_0)` for the current fit (`logit_delta_0 = -1.834`, 20260625 random_effects). |
+| `default_delta` | `0.141` | Fallback δ for `shared_label` values absent from the fitted model. Equals `sigmoid(logit_delta_0)` for the current fit (`logit_delta_0 = -1.809`, 20260724 random_effects). |
 | `min_prior_name_match_score` | `0` | Hard gate on Overture-vs-prior-name `token_set_ratio` before any composite scoring. **Leave at 0** — values ≥ 70 produce high precision but miss real closures where Overture has updated to a different current business name at a churned address. |
 | `suppress_if_current_survivor.enabled` | `true` | R1 filter on/off. |
 | `suppress_if_current_survivor.radius_m` | `50` | R1 search radius (meters). |

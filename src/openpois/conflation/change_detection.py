@@ -28,6 +28,7 @@ import duckdb
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import pyarrow.parquet as pq
 from rapidfuzz import fuzz
 from sklearn.neighbors import BallTree
@@ -449,6 +450,133 @@ def apply_current_survivor_filter(
     return kept, int(len(suppress_idx_set))
 
 
+# Audit column (name, pyarrow type) specs for the change-detection
+# output. Types are pinned explicitly rather than inferred so that a
+# streamed batch of mostly-null ghost columns can't infer an
+# inconsistent (e.g. null) type across batches. ``ghost_id`` and
+# ``event_type`` originate from ``large_string`` ghost columns but the
+# legacy full-frame writer materialized them via object arrays, which
+# pyarrow rendered as ``string``; keep that to stay byte-compatible with
+# prior outputs.
+_AUDIT_FIELD_SPECS = [
+    ("shadow_matched", pa.bool_()),
+    ("shadow_ghost_id", pa.string()),
+    ("shadow_event_type", pa.string()),
+    ("shadow_event_timestamp", pa.timestamp("ns", tz = "UTC")),
+    ("shadow_score", pa.float64()),
+    ("shadow_distance_m", pa.float64()),
+    ("original_conf_mean", pa.float64()),
+]
+
+
+def _write_cd_output(
+    *,
+    baseline_path: Path,
+    output_path: Path,
+    keep_mask: np.ndarray,
+    new_conf_mean: np.ndarray,
+    new_conf_lower: np.ndarray,
+    new_conf_upper: np.ndarray,
+    shadow_matched: np.ndarray,
+    shadow_ghost_id: np.ndarray,
+    shadow_event_type: np.ndarray,
+    shadow_event_timestamp: pd.Series,
+    shadow_score: np.ndarray,
+    shadow_distance_m: np.ndarray,
+    original_conf_mean: np.ndarray,
+    chunk_rows: int = 2_000_000,
+    verbose: bool = True,
+) -> int:
+    """Stream ``baseline_path`` to ``output_path`` applying CD updates.
+
+    The confidence columns are overwritten and the change-detection
+    audit columns appended, one row-group batch at a time. Pass-through
+    (Overture attribute) columns are copied straight from the on-disk
+    batch, so peak memory is a single batch rather than the whole frame.
+    Every update array is indexed in the original on-disk row order and
+    length; ``keep_mask`` drops the unlabeled rows on the way out
+    (mirroring ``drop_unlabeled``). Returns the number of rows written.
+    """
+    pf = pq.ParquetFile(str(baseline_path))
+    base_schema = pf.schema_arrow
+    # Preserve the GeoParquet ``geo`` schema metadata (geometry column +
+    # CRS) so downstream gpd.read_parquet still recognizes the output.
+    out_schema = pa.schema(
+        list(base_schema)
+        + [pa.field(name, typ) for name, typ in _AUDIT_FIELD_SPECS],
+        metadata = base_schema.metadata,
+    )
+
+    ts_values = pd.Series(shadow_event_timestamp).reset_index(drop = True)
+    conf_updates = (
+        ("conf_mean", new_conf_mean),
+        ("conf_lower", new_conf_lower),
+        ("conf_upper", new_conf_upper),
+    )
+    written = 0
+    offset = 0
+    with pq.ParquetWriter(
+        str(output_path), out_schema, compression = "zstd",
+    ) as writer:
+        for batch in pf.iter_batches(batch_size = chunk_rows):
+            m = batch.num_rows
+            s, e = offset, offset + m
+            offset = e
+            tbl = pa.Table.from_batches([batch], schema = batch.schema)
+            # Overwrite the confidence columns in place (same positions).
+            for col, arr in conf_updates:
+                idx = tbl.schema.get_field_index(col)
+                tbl = tbl.set_column(
+                    idx, col, pa.array(arr[s:e], type = pa.float64())
+                )
+            # Append the audit columns, pinned to the fixed specs.
+            tbl = tbl.append_column(
+                "shadow_matched",
+                pa.array(shadow_matched[s:e], type = pa.bool_()),
+            )
+            tbl = tbl.append_column(
+                "shadow_ghost_id",
+                pa.array(shadow_ghost_id[s:e], type = pa.string()),
+            )
+            tbl = tbl.append_column(
+                "shadow_event_type",
+                pa.array(shadow_event_type[s:e], type = pa.string()),
+            )
+            tbl = tbl.append_column(
+                "shadow_event_timestamp",
+                pa.array(
+                    ts_values.iloc[s:e].to_numpy(dtype = "datetime64[ns]"),
+                    type = pa.timestamp("ns", tz = "UTC"),
+                ),
+            )
+            tbl = tbl.append_column(
+                "shadow_score",
+                pa.array(shadow_score[s:e], type = pa.float64()),
+            )
+            tbl = tbl.append_column(
+                "shadow_distance_m",
+                pa.array(shadow_distance_m[s:e], type = pa.float64()),
+            )
+            tbl = tbl.append_column(
+                "original_conf_mean",
+                pa.array(original_conf_mean[s:e], type = pa.float64()),
+            )
+            # Drop unlabeled rows for this batch.
+            km = keep_mask[s:e]
+            if not km.all():
+                tbl = tbl.filter(pa.array(km))
+            # Force the exact output schema (types + geo metadata) so the
+            # writer accepts every batch identically.
+            tbl = tbl.cast(out_schema)
+            writer.write_table(tbl)
+            written += tbl.num_rows
+            del tbl, batch
+            gc.collect()
+    if verbose:
+        print(f"  Wrote {written:,} rows to {output_path}")
+    return written
+
+
 def apply_shadow_match(
     conflated_path: Path,
     ghosts_path: Path,
@@ -499,20 +627,40 @@ def apply_shadow_match(
     """
     if verbose:
         print(f"Reading conflated parquet from {conflated_path} ...")
-    conflated = gpd.read_parquet(conflated_path)
+    # Memory-bounded read: the change-detection computation only needs
+    # geometry + the match/confidence columns. The other ~40 wide
+    # Overture attribute columns are pass-through and get streamed
+    # straight from disk to the output in ``_write_cd_output``, so the
+    # full 49-column frame is never materialized at once. (A plain
+    # gpd.read_parquet of the post-#787e131 baseline -- which restored
+    # all Overture contact/address columns -- peaks ~22 GB and OOMs the
+    # 24 GB WSL guest.)
+    light_cols = [
+        "geometry", "source", "shared_label", "name", "brand",
+        "conf_mean", "conf_lower", "conf_upper",
+    ]
+    conflated = gpd.read_parquet(conflated_path, columns = light_cols)
+    n0 = len(conflated)
     if verbose:
-        print(f"  {len(conflated):,} rows")
+        print(f"  {n0:,} rows (light read of {len(light_cols)} cols)")
 
+    # drop_unlabeled is applied as a boolean mask in the original on-disk
+    # row order (not an index-resetting subset) so the per-row update
+    # arrays stay positionally aligned with the baseline when the full
+    # frame is streamed back out row-group by row-group.
     if drop_unlabeled:
         sl = conflated["shared_label"]
-        keep = sl.notna() & (sl.astype(str).str.strip() != "")
-        n_drop = int((~keep).sum())
-        conflated = conflated.loc[keep].reset_index(drop = True)
-        if verbose:
-            print(
-                f"  Dropped {n_drop:,} rows without a shared_label "
-                f"-> {len(conflated):,} remain"
-            )
+        keep_mask = (
+            sl.notna() & (sl.astype(str).str.strip() != "")
+        ).to_numpy()
+    else:
+        keep_mask = np.ones(n0, dtype = bool)
+    n_drop = int((~keep_mask).sum())
+    if drop_unlabeled and verbose:
+        print(
+            f"  {n_drop:,} rows without a shared_label will be dropped "
+            f"-> {n0 - n_drop:,} written"
+        )
 
     if verbose:
         print(f"Reading ghosts from {ghosts_path} ...")
@@ -547,7 +695,9 @@ def apply_shadow_match(
     # Isolate the unmatched-Overture subset; this is the only segment
     # the change-detection pass touches.
     is_ov = conflated["source"].to_numpy() == "overture"
-    ov_global_idx = np.where(is_ov)[0]
+    # Only rows that survive drop_unlabeled are eligible, matching the
+    # original "drop unlabeled first, then select Overture" ordering.
+    ov_global_idx = np.where(is_ov & keep_mask)[0]
     if verbose:
         print(
             f"Unmatched Overture rows in baseline: "
@@ -700,32 +850,41 @@ def apply_shadow_match(
     n_ghosts_in = int(len(ghosts))
     n_shadow_matches = int(len(matches))
 
-    # On nationwide data the original "copy then write" path peaked
-    # past the 24 GB WSL cap (≈18M-row shapely-geometry GDF + a full
-    # .copy() + the pyarrow Table materialized inside to_parquet +
-    # the 9M-row unmatched_ov subset). Free the scratch state before
-    # the write peak.
-    del ghosts, matches
+    # Free the light computation frame and matcher scratch. The heavy
+    # pass-through columns were never loaded here -- they are streamed
+    # straight off disk in ``_write_cd_output`` below.
+    del ghosts, matches, conflated
     if "unmatched_ov" in locals():
         del unmatched_ov  # noqa: F821 -- only bound in the else branch
     gc.collect()
 
-    # Mutate conflated in place rather than allocating a full copy:
-    # the un-penalized baseline isn't needed after this point and the
-    # audit data is held in standalone numpy arrays.
-    conflated["conf_mean"] = new_conf_mean
-    conflated["conf_lower"] = new_conf_lower
-    conflated["conf_upper"] = new_conf_upper
-    conflated["shadow_matched"] = shadow_matched
-    conflated["shadow_ghost_id"] = shadow_ghost_id
-    conflated["shadow_event_type"] = shadow_event_type
-    conflated["shadow_event_timestamp"] = shadow_event_timestamp.values
-    conflated["shadow_score"] = shadow_score
-    conflated["shadow_distance_m"] = shadow_distance_m
-    conflated["original_conf_mean"] = original_conf_mean
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents = True, exist_ok = True)
+    if verbose:
+        print(f"Writing {output_path} ...")
 
-    # Pandas copied each array on assignment, so the standalone
-    # references are now redundant -- drop them before the write.
+    # Stream the full baseline back out row-group by row-group, applying
+    # the recomputed confidence + audit columns per batch and dropping
+    # the unlabeled rows. Peak memory is a single batch of pass-through
+    # columns, not the full 49-column frame -- this is what keeps the
+    # post-#787e131 (wide) baseline under the 24 GB WSL cap.
+    _write_cd_output(
+        baseline_path = conflated_path,
+        output_path = output_path,
+        keep_mask = keep_mask,
+        new_conf_mean = new_conf_mean,
+        new_conf_lower = new_conf_lower,
+        new_conf_upper = new_conf_upper,
+        shadow_matched = shadow_matched,
+        shadow_ghost_id = shadow_ghost_id,
+        shadow_event_type = shadow_event_type,
+        shadow_event_timestamp = shadow_event_timestamp,
+        shadow_score = shadow_score,
+        shadow_distance_m = shadow_distance_m,
+        original_conf_mean = original_conf_mean,
+        chunk_rows = 2_000_000,
+        verbose = verbose,
+    )
     del (
         new_conf_mean, new_conf_lower, new_conf_upper,
         shadow_matched, shadow_ghost_id, shadow_event_type,
@@ -734,35 +893,8 @@ def apply_shadow_match(
     )
     gc.collect()
 
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents = True, exist_ok = True)
-    if verbose:
-        print(f"Writing {output_path} ...")
-
-    # Stream the write in row-group chunks. The default
-    # GeoDataFrame.to_parquet materializes a full pyarrow Table
-    # alongside the live GDF, doubling peak memory; on 18M-row
-    # nationwide inputs that exceeds the 24 GB WSL cap.
-    from geopandas.io.arrow import _geopandas_to_arrow
-
-    chunk_rows = 2_000_000
-    sample_tbl = _geopandas_to_arrow(conflated.iloc[:1])
-    schema = sample_tbl.schema
-    del sample_tbl
-    with pq.ParquetWriter(
-        str(output_path), schema, compression = "zstd",
-    ) as writer:
-        for start in range(0, n, chunk_rows):
-            end = min(start + chunk_rows, n)
-            chunk_tbl = _geopandas_to_arrow(
-                conflated.iloc[start:end]
-            )
-            writer.write_table(chunk_tbl)
-            del chunk_tbl
-            gc.collect()
-
     summary = {
-        "n_total": int(n),
+        "n_total": int(keep_mask.sum()),
         "n_unmatched_overture": int(len(ov_global_idx)),
         "n_ghosts": n_ghosts_in,
         "n_shadow_matches": n_shadow_matches,
