@@ -27,6 +27,8 @@ Downloads the snapshot sources (50 US states + DC + 5 inhabited territories: PR,
    ```
    `model_output` does **not** bump unless you're re-fitting λ from scratch (see [skills/model-history-pipeline](../model-history-pipeline/SKILL.md)). See [docs/data-versioning.md](../../docs/data-versioning.md).
 
+   **Also advance `download.osm.end_date` each month** to this run's cutoff — the Overture release date is a convenient anchor (e.g. `2026-07-22`). It bounds the osmium time-filter window for the history download, so leaving it pinned to a fixed past date silently drops every edit after that date from **both** ghost reconstruction and any λ refit — the history stops moving forward even though you re-download it. `start_date` stays fixed at `2016-01-01`.
+
 2. **Run the downloads** (independent — order doesn't matter, can run in parallel):
 
    ```bash
