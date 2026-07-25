@@ -65,12 +65,30 @@ Everything in [site/src/constants.js](../../site/src/constants.js) now derives f
 
 When a new `osm_key` or `overture_l0` is added to the CSVs, `check_taxonomy_sync.py` prints a `WARN:` line pointing at any missing display-label entries. Missing entries fall back to the raw key — ugly but not broken.
 
-## Upcoming Overture migration (~June 2026)
+## Checking taxonomy drift between Overture releases
 
-Overture is deprecating the L0/L1/L2 `categories` hierarchy in favor of a flat `basic_category` field. When that happens:
+Run `scripts/overture/compare_taxonomy.py` whenever switching to a new Overture
+release. It scans the release's `taxonomy` over S3 and reports: the schema shape
+(confirms `taxonomy` is still the `{primary, hierarchy[], alternates[]}` struct),
+the distinct `(L0..L3)` tuples added/removed versus the prior snapshot and versus
+`taxonomy_crosswalk_overture_maps.csv`, and any allowlisted-but-unmapped tuples.
+The expensive S3 census is cached to CSV; re-run the report offline with
+`--from-census-csv`. As of the `2026-07-22.0` release the July check found no
+crosswalk or allowlist changes were needed.
 
-- `taxonomy_crosswalk_overture_maps.csv` schema will need to change from `(overture_l0, overture_l1, overture_l2)` to `(basic_category)` or equivalent.
+## Possible future Overture migration to a flat `basic_category`
+
+Overture has long signaled it may deprecate the `categories` hierarchy in favor
+of a flat `basic_category` field. This has **not** happened as of the
+`2026-07-22.0` release — the data is still the nested `taxonomy.hierarchy[]`
+(deepened to four levels in June 2026), and `basic_category` exists alongside it.
+If the flat migration ever lands:
+
+- `taxonomy_crosswalk_overture_maps.csv` schema will need to change from
+  `(overture_l0, overture_l1, overture_l2, overture_l3)` to `(basic_category)` or
+  equivalent.
 - `assign_overture_shared_label` in `taxonomy.py` will need updating to use the new field.
 - `scripts/overture/download.py` → SQL queries against `taxonomy.hierarchy[1]` will need updating.
 
-Track the migration status in the Overture Maps changelog.
+Track the migration status in the Overture Maps changelog and via the
+`compare_taxonomy.py` schema check above.
