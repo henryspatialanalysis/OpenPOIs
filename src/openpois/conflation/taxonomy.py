@@ -11,6 +11,7 @@ match radii and top-level OSM-key-to-Overture-L0 mappings.
 """
 from __future__ import annotations
 
+import re
 from importlib import resources
 
 import numpy as np
@@ -43,7 +44,43 @@ L0_BIT: dict[str, int] = {
     "education": 512,
     "travel_and_transportation": 1024,
     "lodging": 2048,
+    "geographic_entities": 4096,
 }
+
+# --- Marketplace name refinement ---------------------------------
+# OSM has no tag separating farmers markets from flea/public/general
+# markets (``marketplace=*`` is used on 7 US features and the wiki
+# documents no companion tag), so ``amenity=marketplace`` is split on
+# the name. The regexes below do the work; the CSV holds only the
+# handful of names they get wrong (see
+# ``scripts/conflation/classify_marketplaces.py``).
+MARKETPLACE_KEY = "amenity"
+MARKETPLACE_VALUE = "marketplace"
+MARKETPLACE_CACHE_FILENAME = "marketplace_name_labels.csv"
+# Derived (OSM label, Overture label) similarity used by the matcher's type
+# score; see docs/type-affinity-metric.md.
+TYPE_AFFINITY_FILENAME = "type_affinity.csv"
+MARKETPLACE_DEFAULT_LABEL = "Market"
+MARKETPLACE_LABELS = ("Farmers Market", "Market")
+
+# Explicitly some other kind of market. Checked first: "antique farm
+# equipment flea market" is a flea market, not a farmers market.
+MARKETPLACE_RE_MARKET = re.compile(
+    r"\bflea\b|\bswap\b|\bantique|\bbazaar\b|\btrade day|\bnight market\b"
+    r"|\bpublic market\b|\bfish market\b|\bstreet market\b|\bmercado\b"
+    r"|\bmeat market\b|\bstock ?yard|\blivestock\b|\bauction\b"
+)
+# Grower / produce vocabulary. ``farm`` is deliberately unanchored so it
+# also catches farmstand, freshfarm and farmers'. ``grove`` is
+# deliberately absent — Oak Grove, Elk Grove and friends are place
+# names, not orchards.
+MARKETPLACE_RE_FARMERS = re.compile(
+    r"farm|\bgrowers?\b|\bgrown\b|greensgrow|\borchards?\b"
+    r"|\bproduce\b|\bfruits?\b|\bvegetables?\b|\bveggies?\b|\bmelons?\b"
+    r"|\bberr(y|ies)\b|sweet corn|\bcrops?\b|\bharvest\b"
+    r"|\btailgate\b|\bcurb market\b|\bagricultur(e|al)\b|\bcsa\b"
+    r"|\bgreen ?markets?\b|\bfresh for all\b|\bfamers?\b"
+)
 
 
 # -----------------------------------------------------------------
@@ -199,6 +236,141 @@ def load_top_level_matches() -> pd.DataFrame:
     return _load_csv("top_level_matches.csv")
 
 
+def load_marketplace_names() -> pd.DataFrame:
+    """Load the marketplace name → label exceptions.
+
+    Columns: ``name_normalized, shared_label, source``. Only names the
+    regexes in :func:`classify_marketplace_name` get wrong live here,
+    so the file stays short; an absent file just means no exceptions.
+    """
+    cols = ["name_normalized", "shared_label", "source"]
+    try:
+        return _load_csv(MARKETPLACE_CACHE_FILENAME)
+    except FileNotFoundError:
+        return pd.DataFrame({c: pd.Series(dtype = str) for c in cols})
+
+
+def classify_marketplace_name(name_normalized: str) -> str:
+    """Label a normalized marketplace name from the regexes alone.
+
+    Returns :data:`MARKETPLACE_DEFAULT_LABEL` for anything that is not
+    positively a farmers market — "market" on its own means nothing.
+    """
+    if not name_normalized:
+        return MARKETPLACE_DEFAULT_LABEL
+    if MARKETPLACE_RE_MARKET.search(name_normalized):
+        return "Market"
+    if MARKETPLACE_RE_FARMERS.search(name_normalized):
+        return "Farmers Market"
+    return MARKETPLACE_DEFAULT_LABEL
+
+
+def load_type_affinity() -> pd.DataFrame:
+    """Load the (OSM label, Overture label) type-affinity table.
+
+    Columns: ``osm_label, overture_label, affinity, s_lin, s_emp,
+    n_confirmed``. Built by ``scripts/conflation/build_type_affinity.py``;
+    see docs/type-affinity-metric.md. Only non-zero pairs are stored, so an
+    absent pair means affinity 0. An absent file yields an empty frame, and
+    the matcher falls back to exact-match-only scoring.
+    """
+    cols = [
+        "osm_label", "overture_label", "affinity",
+        "s_lin", "s_emp", "n_confirmed",
+    ]
+    try:
+        return _load_csv(TYPE_AFFINITY_FILENAME)
+    except FileNotFoundError:
+        return pd.DataFrame({c: pd.Series(dtype = str) for c in cols})
+
+
+def build_affinity_matrix(
+    affinity: pd.DataFrame,
+) -> tuple[dict[str, int], np.ndarray]:
+    """Compact the affinity table into a label index + dense matrix.
+
+    Returns ``(label_to_idx, matrix)`` where ``matrix[i, j]`` is the affinity
+    of OSM label *i* against Overture label *j*. Dense lookup keeps type
+    scoring a single fancy-index into a small float array rather than a
+    per-pair dict hit, which matters at ~10^8 candidate pairs.
+
+    Identity is forced to 1.0 for any label present, so a label pair the
+    table omits still scores full marks against itself.
+    """
+    labels = sorted(
+        set(affinity["osm_label"]) | set(affinity["overture_label"])
+    )
+    idx = {lb: i for i, lb in enumerate(labels)}
+    matrix = np.zeros((len(labels), len(labels)), dtype = np.float32)
+    for row in affinity.itertuples():
+        i = idx.get(row.osm_label)
+        j = idx.get(row.overture_label)
+        if i is not None and j is not None:
+            matrix[i, j] = float(row.affinity)
+    if len(labels):
+        np.fill_diagonal(matrix, 1.0)
+    return idx, matrix
+
+
+def normalize_marketplace_name(name: object) -> str:
+    """Normalize a POI name for marketplace cache lookup.
+
+    Lowercases, strips everything but ASCII alphanumerics, and collapses
+    whitespace, so ``"Pike Place Farmers' Market"`` and ``"pike place
+    farmers market"`` hit the same cache row.
+    """
+    if not isinstance(name, str):
+        return ""
+    lowered = re.sub(r"[^a-z0-9 ]+", " ", name.lower())
+    return re.sub(r"\s+", " ", lowered).strip()
+
+
+def refine_marketplace_labels(
+    gdf: pd.DataFrame,
+    label: np.ndarray,
+    radius: np.ndarray,
+    radii_dict: dict[str, float],
+    default_radius_m: float,
+    marketplace_names: pd.DataFrame | None = None,
+) -> None:
+    """Split ``amenity=marketplace`` rows into Market / Farmers Market.
+
+    Mutates ``label`` and ``radius`` in place for rows the crosswalk
+    resolved to :data:`MARKETPLACE_DEFAULT_LABEL` via
+    ``amenity=marketplace`` — a marketplace that also carries a
+    higher-priority tag (say ``shop=supermarket``) keeps that label.
+    :func:`classify_marketplace_name` decides, overridden by the
+    exceptions CSV where it is known to be wrong.
+    """
+    if MARKETPLACE_KEY not in gdf.columns:
+        return
+    is_market = (
+        gdf[MARKETPLACE_KEY].to_numpy() == MARKETPLACE_VALUE
+    ) & (label == MARKETPLACE_DEFAULT_LABEL)
+    if not is_market.any():
+        return
+
+    if marketplace_names is None:
+        marketplace_names = load_marketplace_names()
+    lookup = dict(
+        zip(
+            marketplace_names["name_normalized"],
+            marketplace_names["shared_label"],
+        )
+    )
+
+    names = (
+        gdf["name"].to_numpy()
+        if "name" in gdf.columns
+        else np.full(len(gdf), "", dtype = object)
+    )
+    for i in np.where(is_market)[0]:
+        norm = normalize_marketplace_name(names[i])
+        resolved = lookup.get(norm) or classify_marketplace_name(norm)
+        label[i] = resolved
+        radius[i] = radii_dict.get(resolved, default_radius_m)
+
+
 # -----------------------------------------------------------------
 # Shared-label assignment — OSM
 # -----------------------------------------------------------------
@@ -337,6 +509,9 @@ def assign_osm_shared_label(
                 )
                 matched[not_found] = True
 
+        refine_marketplace_labels(
+            gdf, label, radius, radii_dict, default_radius_m,
+        )
         return label, radius
 
     # --- return_all=True path ------------------------------------
@@ -431,6 +606,30 @@ def assign_osm_shared_label(
         empty_labels: list[list[str]] = [[] for _ in range(n)]
         empty_radii: list[list[float]] = [[] for _ in range(n)]
         return empty_labels, empty_radii
+
+    # Same marketplace split as the single-label path, applied to the
+    # exploded rows so model observations carry the refined label too.
+    market_rows = long_df["label"] == MARKETPLACE_DEFAULT_LABEL
+    if market_rows.any():
+        lookup = dict(
+            zip(
+                (mk := load_marketplace_names())["name_normalized"],
+                mk["shared_label"],
+            )
+        )
+        names = (
+            gdf["name"].to_numpy()
+            if "name" in gdf.columns
+            else np.full(n, "", dtype = object)
+        )
+
+        def _market_label(row_idx: int) -> str:
+            norm = normalize_marketplace_name(names[row_idx])
+            return lookup.get(norm) or classify_marketplace_name(norm)
+
+        long_df.loc[market_rows, "label"] = (
+            long_df.loc[market_rows, "row_idx"].map(_market_label)
+        )
 
     long_df = long_df.drop_duplicates(subset = ["row_idx", "label"])
     long_df["radius"] = (
