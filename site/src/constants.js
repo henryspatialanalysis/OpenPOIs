@@ -50,6 +50,7 @@ const OVERTURE_L0_LABELS = {
   education: 'Education',
   travel_and_transportation: 'Travel & Transportation',
   lodging: 'Lodging',
+  geographic_entities: 'Geographic Features',
 }
 
 export const OSM_FILTER_KEYS = OSM_KEYS.map(key => ({
