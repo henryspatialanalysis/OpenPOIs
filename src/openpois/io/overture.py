@@ -273,7 +273,8 @@ def _download_one_part(
     between parts.
 
     Output schema: source, overture_id, release_date, taxonomy_l0/l1/l2/l3,
-    overture_categories_alternate, overture_name, brand_name, confidence,
+    overture_categories_alternate, overture_name, brand_name, brand_wikidata,
+    confidence,
     overture_addr_street/city/state/postcode/country, overture_websites,
     overture_phones, overture_socials, longitude, latitude. No geometry
     column — geometry is built in the final merge step.
@@ -296,6 +297,7 @@ def _download_one_part(
                 categories.alternate AS overture_categories_alternate,
                 names.primary AS overture_name,
                 brand.names.primary AS brand_name,
+                brand.wikidata AS brand_wikidata,
                 confidence,
                 addresses[1].freeform AS overture_addr_street,
                 addresses[1].locality AS overture_addr_city,
@@ -378,6 +380,7 @@ def _finalize_snapshot_in_duckdb(
                 p.overture_categories_alternate,
                 p.overture_name,
                 p.brand_name,
+                p.brand_wikidata,
                 p.confidence,
                 p.overture_addr_street,
                 p.overture_addr_city,
