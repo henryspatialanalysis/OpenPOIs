@@ -1,42 +1,59 @@
-﻿osm_key,osm_value,shared_label
+osm_key,osm_value,shared_label
 shop,alcohol,Liquor Store
+shop,antiques,Specialty Store
+shop,appliance,Specialty Store
 shop,bakery,Bakery
 shop,beauty,Hair and Beauty
 shop,bicycle,Bike shop
+shop,boat,Car Dealer
 shop,books,Bookstore
+shop,cannabis,Cannabis Dispensary
 shop,car,Car Dealer
+shop,caravan,Car Dealer
 shop,car_parts,Car Repair
 shop,car_repair,Car Repair
 shop,chemist,Pharmacy
 shop,clothes,Clothing Store
 shop,convenience,Convenience Store
+shop,copyshop,Print and Copy Shop
+shop,deli,Fast Food
 shop,department_store,Clothing Store
 shop,doityourself,Specialty Store
 shop,dry_cleaning,Dry Cleaning
+shop,e-cigarette,Specialty Store
+shop,electronics,Specialty Store
 shop,florist,Florist
+shop,funeral_directors,Funeral Services
 shop,furniture,Furniture Store
 shop,garden_centre,Garden Store
 shop,gift,Specialty Store
 shop,hairdresser,Hair and Beauty
 shop,hardware,Hardware
 shop,jewelry,Jewelry Store
+shop,kiosk,Convenience Store
 shop,laundry,Laundromat
 shop,locksmith,Home Service
 shop,mall,Shopping Center
 shop,massage,Massage Therapy
 shop,mobile_phone,Cell Phone Store
+shop,money_lender,Other Financial
+shop,motorcycle,Car Dealer
 shop,optician,Eye Care
+shop,pawnbroker,Thrift Store
 shop,pet,Pet Store
+shop,pet_grooming,Pet Store
 shop,second_hand,Thrift Store
 shop,shoes,Shoe Store
 shop,sports,Sports Outlet
-shop,storage_rental,Specialty Store
+shop,storage_rental,Self-Storage
 shop,supermarket,Supermarket
-shop,wholesale,Supermarket
+shop,tattoo,Tattoo and Piercing
 shop,tobacco,Specialty Store
 shop,tires,Tire Store
+shop,trade,Hardware
 shop,tyres,Tire Store
 shop,variety_store,Discount Store
+shop,wholesale,Wholesale Store
 healthcare,alternative,Alternative Medicine
 healthcare,blood_donation,Other Healthcare
 healthcare,chiropractor,Other Healthcare
@@ -56,11 +73,15 @@ healthcare,physiotherapist,Physical Therapy
 healthcare,psychotherapist,Mental Health
 healthcare,rehabilitation,Physical Therapy
 healthcare,speech_therapist,Speech Therapist
+amenity,animal_boarding,Pet Store
+amenity,animal_shelter,Animal Shelter
 amenity,arts_centre,Arts Venue
 amenity,atm,ATM
 amenity,bank,Bank
 amenity,bar,Bar
 amenity,biergarten,Bar
+amenity,boat_storage,Self-Storage
+amenity,bureau_de_change,Other Financial
 amenity,cafe,Cafe
 amenity,car_rental,Car Rental
 amenity,car_wash,Car Wash
@@ -71,30 +92,41 @@ amenity,cinema,Movie Theater
 amenity,clinic,Clinic
 amenity,college,University
 amenity,community_centre,Community Center
+amenity,conference_centre,Event Venue
 amenity,courthouse,Government Office
+amenity,dancing_school,Performing Arts
 amenity,dentist,Dentist
 amenity,doctors,Clinic
+amenity,dojo,Fitness Center
+amenity,driving_school,School
+amenity,events_venue,Event Venue
+amenity,exhibition_centre,Event Venue
 amenity,fast_food,Fast Food
 amenity,fire_station,Public Safety
 amenity,food_court,Restaurant
 amenity,fuel,Gas Station
-amenity,funeral_hall,Cemetery
+amenity,funeral_hall,Funeral Services
 amenity,grave_yard,Cemetery
 amenity,hospital,Hospital
 amenity,ice_cream,Dessert Shop
 amenity,kindergarten,Kindergarten
 amenity,library,Library
 amenity,marketplace,Market
+amenity,money_transfer,Other Financial
 amenity,museum,Museum
+amenity,music_school,School
 amenity,nightclub,Nightclub
 amenity,pharmacy,Pharmacy
 amenity,place_of_worship,Place of Worship
 amenity,police,Public Safety
 amenity,post_office,Post Office
+amenity,prep_school,School
 amenity,pub,Bar
 amenity,restaurant,Restaurant
 amenity,school,School
 amenity,social_centre,Social Club
+amenity,social_facility,Community Center
+amenity,stripclub,Nightclub
 amenity,theatre,Performing Arts
 amenity,toilets,Public Restroom
 amenity,townhall,Government Office
@@ -127,7 +159,7 @@ tourism,alpine_hut,Hotel
 tourism,apartment,Hotel
 tourism,aquarium,Recreation
 tourism,artwork,Other Amenity
-tourism,attraction,Other Amenity
+tourism,attraction,Recreation
 tourism,camp_site,Campground
 tourism,caravan_site,Campground
 tourism,chalet,Hotel
@@ -137,12 +169,11 @@ tourism,hostel,Hotel
 tourism,hotel,Hotel
 tourism,motel,Hotel
 tourism,museum,Museum
-tourism,picnic_site,Other Amenity
 tourism,theme_park,Recreation
 tourism,viewpoint,Other Amenity
 tourism,wilderness_hut,Hotel
 tourism,zoo,Recreation
-office,accountant,Other Professional
+office,accountant,Other Financial
 office,advertising_agency,Other Professional
 office,architect,Other Professional
 office,association,Community Center
@@ -161,6 +192,7 @@ office,insurance,Other Financial
 office,it,Other Professional
 office,lawyer,Legal Service
 office,logistics,Other Professional
+office,moving_company,Home Service
 office,newspaper,Other Professional
 office,ngo,Community Center
 office,notary,Legal Service
@@ -169,7 +201,7 @@ office,property_management,Real Estate
 office,religion,Place of Worship
 office,research,Other Professional
 office,security,Other Professional
-office,tax_advisor,Other Professional
+office,tax_advisor,Other Financial
 office,telecommunication,Other Professional
 craft,brewery,Bar
 craft,builder,Home Service
@@ -199,32 +231,68 @@ craft,tailor,Clothing Store
 craft,upholsterer,Home Service
 craft,window_construction,Home Service
 craft,winery,Bar
+historic,aircraft,Historic Site
+historic,archaeological_site,Historic Site
+historic,battlefield,Historic Site
+historic,castle,Historic Site
+historic,cemetery,Cemetery
+historic,church,Historic Site
+historic,city_gate,Historic Site
+historic,fort,Historic Site
+historic,locomotive,Historic Site
+historic,manor,Historic Site
+historic,maritime,Historic Site
+historic,memorial,Historic Site
+historic,monument,Historic Site
+historic,naval,Historic Site
+historic,ruins,Historic Site
+historic,ship,Historic Site
+historic,tomb,Historic Site
 landuse,cemetery,Cemetery
 landuse,religious,Place of Worship
 amenity,bbq,EXCLUDE
 amenity,bench,EXCLUDE
 amenity,bicycle_parking,EXCLUDE
+amenity,bicycle_rental,EXCLUDE
+amenity,bicycle_repair_station,EXCLUDE
+amenity,clock,EXCLUDE
+amenity,compressed_air,EXCLUDE
 amenity,drinking_water,EXCLUDE
+amenity,hunting_stand,EXCLUDE
 amenity,letter_box,EXCLUDE
 amenity,loading_dock,EXCLUDE
+amenity,parcel_locker,EXCLUDE
 amenity,parking,EXCLUDE
 amenity,parking_entrance,EXCLUDE
 amenity,parking_space,EXCLUDE
+amenity,payment_terminal,EXCLUDE
 amenity,post_box,EXCLUDE
+amenity,public_bookcase,EXCLUDE
+amenity,sanitary_dump_station,EXCLUDE
 amenity,shelter,EXCLUDE
+amenity,telephone,EXCLUDE
+amenity,trolley_bay,EXCLUDE
+amenity,vacuum_cleaner,EXCLUDE
 amenity,vending_machine,EXCLUDE
 amenity,waste_basket,EXCLUDE
 amenity,waste_disposal,EXCLUDE
+amenity,water_point,EXCLUDE
+amenity,watering_place,EXCLUDE
+amenity,weighbridge,EXCLUDE
 leisure,bleachers,EXCLUDE
 leisure,firepit,EXCLUDE
+leisure,fitness_station,EXCLUDE
+leisure,hot_tub,EXCLUDE
 leisure,outdoor_seating,EXCLUDE
 leisure,picnic_table,EXCLUDE
 leisure,slipway,EXCLUDE
+shop,vacant,EXCLUDE
 tourism,camp_pitch,EXCLUDE
+tourism,information,EXCLUDE
+tourism,picnic_site,EXCLUDE
 amenity,*,Other Amenity
 healthcare,*,Other Healthcare
 shop,*,Other Shop
 leisure,*,Recreation
 tourism,*,Other Amenity
 office,*,Other Professional
-historic,*,Museum
