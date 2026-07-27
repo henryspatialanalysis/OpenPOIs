@@ -1,10 +1,18 @@
 # Versioned directories (used with config.get_dir_path())
 versions:
   osm_data: "20260724"
-  model_output: "20260724_by_shared_label"
+  model_output: "20260727_by_shared_label"
   snapshot_osm: "20260724"
-  snapshot_overture: "20260722"
-  conflation: "20260724"
+  # Same Overture release (2026-07-22.0), re-pulled 2026-07-27 under the
+  # widened ``taxonomy_allowlist``. Kept in a separate directory so the
+  # 20260724 conflation's exact input stays reproducible.
+  # tax3 = same release + allowlist as tax2, re-pulled to add the
+  # brand_wikidata column for identifier scoring.
+  snapshot_overture: "20260722_tax3"
+  # 20260727 = taxonomy overhaul only (old scoring). 20260728 adds the
+  # type-affinity metric, real identifier scoring, and the per-pair
+  # conditional weights; kept separate so the two are comparable.
+  conflation: "20260729"
   source_coop: "2026-06-27-v0"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
   # Ghost POI dataset reconstructed from OSM history (one row per
   # detected previous-state event). Pinned to the same value as
@@ -67,6 +75,21 @@ download:
     # lacking a wildcard row (landuse -> cemetery,religious; craft -> listed
     # values) so we don't drag in every value of those keys.
     filter_keys: ['shop', 'healthcare', 'leisure', 'amenity', 'tourism', 'office', 'craft', 'historic', 'landuse']
+    # POIs that are unnamed AND carry one of these access values are dropped
+    # at parse time — anonymous non-public features (overwhelmingly
+    # residential/HOA swimming pools) that add noise without value. Both
+    # conditions must hold: a named feature is always kept, and an untagged
+    # access never drops a row. `restricted` is deliberately absent — those
+    # rows are mostly named facilities. ~477k of 5.49M in the July 2026
+    # snapshot (8.7%). Set to [] to disable.
+    #
+    # NOTE: applied only at snapshot build. The 2026-07 run predates this and
+    # applied it after rating via scripts/osm_snapshot/apply_access_exclusion.py;
+    # from the next OSM pull onward the snapshot arrives already filtered and
+    # that script becomes a no-op. The history/observations path deliberately
+    # keeps these rows — a nameless POI carries no name-change signal, so it
+    # cannot affect the turnover fit.
+    excluded_access: ['private', 'no']
     extract_keys: [
       'addr:city','addr:country','addr:housename','addr:housenumber','addr:postcode',
       'addr:state','addr:street','addr:unit','access','amenity','atm','bar','bicycle',
@@ -121,6 +144,16 @@ download:
       - [community_and_government, public_safety_service]
       - [travel_and_transportation, fueling_station]
       - [travel_and_transportation, vehicle_service]
+      # Added 2026-07 so the labels below stop being OSM-only. Each of
+      # these L1s is the sole home of a shared_label the OSM side already
+      # maps; without them the label can never match.
+      - [services_and_business, laundry_service]        # Laundromat, Dry Cleaning
+      - [services_and_business, shipping_or_delivery_service]  # Post Office
+      - [services_and_business, storage_facility]       # Self-Storage
+      - [services_and_business, printing_service]       # Print and Copy Shop
+      # Marina lives here (as do garden/pier); the rest of this L0 is
+      # lakes/rivers/mountains and stays out.
+      - [geographic_entities, built_feature]            # Marina
   # Census reference areas for the msa_code + urban_rural indicators. The
   # cartographic-boundary (cb_*_500k) line is used because Census publishes
   # single national "us" files there for both CBSA and Place. Place population
@@ -155,7 +188,7 @@ osm_data:
     - last_obs_timestamp
     - last_tag_timestamp
   apply_model:
-    model_stub: '20260724'
+    model_stub: '20260727'
 
 # Settings for scripts/models/osm_turnover.py (JAX turnover model)
 osm_turnover_model:
@@ -179,17 +212,22 @@ osm_turnover_model:
   group_key: shared_label
   group_values: null
   min_value_count: 5
-  # Standard POI subsampling for the fit. A simple random sample of this
-  # fraction of POIs (unique osm_type+id, all their observation rows kept)
-  # gives essentially the same parameter estimates at a fraction of the NUTS
-  # cost — the full-data fit ran ~5 h, the 1% sample runs in minutes. The draw
-  # is deterministic given poi_sample_seed, so the constant and random_effects
-  # fits (and reruns) train on identical POIs. Set to 1.0 (or null), or pass
-  # --sample-fraction 1.0, to fit on the full dataset.
-  # NOTE: at 1% the random_effects amenity_msa interaction (needs
-  # interaction_min_count POIs per cell) thins out — lower interaction_min_count
-  # if you want the interaction active on sampled fits.
-  poi_sample_fraction: 0.01
+  # POI subsampling for the fit. A simple random sample of this fraction of
+  # POIs (unique osm_type+id, all their observation rows kept). The draw is
+  # deterministic given poi_sample_seed, so reruns train on identical POIs.
+  #
+  # DEFAULT IS 1.0 (full data) AND SHOULD STAY THAT WAY. Every fit used to
+  # rate a snapshot must be a full-data fit: at 1% the random_effects
+  # amenity_msa interaction thins out from ~4,000 active cells to ~18 (it
+  # needs interaction_min_count POIs per cell), and the per-label and per-MSA
+  # levels thin out with it, so the resulting confidence estimates are much
+  # weaker and are not comparable to a previous full-data run. A full fit runs
+  # ~5.5 h; a 1% fit runs in minutes.
+  #
+  # Sampling is for *exploratory* sweeps only — pass --sample-fraction 0.01 on
+  # the command line rather than editing this value. apply_model_random_effects
+  # refuses to rate from a sampled fit unless --allow-sampled-fit is passed.
+  poi_sample_fraction: 1.0
   poi_sample_seed: 0
   # NUTS warmup (window adaptation) and retained-sample counts. Warmup should
   # generally be >= n_samples for hierarchical models.
@@ -340,6 +378,7 @@ directories:
       partitioned: conflated_partitioned
       pmtiles: conflated.pmtiles
       summary_by_label: summary_by_label.csv
+      match_status: match_status_by_label.csv
   ghost_osm:
     versioned: true
     path: ~/data/openpois/ghost_osm
@@ -358,17 +397,43 @@ directories:
 # Settings for POI conflation
 conflation:
   overture_confidence_weight: 0.7
-  min_match_score: 0.50
+  # Raised 0.50 -> 0.70 on 2026-07-26 after a manual review of 30 sampled
+  # matches per score band: precision was ~33% in 0.5-0.6 and ~60% in
+  # 0.6-0.7, against ~87% at 0.7-0.8 and ~97%+ above that. Drops ~427k
+  # matches, the large majority of them false. Unnamed-OSM matches are
+  # unaffected: they cap at 0.80 (neutral name score) and sampled as
+  # ~83% correct, so they sit above the new floor.
+  min_match_score: 0.70
+  # Shrinkage constant for the type-affinity table: the number of
+  # identifier-confirmed pairs at which the empirical confusion term and the
+  # Overture-hierarchy prior carry equal weight. See
+  # docs/type-affinity-metric.md. Rebuild the table after changing this:
+  #   python scripts/conflation/build_type_affinity.py
+  type_affinity_k: 100
   # Drop conflated points that never received a shared_label (uncategorized
   # POIs) from the canonical conflated.parquet. Applied in the change-detection
   # step; conflated_baseline.parquet keeps the full unfiltered set.
   drop_unlabeled: true
   max_radius_m: 200
   default_radius_m: 100
-  distance_weight: 0.0
-  name_weight: 0.50
-  type_weight: 0.30
-  identifier_weight: 0.20
+  # Composite-score component weights, in two sets selected per candidate
+  # pair. Identifier evidence (website / phone agreement) is decisive when
+  # present but absent on ~5 of 6 pairs — OSM carries a website on 17% of
+  # rows and a phone on 14%, against 83% / 92% on the Overture side — so a
+  # single fixed identifier weight would spend score mass on a blank for most
+  # candidates. These are the defaults, used when neither side has a
+  # comparable identifier; its share is redistributed to the others.
+  distance_weight: 0.20
+  name_weight: 0.40
+  type_weight: 0.40
+  identifier_weight: 0.0
+  # Used instead when both sides carry a website or a phone. Ratio 30:30:15:15
+  # (name : type : distance : identifier) normalised to sum to 1.
+  weights_with_identifier:
+    distance: 0.1667
+    name: 0.3333
+    type: 0.3333
+    identifier: 0.1667
   chunk_size: 500_000
   chunk_target_pois: 200_000
   # Overture-internal deduplication runs before OSM × Overture
@@ -393,8 +458,17 @@ conflation:
   change_detection:
     enabled: false
     # Minimum composite score for an Overture × ghost shadow match.
-    # Same scale as the main matcher's min_match_score.
-    min_shadow_match_score: 0.50
+    # Same scale as the main matcher's min_match_score, and raised with it
+    # from 0.50 to 0.70 on 2026-07-27. The shadow matcher shares
+    # ``compute_match_scores`` and reads the same component weights, so the
+    # 0.50 floor had been calibrated against the pre-2026-07 weights
+    # (0.0/0.50/0.30/0.20 with a constant identifier stub). Note its scores
+    # are not on quite the same scale as the main matcher's: it passes
+    # all-zero L0 bits and no affinity table, so its type score is binary on
+    # exact shared_label equality, and it supplies no identifier arrays so it
+    # always uses the no-identifier weight set.
+    # NOT yet exercised: set after the 20260729 run, takes effect next run.
+    min_shadow_match_score: 0.70
     # rapidfuzz.fuzz.token_set_ratio threshold below which an OSM name
     # change is considered a "substantial rename" rather than a typo
     # fix. Range 0-100. Lower = stricter (fewer events emitted).
