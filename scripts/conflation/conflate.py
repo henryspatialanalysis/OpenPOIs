@@ -51,6 +51,7 @@ from openpois.conflation.chunking import extract_centroids_lonlat
 from openpois.conflation.dedup_overture import mark_no_conflate
 from openpois.conflation.match import (
     compute_match_scores,
+    normalize_identifier_array,
     find_and_score_matches_chunked,
     find_spatial_candidates,
     select_best_matches,
@@ -62,12 +63,15 @@ from openpois.conflation.merge import (
 )
 from openpois.conflation.spill import spill_rows
 from openpois.conflation.taxonomy import (
+    EXCLUDE_LABEL,
+    build_affinity_matrix,
     assign_osm_shared_label,
     assign_overture_shared_label,
     compute_osm_l0_bits,
     compute_overture_l0_bits,
     load_match_radii,
     load_osm_crosswalk,
+    load_type_affinity,
     load_overture_crosswalk,
     load_top_level_matches,
 )
@@ -139,6 +143,17 @@ DISTANCE_WEIGHT = config.get("conflation", "distance_weight")
 NAME_WEIGHT = config.get("conflation", "name_weight")
 TYPE_WEIGHT = config.get("conflation", "type_weight")
 IDENTIFIER_WEIGHT = config.get("conflation", "identifier_weight")
+# (distance, name, type, identifier) applied per candidate pair depending on
+# whether both sides carry a comparable identifier. See config comments.
+_ID_W = config.get("conflation", "weights_with_identifier")
+WEIGHTS_WITH_ID = (
+    float(_ID_W["distance"]), float(_ID_W["name"]),
+    float(_ID_W["type"]), float(_ID_W["identifier"]),
+)
+WEIGHTS_NO_ID = (
+    float(DISTANCE_WEIGHT), float(NAME_WEIGHT),
+    float(TYPE_WEIGHT), float(IDENTIFIER_WEIGHT),
+)
 CHUNK_SIZE = config.get("conflation", "chunk_size")
 CHUNK_TARGET_POIS = config.get(
     "conflation", "chunk_target_pois",
@@ -158,16 +173,30 @@ DEDUP_DUCKDB_MEM = str(
     DEDUP_CFG.get("duckdb_memory_limit", "4GB")
 )
 
-# Columns needed for matching (memory optimization)
+# Columns needed for matching (memory optimization). Every key in
+# ``FILTER_KEYS`` must be loaded: ``assign_osm_shared_label`` skips tag
+# columns that are absent, so omitting one silently strips the label
+# from every POI whose primary tag lives under that key.
 OSM_MATCH_COLS = [
     "osm_id", "osm_type", "name", "brand", "brand:wikidata",
-    "website", "phone", "amenity", "shop", "healthcare", "leisure",
+    "website", "phone", *FILTER_KEYS,
     "conf_mean", "conf_lower", "conf_upper", "geometry",
 ]
 OVERTURE_MATCH_COLS = [
     "overture_id", "taxonomy_l0", "taxonomy_l1", "taxonomy_l2", "taxonomy_l3",
     "overture_name", "brand_name", "confidence", "geometry",
+    # Identifier evidence for the match score. ``overture_websites`` and
+    # ``overture_phones`` are LIST columns, collapsed to their first element
+    # immediately (see below) so the matching phase carries scalar string
+    # arrays, not list columns over ~12M rows.
+    "overture_websites", "overture_phones",
 ]
+# Present only in snapshots built on/after 2026-07-26, when
+# ``brand.wikidata`` was added to the Overture extraction. Appended only if
+# the file actually has it, so older snapshots still load (identifier
+# comparability then falls back to websites alone).
+if "brand_wikidata" in pq.read_schema(OVERTURE_PATH).names:
+    OVERTURE_MATCH_COLS.append("brand_wikidata")
 # Columns needed downstream by ``build_merge_parts*``. Always
 # reloaded from disk after matching completes so the matching phase
 # can run without the full source GeoDataFrames resident.
@@ -334,9 +363,15 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    if args.output_suffix:
+    # A --test run covers one small bbox. Without its own filename it
+    # overwrites the production conflated.parquet with a few thousand rows,
+    # which looks like a successful run until someone checks the row count.
+    # The dedup spill is already test-separated for the same reason.
+    suffixes = [s for s in (args.output_suffix, "test" if args.test else "")
+                if s]
+    if suffixes:
         OUTPUT_PATH = OUTPUT_PATH.with_name(
-            f"{OUTPUT_PATH.stem}_{args.output_suffix}"
+            f"{OUTPUT_PATH.stem}_{'_'.join(suffixes)}"
             f"{OUTPUT_PATH.suffix}"
         )
     t0 = time.time()
@@ -382,6 +417,26 @@ if __name__ == "__main__":
         overture_gdf["taxonomy_l0"].fillna("").to_numpy(),
     )
     del overture_crosswalk
+
+    # Drop non-POI Overture categories (bridges, package lockers, …)
+    # before dedup so they never enter matching or the output. The OSM
+    # side handles its EXCLUDE rows inside ``assign_osm_shared_label``.
+    excluded = overture_shared_labels == EXCLUDE_LABEL
+    n_excluded = int(excluded.sum())
+    if n_excluded:
+        keep = ~excluded
+        overture_gdf = overture_gdf.loc[keep].reset_index(drop = True)
+        overture_shared_labels = overture_shared_labels[keep]
+        overture_radii = overture_radii[keep]
+        overture_l0_bits = overture_l0_bits[keep]
+        overture_source_rows = overture_source_rows[keep]
+        del keep
+        gc.collect()
+        print(
+            f"  Dropped {n_excluded:,} EXCLUDE-labelled Overture rows "
+            f"({len(overture_gdf):,} remain)"
+        )
+    del excluded
     log_rss("after Overture taxonomy assignment")
 
     # -- Overture internal deduplication ---------------------------
@@ -552,10 +607,78 @@ if __name__ == "__main__":
         osm_gdf, top_level_matches,
     )
 
+    # Derived (OSM label, Overture label) similarity replacing the old
+    # exact/broad-L0/none tiers in the type score. See
+    # docs/type-affinity-metric.md; rebuild with
+    # scripts/conflation/build_type_affinity.py.
+    affinity_df = load_type_affinity()
+    affinity_index, affinity_matrix = build_affinity_matrix(affinity_df)
+    if affinity_index:
+        print(
+            f"  Type affinity: {len(affinity_df):,} label pairs over "
+            f"{len(affinity_index)} labels"
+        )
+    else:
+        print("  Type affinity table absent - using legacy exact/L0 tiers")
+
+    # -- Identifier arrays (before the tag-column drop) -------------
+    # Normalized once here; compute_identifier_scores just compares them.
+    osm_websites = normalize_identifier_array(
+        osm_gdf["website"].to_numpy(), "website",
+    ) if "website" in osm_gdf.columns else None
+    osm_phones = normalize_identifier_array(
+        osm_gdf["phone"].to_numpy(), "phone",
+    ) if "phone" in osm_gdf.columns else None
+    osm_wikidata = normalize_identifier_array(
+        osm_gdf["brand:wikidata"].to_numpy(), "wikidata",
+    ) if "brand:wikidata" in osm_gdf.columns else None
+
+    def _first(seq):
+        """First element of an Overture list column, or None."""
+        if seq is None:
+            return None
+        try:
+            return seq[0] if len(seq) else None
+        except TypeError:
+            return seq
+
+    overture_websites = normalize_identifier_array(
+        np.array(
+            [_first(v) for v in overture_gdf["overture_websites"]],
+            dtype = object,
+        ), "website",
+    ) if "overture_websites" in overture_gdf.columns else None
+    overture_phones = normalize_identifier_array(
+        np.array(
+            [_first(v) for v in overture_gdf["overture_phones"]],
+            dtype = object,
+        ), "phone",
+    ) if "overture_phones" in overture_gdf.columns else None
+    overture_wikidata = normalize_identifier_array(
+        overture_gdf["brand_wikidata"].to_numpy(), "wikidata",
+    ) if "brand_wikidata" in overture_gdf.columns else None
+
+    def _n_present(arr) -> int:
+        return int((arr != "").sum()) if arr is not None else 0
+
+    print(
+        f"  Identifiers (OSM / Overture): websites "
+        f"{_n_present(osm_websites):,} / {_n_present(overture_websites):,}; "
+        f"phones {_n_present(osm_phones):,} / "
+        f"{_n_present(overture_phones):,}; wikidata "
+        f"{_n_present(osm_wikidata):,} / {_n_present(overture_wikidata):,}"
+    )
+    if overture_wikidata is None:
+        print(
+            "    (Overture brand_wikidata absent from this snapshot - "
+            "comparability falls back to websites only; re-pull to enable)"
+        )
+
     # Drop columns only needed for taxonomy assignment
     for col in [
-        "amenity", "shop", "healthcare", "leisure",
+        *FILTER_KEYS,
         "osm_type", "brand:wikidata", "website", "phone",
+        "overture_websites", "overture_phones", "brand_wikidata",
     ]:
         if col in osm_gdf.columns:
             osm_gdf.drop(columns = col, inplace = True)
@@ -623,6 +746,16 @@ if __name__ == "__main__":
                 name_weight = NAME_WEIGHT,
                 type_weight = TYPE_WEIGHT,
                 identifier_weight = IDENTIFIER_WEIGHT,
+                affinity_index = affinity_index,
+                affinity_matrix = affinity_matrix,
+                osm_websites = osm_websites,
+                osm_phones = osm_phones,
+                osm_wikidata = osm_wikidata,
+                overture_websites = overture_websites,
+                overture_phones = overture_phones,
+                overture_wikidata = overture_wikidata,
+                id_weights = WEIGHTS_WITH_ID,
+                no_id_weights = WEIGHTS_NO_ID,
             )
             print(
                 f"  Mean composite score: "
@@ -680,6 +813,16 @@ if __name__ == "__main__":
             name_weight = NAME_WEIGHT,
             type_weight = TYPE_WEIGHT,
             identifier_weight = IDENTIFIER_WEIGHT,
+            affinity_index = affinity_index,
+            affinity_matrix = affinity_matrix,
+            osm_websites = osm_websites,
+            osm_phones = osm_phones,
+            osm_wikidata = osm_wikidata,
+            overture_websites = overture_websites,
+            overture_phones = overture_phones,
+            overture_wikidata = overture_wikidata,
+            id_weights = WEIGHTS_WITH_ID,
+            no_id_weights = WEIGHTS_NO_ID,
             min_match_score = MIN_MATCH_SCORE,
             max_radius_m = MAX_RADIUS_M,
             chunk_target_pois = CHUNK_TARGET_POIS,
