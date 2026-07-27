@@ -20,11 +20,25 @@ Reports:
      unmapped (dropped at ingest), highlighting tuples that are new this release.
   5. Allowlist coverage — new L0s / new L1s outside the current allowlist that
      we would miss at download time.
+  6. Crosswalk liveness / tier usage — which crosswalk rows match no live
+     tuple (stale paths), which are shadowed by a duplicate key, and how much
+     of the data resolves only at the L0-only fallback tier. Report 4 cannot
+     see this: the fallback rows label everything, so a crosswalk whose finer
+     rows have all gone stale still reports full coverage.
+
+``in_allowlist`` is recomputed from the current config on every run, so
+``--from-census-csv`` works as a pre-flight gate for a widened allowlist —
+edit ``taxonomy_allowlist``, re-run against the cached census, and see the
+effect in seconds without re-scanning S3.
 
 Usage:
     # Run BEFORE bumping config so the prior-snapshot default resolves to the
     # current (previous month's) snapshot.
     python scripts/overture/compare_taxonomy.py --release-date 2026-07-22.0
+
+    # Pre-flight gate after editing the crosswalk and/or allowlist:
+    python scripts/overture/compare_taxonomy.py --strict \
+        --from-census-csv ~/data/openpois/logs/overture_taxonomy_census_*.csv
 
 Config keys used (config.yaml):
     download.overture.s3_bucket / s3_region / release_date
@@ -95,6 +109,20 @@ def _parse_args() -> argparse.Namespace:
         help = "Skip the S3 scan and load a previously written census CSV "
         "(schema check is skipped — it was done on the original scan). "
         "Use to resume the report without re-hitting S3.",
+    )
+    parser.add_argument(
+        "--max-l0-fallback-share",
+        type = float,
+        default = 0.05,
+        help = "Flag when more than this share of ingested POIs resolve "
+        "only at the L0-only fallback tier (default 0.05).",
+    )
+    parser.add_argument(
+        "--strict",
+        action = "store_true",
+        help = "Exit 1 on dead crosswalk rows, unmapped ingested tuples, "
+        "shadowed duplicate keys, or an L0-fallback share over the "
+        "threshold. Use as a pre-flight gate before a download.",
     )
     return parser.parse_args()
 
@@ -221,6 +249,52 @@ def _key(df: pd.DataFrame) -> pd.Series:
     return df[LEVELS].agg("|".join, axis = 1)
 
 
+def _recompute_allowlist(
+    census: pd.DataFrame, allowlist: list,
+) -> pd.DataFrame:
+    """Recompute ``in_allowlist`` from the config allowlist.
+
+    A cached census CSV carries the flag as of the scan, so editing
+    ``taxonomy_allowlist`` would silently invalidate it. Recomputing
+    here — the predicate is pure (L0, L1) membership, with a null L1
+    meaning "all of this L0" — lets ``--from-census-csv`` act as a
+    pre-flight gate for a widened allowlist without re-hitting S3.
+    """
+    whole_l0 = {e[0] for e in allowlist if e[1] is None}
+    pairs = {(e[0], e[1]) for e in allowlist if e[1] is not None}
+    out = census.copy()
+    out["in_allowlist"] = [
+        l0 in whole_l0 or (l0, l1) in pairs
+        for l0, l1 in zip(out["l0"], out["l1"])
+    ]
+    return out
+
+
+# Each crosswalk tier is identified by which level columns it populates,
+# mirroring the cascade order in ``assign_overture_shared_label``.
+TIERS: list[tuple[int, str, tuple[str, ...]]] = [
+    (1, "L0+L1+L2+L3", ("l0", "l1", "l2", "l3")),
+    (2, "L0+L3 (leaf)", ("l0", "l3")),
+    (3, "L0+L1+L2", ("l0", "l1", "l2")),
+    (4, "L0+L2 (leaf)", ("l0", "l2")),
+    (5, "L0+L1", ("l0", "l1")),
+    (6, "L0 only (fallback)", ("l0",)),
+]
+TIERS_BY_NUM = [(tier, cols) for tier, _name, cols in TIERS]
+
+
+def _tier_of_row(row: pd.Series) -> int:
+    """Classify a crosswalk row by which levels it populates."""
+    has1, has2, has3 = bool(row["overture_l1"]), bool(
+        row["overture_l2"]
+    ), bool(row["overture_l3"])
+    if has3:
+        return 1 if (has1 and has2) else 2
+    if has2:
+        return 3 if has1 else 4
+    return 5 if has1 else 6
+
+
 def _crosswalk_labels(tuples: pd.DataFrame) -> pd.DataFrame:
     """Run the production 6-tier cascade over distinct tuples."""
     crosswalk = load_overture_crosswalk()
@@ -231,6 +305,47 @@ def _crosswalk_labels(tuples: pd.DataFrame) -> pd.DataFrame:
     labels, _ = assign_overture_shared_label(frame, crosswalk, radii)
     out = tuples.copy()
     out["shared_label"] = labels
+    return out
+
+
+def _resolve_by_tier(tuples: pd.DataFrame) -> pd.DataFrame:
+    """Find, per tuple, the cascade tier that actually labels it.
+
+    Runs the production assigner once per tier with only that tier's
+    crosswalk rows: the lowest-numbered tier that produces a label is
+    the one the full cascade uses, since each tier's lookup is built
+    independently and applied in order.
+
+    Returns ``tuples`` plus ``shared_label``, ``tier``, and
+    ``tier_key`` (the ``|``-joined lookup key of the resolving tier,
+    used to mark crosswalk rows live).
+    """
+    crosswalk = load_overture_crosswalk()
+    crosswalk = crosswalk.assign(_tier = crosswalk.apply(_tier_of_row, axis = 1))
+    radii = load_match_radii()
+    frame = tuples.rename(
+        columns = {lvl: f"taxonomy_{lvl}" for lvl in LEVELS}
+    ).copy()
+
+    out = tuples.copy()
+    out["shared_label"] = ""
+    out["tier"] = 0
+    out["tier_key"] = ""
+    for tier, _name, cols in TIERS:
+        rows = crosswalk[crosswalk["_tier"] == tier]
+        if rows.empty:
+            continue
+        labels, _ = assign_overture_shared_label(
+            frame, rows.drop(columns = "_tier"), radii,
+        )
+        fresh = (out["tier"] == 0) & (labels != "")
+        if not fresh.any():
+            continue
+        out.loc[fresh, "shared_label"] = labels[fresh.to_numpy()]
+        out.loc[fresh, "tier"] = tier
+        out.loc[fresh, "tier_key"] = (
+            out.loc[fresh, list(cols)].agg("|".join, axis = 1)
+        )
     return out
 
 
@@ -295,6 +410,10 @@ def main() -> None:
             )
         finally:
             conn.close()
+
+    # Always recompute from the live config: a cached census carries the
+    # flag as of its scan, so an allowlist edit would otherwise be invisible.
+    census = _recompute_allowlist(census, allowlist)
 
     census = census[census["n"] >= args.min_count].copy()
     if args.out_csv:
@@ -401,8 +520,149 @@ def main() -> None:
             if r["l0"] in allow_l0_all else ""
         print(f"  [{int(r['n']):>8,}] {r['l0']} / {r['l1'] or '(none)'}{warn}")
     print()
-    print("Done. Review §3 (added/removed) and §4 (unmapped) before bumping "
-          "the crosswalk.")
+
+    # --- Crosswalk liveness + tier usage -----------------------------------
+    # §4 asks "does every tuple get a label?", which the L0-only fallback
+    # rows answer "yes" to even when the finer rows have all gone stale.
+    # This section asks the sharper questions: which crosswalk rows match
+    # nothing in the release, and how much of the data is resolving only at
+    # the catch-all tier.
+    print("=" * 78)
+    print("6. CROSSWALK LIVENESS / TIER USAGE (ingested scope)")
+    print("=" * 78)
+    resolved = _resolve_by_tier(ingested)
+    total_pois = int(resolved["n"].sum())
+
+    # Self-check: the per-tier resolution must agree with the full cascade.
+    full = _crosswalk_labels(ingested)
+    disagree = (
+        full["shared_label"].to_numpy() != resolved["shared_label"].to_numpy()
+    )
+    if disagree.any():
+        print(
+            f"WARNING: tier resolution disagrees with the full cascade on "
+            f"{int(disagree.sum())} tuple(s) — the tier patterns in this "
+            f"script have drifted from assign_overture_shared_label."
+        )
+
+    print("POIs and tuples by resolving tier:\n")
+    fallback_pois = 0
+    for tier, name, _cols in TIERS:
+        sel = resolved["tier"] == tier
+        pois = int(resolved.loc[sel, "n"].sum())
+        if tier == 6:
+            fallback_pois = pois
+        print(
+            f"  tier {tier} {name:<20} {int(sel.sum()):>5,} tuples  "
+            f"{pois:>12,} POIs  ({100 * pois / max(total_pois, 1):>5.2f}%)"
+        )
+    unresolved = resolved["tier"] == 0
+    if unresolved.any():
+        print(
+            f"  unmatched              {int(unresolved.sum()):>5,} tuples  "
+            f"{int(resolved.loc[unresolved, 'n'].sum()):>12,} POIs"
+        )
+
+    fallback_share = fallback_pois / max(total_pois, 1)
+    print(
+        f"\nL0-only fallback share: {100 * fallback_share:.2f}% "
+        f"(threshold {100 * args.max_l0_fallback_share:.2f}%)"
+    )
+    over_threshold = fallback_share > args.max_l0_fallback_share
+    if over_threshold:
+        print(
+            "  ^ ABOVE THRESHOLD — finer crosswalk rows are likely stale. "
+            "The biggest offenders:"
+        )
+        worst = resolved[resolved["tier"] == 6].nlargest(15, "n")
+        for _, r in worst.iterrows():
+            tup = " / ".join(x for x in [r.l0, r.l1, r.l2, r.l3] if x)
+            print(f"    [{int(r['n']):>8,}] {tup} -> {r['shared_label']}")
+
+    # Row-level health. Two distinct conditions:
+    #   stale  — the row names a value that does not exist at that level
+    #            anywhere in the release. This is taxonomy drift (a rename
+    #            or reparent) and the row can never match again.
+    #   unused — the row is well-formed but never the resolving tier,
+    #            because finer rows cover its subtree. Catch-all rows are
+    #            deliberately in this state; it is informational only.
+    crosswalk = load_overture_crosswalk()
+    crosswalk = crosswalk.assign(
+        _tier = crosswalk.apply(_tier_of_row, axis = 1)
+    )
+    live_keys = set(zip(resolved["tier"], resolved["tier_key"]))
+    # Vocabulary of the whole release, per level — not just the ingested
+    # scope, so widening the allowlist does not read as drift.
+    vocab = {lvl: set(census[lvl]) - {""} for lvl in LEVELS}
+
+    stale_rows = []
+    unused_rows = []
+    shadowed = []
+    seen_keys: set[tuple[int, str]] = set()
+    for _, row in crosswalk.iterrows():
+        tier = int(row["_tier"])
+        cols = dict(TIERS_BY_NUM)[tier]
+        key = "|".join(row[f"overture_{c}"] for c in cols)
+        entry = (tier, key, row["shared_label"])
+
+        bad_levels = [
+            f"{lvl}={row[f'overture_{lvl}']}"
+            for lvl in LEVELS
+            if row[f"overture_{lvl}"]
+            and row[f"overture_{lvl}"] not in vocab[lvl]
+        ]
+        if bad_levels:
+            stale_rows.append((*entry, ", ".join(bad_levels)))
+            continue
+        if (tier, key) in seen_keys:
+            shadowed.append(entry)
+            continue
+        seen_keys.add((tier, key))
+        if (tier, key) not in live_keys:
+            unused_rows.append(entry)
+
+    print(f"\ncrosswalk rows                  : {len(crosswalk):,}")
+    print(f"STALE rows (value gone from release): {len(stale_rows):,}")
+    for tier, key, label, why in stale_rows[:40]:
+        print(
+            f"    tier {tier}  {key.replace('|', ' / '):<58} -> "
+            f"{label:<20} [{why}]"
+        )
+    if len(stale_rows) > 40:
+        print(f"    ... and {len(stale_rows) - 40:,} more")
+    print(f"shadowed rows (duplicate key)   : {len(shadowed):,}")
+    for tier, key, label in shadowed[:20]:
+        print(f"    tier {tier}  {key.replace('|', ' / '):<58} -> {label}")
+    print(
+        f"unused rows (covered by finer rows; catch-alls expected here): "
+        f"{len(unused_rows):,}"
+    )
+    for tier, key, label in unused_rows[:20]:
+        print(f"    tier {tier}  {key.replace('|', ' / '):<58} -> {label}")
+    print()
+
+    print("Done. Review §3 (added/removed), §4 (unmapped) and §6 (stale rows "
+          "/ fallback share) before bumping the crosswalk.")
+
+    if args.strict:
+        problems = []
+        if len(unmapped):
+            problems.append(f"{len(unmapped):,} unmapped ingested tuples")
+        if stale_rows:
+            problems.append(f"{len(stale_rows):,} stale crosswalk rows")
+        if shadowed:
+            problems.append(f"{len(shadowed):,} shadowed crosswalk rows")
+        if over_threshold:
+            problems.append(
+                f"L0-fallback share {100 * fallback_share:.2f}% over threshold"
+            )
+        if disagree.any():
+            problems.append("tier/cascade self-check mismatch")
+        if problems:
+            raise SystemExit(
+                "\nSTRICT CHECK FAILED: " + "; ".join(problems)
+            )
+        print("\nSTRICT CHECK PASSED.")
 
 
 if __name__ == "__main__":
