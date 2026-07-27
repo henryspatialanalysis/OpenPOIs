@@ -31,10 +31,16 @@ upload for web consumption.
    calendar date.
 
 2. **Review conflation parameters** (`config.yaml` → `conflation`):
-   - `min_match_score` (default 0.50) — raises/lowers match acceptance
+   - `min_match_score` (**0.70** since 2026-07-26) — raises/lowers match acceptance.
+     Set from a precision-by-band review; see [docs/match-scoring.md](../../docs/match-scoring.md).
    - `max_radius_m`, `default_radius_m` — per-label radii come from `match_radii.csv`
-   - Component weights: `distance_weight`, `name_weight`, `type_weight`, `identifier_weight`
-   - Changing these reshapes match counts — run with `--test` first (Seattle bbox).
+   - Component weights come in **two sets**, chosen per candidate pair:
+     `weights_with_identifier` when both sides carry a website/phone/wikidata,
+     else the flat `distance_weight` / `name_weight` / `type_weight` /
+     `identifier_weight`. Both sum to 1.0.
+   - `type_affinity_k` — shrinkage for the type-affinity table (rebuild after changing).
+   - Changing any of these reshapes match counts — run with `--test` first (Seattle
+     bbox; writes `conflated_test.parquet`, not the production file).
 
 3. **Sync taxonomy if crosswalks changed** — run the [sync-taxonomy](../sync-taxonomy/SKILL.md) skill. It regenerates `site/public/taxonomy.html` and `site/src/taxonomy.generated.js`, and detects drift in the hand-maintained display labels.
 
@@ -60,11 +66,28 @@ upload for web consumption.
    - `ghosts.parquet` under `versions.ghost_osm` — see [docs/change-detection.md](../../../docs/change-detection.md).
    - `match_diagnostics.parquet`.
 
+4b. **Rebuild the type-affinity table** if the taxonomy changed, or on the
+   first run after a new Overture release:
+   ```bash
+   python scripts/conflation/build_type_affinity.py --conflated <PREVIOUS run's conflated.parquet>
+   ```
+   Writes `src/openpois/conflation/data/type_affinity.csv`, the derived type
+   score. Calibrated from the *previous* run's identifier-confirmed matches, so
+   pass `--conflated` explicitly once `versions.conflation` points at the run
+   being produced. See [docs/type-affinity-metric.md](../../docs/type-affinity-metric.md).
+   Skip it if neither the taxonomy nor the release changed — the table is
+   checked in.
+
 5. **Match-rate sanity check**:
    ```bash
    python scripts/conflation/summarize.py
    ```
-   Writes `summary_by_label.csv`.
+   Writes `summary_by_label.csv` and `match_status_by_label.csv` (the published
+   per-label table: matched / OSM-only / Overture-only / total / match %). Stdout
+   calls out every **single-source label** — a zero in any column means that label
+   can never match, which is almost always a crosswalk gap rather than a real
+   property of the data. Only `Car Rental` is expected to be single-source
+   (Overture has no car-rental category).
 
 6. **Partition for web** — geohash-4 partition, geohash-6 sort:
    ```bash
@@ -103,6 +126,9 @@ upload for web consumption.
 ## Verification
 
 - `summary_by_label.csv` match rates should resemble the prior run; large drifts mean a parameter or crosswalk regression.
+- **Score distribution.** `match_score` should span roughly the threshold to 1.0 with a healthy top decile. If nothing exceeds 0.9, or everything piles into one band, a scoring component is dead — that is exactly how the constant-0.5 identifier stub hid for months. See [docs/match-scoring.md](../../docs/match-scoring.md).
+- **Precision spot-check after any scoring change.** Sample 30 matches per score band and eyeball them; the bands are only meaningful if someone has looked. Use `ORDER BY hash(unified_id) LIMIT 30` inside the band filter — DuckDB's `USING SAMPLE n ROWS` can apply before the `WHERE` and return a single row per band.
+- The conflate log's `OSM: X/N assigned` line should be ~100%. A big shortfall means tag columns are missing from the load — `OSM_MATCH_COLS` must cover every key in `download.osm.filter_keys`, since `assign_osm_shared_label` skips absent columns silently and `drop_unlabeled` then deletes those POIs.
 - `match_diagnostics.parquet` for per-pair forensics on surprising matches.
 - Spot-check the version landing page at
   <https://source.coop/henryspatialanalysis/openpois/> and confirm the

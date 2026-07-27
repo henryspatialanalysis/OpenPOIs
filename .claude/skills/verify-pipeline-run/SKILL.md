@@ -53,7 +53,8 @@ Then for the conflated output, also check `shared_label` distribution per territ
 ```
 
 Checks:
-- Row count in `fitted_params.csv` ≈ number of groups (after `min_value_count` filter).
+- **Was this a full-data fit?** `grep poi_sample_fraction {version}/config.yaml` must show `1.0`. A sampled fit produces a plausible-looking but much weaker model — check this *first*, because every downstream number inherits it. Corroborate in the fit log: `amenity_msa interaction: N cells >= 100 POIs` should read ~4,000, not ~18. `apply_model_random_effects.py` enforces this too, but catch it here rather than 5 h later.
+- Row count in `fitted_params.csv` ≈ number of groups (after `min_value_count` filter). A full-data `random_effects` fit is ~9,000 rows; ~1,200 means it was sampled.
 - λ values in a sensible range (spot-check against prior `fitted_params.csv`).
 - `predictions.csv` head/tail — every POI should have a prediction; no NaNs.
 - **Post-territory-expansion runs**: territories are <1% of POIs so global `logit_lambda` / `logit_delta_0` shouldn't move much. A >5% shift on the first territory-inclusive run vs the prior `fitted_params.csv` is worth investigating — could be a real mapping-behavior difference (territory POIs have fewer edits per year because smaller mapper communities) or a bug in `format_observations`.

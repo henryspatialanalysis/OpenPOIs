@@ -247,3 +247,22 @@ session.
 | [vetting_viz/](../vetting_viz/) | Manual review UI. |
 | [Makefile](../Makefile) | `make conflate` orchestrator + sub-targets. |
 | [config.yaml](../config.yaml) → `conflation.change_detection` | All tunables. |
+
+## Scoring configuration is shared with the main matcher
+
+`apply_change_detection.py` reads the same `conflation.distance_weight` /
+`name_weight` / `type_weight` / `identifier_weight` keys as `conflate.py` and
+calls the same `compute_match_scores`. Retuning the main matcher therefore moves
+ghost matching too — the 2026-07 reweighting (0.0/0.50/0.30/0.20 with a constant
+identifier stub, to 0.20/0.40/0.40/0.00) took shadow matches from 57,760 to
+62,248 (+7.8%), mean penalty factor 0.1720 to 0.1731.
+
+The threshold is separate: `conflation.change_detection.min_shadow_match_score`,
+raised 0.50 to 0.70 on 2026-07-27 alongside the main `min_match_score`.
+
+Its scores are **not** on quite the same scale as the main matcher's. The shadow
+matcher passes all-zero L0 bit arrays and supplies no type-affinity table, so its
+type score falls back to binary exact `shared_label` equality; and it supplies no
+identifier arrays, so it always uses the no-identifier weight set. Re-calibrate it
+against its own score distribution rather than assuming the main matcher's bands
+carry over. See [../.claude/docs/match-scoring.md](../.claude/docs/match-scoring.md).

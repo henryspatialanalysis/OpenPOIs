@@ -48,6 +48,9 @@ Rerun just the modeling step (step 3 of the full pipeline) for a fixed source-da
 
 ## Pitfalls
 
+- **Never rate a snapshot from a sampled fit.** Exploratory sweeps are the one place `--sample-fraction 0.01` belongs — it turns a ~5.5 h fit into minutes, which is exactly why it is tempting to leave on. But a sampled `random_effects` fit keeps only ~18 of ~4,000 `amenity_msa` interaction cells and thins the per-label/per-MSA levels with it, so its confidence estimates are far weaker and not comparable to the previous month's. `poi_sample_fraction` in config.yaml defaults to `1.0` and should stay there; pass the flag per-run instead. `apply_model_random_effects.py` reads the sample fraction from the fit's own `config.yaml` and refuses to rate a sampled fit without `--allow-sampled-fit`.
+- If you are comparing variants, compare fits taken at the *same* sample fraction — a 1% variant will look different from a full-data variant for reasons that have nothing to do with the model type.
+
 - Forgetting to change `versions.model_output` overwrites the previous variant's outputs.
 - `group_key` must exist as a column in the observations CSV. `shared_label` is populated by `format_tabular.py` from the conflation taxonomy crosswalk; if you change the crosswalk, rerun `format_tabular.py`.
 - `min_value_count` filters groups silently — check `fitted_params.csv` row count vs. expected group count.

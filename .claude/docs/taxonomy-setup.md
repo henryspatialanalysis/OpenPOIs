@@ -9,19 +9,44 @@ All four live at [src/openpois/conflation/data/](../../src/openpois/conflation/d
 | File | Columns | Purpose |
 |---|---|---|
 | `taxonomy_crosswalk_openstreetmap.csv` | `osm_key`, `osm_value`, `shared_label` | Map OSM tag key/value pairs to a shared label. Wildcard `*` on `osm_value` is a fallback per key. |
-| `taxonomy_crosswalk_overture_maps.csv` | `overture_l0`, `overture_l1`, `overture_l2`, `shared_label` | Map Overture hierarchy to a shared label. 4-tier cascade: (L0, L1, L2) → (L0, L2) → (L0, L1) → L0. |
-| `match_radii.csv` | `shared_label`, `match_radius_m` | Per-label spatial match radius (meters). Private businesses ~50m, mid-size facilities ~75-100m, areal features ~150-200m. |
-| `top_level_matches.csv` | `overture_l0`, `osm_key` | L0/key bitmask for the type-score "same broad group" check. |
+| `taxonomy_crosswalk_overture_maps.csv` | `overture_l0`, `overture_l1`, `overture_l2`, `overture_l3`, `shared_label` | Map Overture hierarchy to a shared label. **6-tier cascade** (see below). |
+| `match_radii.csv` | `shared_label`, `match_radius_m` | Per-label spatial match radius (meters). Private businesses ~50m, mid-size facilities ~75-100m, areal features ~150-200m. **Master label list** — `build_taxonomy.py` derives the site's `SHARED_LABELS` from this file, so a label missing here never reaches the frontend. |
+| `top_level_matches.csv` | `overture_l0`, `osm_key` | L0/key bitmask for the type-score "same broad group" check. Only affects *near-miss* partial credit; equal labels already score full marks. |
+| `marketplace_name_labels.csv` | `name_normalized`, `shared_label`, `source` | Exceptions to the `amenity=marketplace` name rules (below). Only names the regexes get wrong belong here. |
+
+All five are UTF-8 without BOM, LF line endings.
 
 ## Code
 
 [src/openpois/conflation/taxonomy.py](../../src/openpois/conflation/taxonomy.py) exposes:
 
-- Loaders: `load_osm_crosswalk`, `load_overture_crosswalk`, `load_match_radii`, `load_top_level_matches`
+- Loaders: `load_osm_crosswalk`, `load_overture_crosswalk`, `load_match_radii`, `load_top_level_matches`, `load_marketplace_names`
 - Assigners: `assign_osm_shared_label`, `assign_overture_shared_label`
 - Ingest filter: `build_osm_tag_filter_expressions`
+- Marketplace split: `classify_marketplace_name`, `normalize_marketplace_name`, `refine_marketplace_labels`
 
-OSM key priority order for label assignment: **shop > healthcare > leisure > amenity** (specific tags win over generic).
+OSM key priority order for label assignment comes from `download.osm.filter_keys` in config.yaml: **shop > healthcare > leisure > amenity > tourism > office > craft > historic > landuse** (specific tags win over generic).
+
+> **Every consumer must load all nine tag columns.** `assign_osm_shared_label` silently skips keys absent from the frame, so a caller that reads only some of them strips the label from every POI whose primary tag lives under a missing key — this is exactly how 817k POIs (Hotel, Museum, Cemetery, Campground, Real Estate, ...) went missing from the July 2026 conflation. Derive the column list from `FILTER_KEYS`, never hardcode it.
+
+### The Overture cascade is 6 tiers
+
+`assign_overture_shared_label` applies these in order, each only to still-unmatched rows. A row's tier is set by which columns it populates:
+
+1. `(L0, L1, L2, L3)` — full path
+2. `(L0, L3)` — deep leaf, ignoring intermediates
+3. `(L0, L1, L2)`
+4. `(L0, L2)` — leaf, ignoring L1
+5. `(L0, L1)`
+6. `(L0)` — catch-all fallback
+
+**Prefer the leaf-anchored tiers (2 and 4) where the leaf name is unambiguous.** Overture reparents categories frequently; a leaf-anchored row survives a reparent, a full-path row does not. The `health_care` rows were the only part of the crosswalk to survive Overture's Feb/Mar-2026 restructure intact, precisely because they were leaf-anchored.
+
+### The `amenity=marketplace` name split
+
+OSM has no tag distinguishing a farmers market from a flea or public market (`marketplace=*` is used on 7 US features; the wiki documents no companion tag), so the name decides. `classify_marketplace_name` checks "definitely another kind of market" patterns first (flea, swap, bazaar, meat/fish market, auction), then grower/produce vocabulary (`farm` unanchored so it catches farmstand/freshfarm, plus orchard, produce, fruit, tailgate/curb market, CSA, ...), defaulting to `Market`. `grove` is deliberately excluded — Oak Grove and Elk Grove are place names.
+
+The rules land within a handful of names of an LLM second opinion over all 2,637 US marketplace names, so `marketplace_name_labels.csv` holds only the ~8 they get wrong. Re-audit after a snapshot refresh with `scripts/conflation/classify_marketplaces.py` (`--rules-only` inside a Claude Code session; the LLM pass shells out to the `claude` CLI, which refuses to nest). A test fails if an exceptions row agrees with the rules — such rows are dead weight and should be deleted.
 
 ### The crosswalk also drives PBF ingest
 
@@ -71,10 +96,47 @@ Run `scripts/overture/compare_taxonomy.py` whenever switching to a new Overture
 release. It scans the release's `taxonomy` over S3 and reports: the schema shape
 (confirms `taxonomy` is still the `{primary, hierarchy[], alternates[]}` struct),
 the distinct `(L0..L3)` tuples added/removed versus the prior snapshot and versus
-`taxonomy_crosswalk_overture_maps.csv`, and any allowlisted-but-unmapped tuples.
-The expensive S3 census is cached to CSV; re-run the report offline with
-`--from-census-csv`. As of the `2026-07-22.0` release the July check found no
-crosswalk or allowlist changes were needed.
+`taxonomy_crosswalk_overture_maps.csv`, any allowlisted-but-unmapped tuples, and
+(§6) crosswalk liveness. The expensive S3 census is cached to CSV; re-run the
+report offline with `--from-census-csv`.
+
+### §6 is the check that matters
+
+The coverage check in §4 asks "does every ingested tuple get a label?" — and the
+L0-only fallback rows answer "yes" even when every finer row has gone stale. That
+is how the crosswalk silently rotted to 45% dead rows between the Feb/Mar-2026
+Overture restructure and July 2026, with 10.5% of POIs collapsing onto catch-alls
+(all cafes and bars into Other Amenity; gyms, golf courses, pools and bowling
+alleys into Recreation) while the monthly check reported clean.
+
+§6 asks the sharper questions:
+
+- **Stale rows** — rows naming a value that no longer exists *at that level*
+  anywhere in the release. This is the drift signal; it would have caught the
+  July rot. (`bar` still exists in the release, but as an L2 — a crosswalk row
+  using it as an L1 is stale.)
+- **Shadowed rows** — duplicate lookup keys within a tier; only the first is ever
+  reachable.
+- **Unused rows** — well-formed but never the resolving tier because finer rows
+  cover the subtree. Catch-alls live here by design; informational only.
+- **Tier usage** — the POI share resolving at each tier, flagged when the
+  L0-fallback share exceeds `--max-l0-fallback-share` (default 5%).
+
+`in_allowlist` is recomputed from the live config on every run, so
+`--from-census-csv` doubles as a **pre-flight gate**: edit the crosswalk and/or
+`taxonomy_allowlist`, run with `--strict`, and see the effect in seconds without
+re-hitting S3. Do this before starting a download — a crosswalk defect found here
+costs seconds instead of an hour.
+
+```bash
+python scripts/overture/compare_taxonomy.py --strict \
+    --from-census-csv ~/data/openpois/logs/overture_taxonomy_census_20260722.csv
+```
+
+`--strict` exits 1 on stale rows, shadowed rows, unmapped tuples, a fallback share
+over the threshold, or a mismatch between the per-tier resolution and the full
+cascade (a self-check guarding against this script's tier patterns drifting from
+`assign_overture_shared_label`).
 
 ## Possible future Overture migration to a flat `basic_category`
 

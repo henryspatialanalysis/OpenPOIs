@@ -59,10 +59,27 @@ the fitted λ essentially unchanged and the model is **not** re-fit for this
 filter. `access=restricted` is intentionally **not** excluded: those rows are
 mostly named facilities (only ~10% unnamed).
 
-For the 2026-07 run the filter was applied post-hoc, by subsetting the
-probability-scored snapshot (`osm_snapshot_rated.parquet`) before re-running
-conflation. Future runs should apply it at ingest so the snapshot, rating, and
-conflation all see the reduced set from the start — tracked in [TODO.md](../TODO.md).
+**Where it is applied.** As of 2026-07-26 the predicate lives in the snapshot
+build: `download.osm.excluded_access` (`['private', 'no']`) is passed to
+`download_osm_snapshot` and applied per chunk by `_drop_unnamed_private_rows`
+in [osm_snapshot.py](../../src/openpois/io/osm_snapshot.py), alongside the
+existing EXCLUDE-tag filter. Set it to `[]` to disable.
+
+**This takes effect from the 2026-08 OSM pull onward.** The 2026-07 snapshot
+was built before the change, so that run applied the filter after rating with
+[apply_access_exclusion.py](../../scripts/osm_snapshot/apply_access_exclusion.py)
+— which must be re-run after *every* `make rate`, since the rater regenerates
+the snapshot unfiltered. Once the snapshot arrives pre-filtered that script
+becomes a no-op (it will report 0 dropped); keep it until then and use its
+`--expect-kept` guard, which is what caught a pyarrow null-propagation bug that
+would otherwise have over-dropped 2.44M rows.
+
+`tests/test_access_exclusion.py` asserts the two implementations select
+identical rows, so a month's snapshot cannot silently differ from the one
+before it.
+
+The history/observations path deliberately keeps these rows: a nameless POI
+contributes no name-change signal, so it cannot affect the turnover fit.
 
 ## Overture Maps
 
@@ -78,7 +95,32 @@ conflation all see the reduced set from the start — tracked in [TODO.md](../TO
   - `brand` is a singular struct, **not** a `brands[]` array.
   - L0 category names: `food_and_drink`, `shopping`, `arts_and_entertainment`, `sports_and_recreation`, `health_care`.
   - Geometry is native DuckDB GEOMETRY — must `LOAD spatial;` and use `ST_X()` / `ST_Y()`.
-- **Upcoming migration (~June 2026)**: L0/L1 hierarchy → flat `basic_category`. Crosswalk CSV + `assign_overture_shared_label` will need updating.
+  - `brand` is a struct `{wikidata, names{primary, common, rules}}`. We extract both `brand.names.primary AS brand_name` and (since 2026-07-26) `brand.wikidata AS brand_wikidata`, the latter feeding identifier scoring. **Snapshots built before that date lack the column**; `conflate.py` appends it to the load list only when the file schema has it.
+- **Upcoming migration**: the deprecated `categories` field is slated for removal in the **September 2026** release, leaving `taxonomy` plus the flat `basic_category` (~280 labels, which Overture recommends for cross-taxonomy mapping and which we do not currently retain). The nested hierarchy itself is not going away; it now runs up to six levels, of which we store `l0..l3`.
+- **`taxonomy_allowlist` filters at L0/L1 only.** The download predicate never looks deeper, so an L1 *rename* under a partially-allowlisted L0 silently drops every row beneath it — the failure mode is invisible in the output because the rows simply never arrive. Wholesale-allowlisted L0s (`L1: null`) are immune. Widened 2026-07-27 to add `laundry_service`, `shipping_or_delivery_service`, `storage_facility`, `printing_service` and `geographic_entities/built_feature` (+395k POIs in bbox scope), which is what gives Laundromat, Dry Cleaning, Post Office, Self-Storage, Print and Copy Shop and Marina an Overture side at all.
+
+### Identifier field coverage (2026-07-22 release, US footprint)
+
+Measured on `20260722_tax3` for the match scorer — see
+[match-scoring.md](match-scoring.md):
+
+| field | Overture | OSM |
+|---|--:|--:|
+| website | 10,476,134 (83%) | 856,040 (17%) |
+| phone | 11,555,783 (92%) | 698,192 (14%) |
+| brand wikidata | 159,623 (1.27%) | 661,725 (13.2%) |
+
+Two things worth knowing. **Websites are not unique** — only 72% belong to a
+single POI, and 633,941 (6.2%) share one with 100+ others (`subway.com` covers
+10,834), so they identify a *brand*, not a location. And **branded chains
+deduplicate far harder than average**: the 159,623 rows carrying a wikidata id
+fall to 83,543 after Overture internal dedup, a ~48% reduction against ~5%
+overall, which says a lot about duplication in their Meta/Microsoft/Foursquare
+source merge.
+
+### The Feb/Mar 2026 taxonomy restructure
+
+Overture cut L0 from 22 to 13 and renamed 407 / reparented 482 / repathed 2,108 categories. The crosswalk was not updated at the time and rotted quietly: by July 2026, **111 of 247 rows (45%) were dead**, 26 shared_labels received zero Overture POIs, and 10.5% of rows fell through to L0-only catch-alls. The monthly `compare_taxonomy.py` check reported clean throughout, because the catch-alls label everything. §6 of that script now catches this — see [taxonomy-setup.md](taxonomy-setup.md). Authoritative taxonomy source: `OvertureMaps/docs` → `docs/guides/places/csv/2026-03-04-categories-hierarchies.csv`.
 
 ## Census boundary
 
