@@ -38,6 +38,7 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+import yaml
 from config_versioned import Config
 
 from openpois.conflation.taxonomy import (
@@ -153,6 +154,49 @@ def _t2_int(last_edited) -> np.ndarray:
     return t2_years, np.round(t2_years * 10).astype(int)
 
 
+def _check_full_data_fit(model_dir: Path, allow_sampled: bool) -> None:
+    """Refuse to rate from a fit trained on a POI subsample.
+
+    ``osm_turnover.py`` snapshots its resolved config into the model
+    directory, so the sample fraction the fit actually used is recorded
+    there. A sampled fit keeps only a fraction of the ``amenity_msa``
+    interaction cells (~18 of ~4,000 at 1%) and thins the per-label and
+    per-MSA levels with it, which quietly produces confidence estimates
+    far weaker than — and not comparable to — a full-data run. Rating is
+    the point where that becomes invisible, so the check lives here.
+    """
+    fit_config = model_dir / "config.yaml"
+    if not fit_config.exists():
+        print(
+            f"WARNING: {fit_config.name} missing from {model_dir}; cannot "
+            "confirm the fit used full data."
+        )
+        return
+
+    with open(fit_config) as handle:
+        fit_cfg = yaml.safe_load(handle) or {}
+    fraction = (
+        fit_cfg.get("osm_turnover_model", {}).get("poi_sample_fraction")
+    )
+    if fraction is None or float(fraction) >= 1.0:
+        return
+
+    message = (
+        f"The fit in {model_dir.name} used poi_sample_fraction="
+        f"{fraction} (a {float(fraction) * 100:g}% POI subsample), not full "
+        "data. Its confidence estimates would be materially weaker than a "
+        "full-data fit and not comparable to previous runs."
+    )
+    if allow_sampled:
+        print(f"WARNING: {message} Proceeding (--allow-sampled-fit).")
+        return
+    raise SystemExit(
+        f"ERROR: {message}\n"
+        "Re-fit with poi_sample_fraction 1.0 (the config default), or pass "
+        "--allow-sampled-fit if you knowingly want a sampled rating."
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description = "Rate the OSM snapshot with a fitted random_effects model."
@@ -169,6 +213,15 @@ if __name__ == "__main__":
         "--test", action = "store_true",
         help = "Process only the first 10,000 snapshot rows.",
     )
+    parser.add_argument(
+        "--allow-sampled-fit", action = "store_true",
+        help = (
+            "Rate from a fit trained on a POI subsample. Off by default: a "
+            "sampled fit loses most of its amenity_msa interaction cells and "
+            "per-label levels, so its confidence estimates are much weaker "
+            "and are not comparable to a full-data run."
+        ),
+    )
     args = parser.parse_args()
     model_version = args.model_version or DEFAULT_MODEL_VERSION
 
@@ -183,6 +236,7 @@ if __name__ == "__main__":
     model_dir = MODEL_BASE / model_version
     # Resolves Parquet (preferred) or legacy CSV; raises if neither is present.
     reconstruct.resolve_param_draws(model_dir)
+    _check_full_data_fit(model_dir, allow_sampled = args.allow_sampled_fit)
     print(f"Loading random_effects artifacts from {model_dir} ...")
     draws = reconstruct.load_random_effects_draws(model_dir)
     maps = reconstruct.load_factor_maps(model_dir)
