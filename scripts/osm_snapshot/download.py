@@ -59,6 +59,11 @@ TAG_FILTER_EXPRS = build_osm_tag_filter_expressions(_OSM_CROSSWALK)
 # Non-POI (key, value) tags (parking, benches, …) dropped from the snapshot
 # at parse time. Crosswalk rows whose shared_label is the EXCLUDE sentinel.
 EXCLUSIONS = get_osm_exclusions(_OSM_CROSSWALK)
+# Unnamed POIs carrying one of these access values are dropped at parse time
+# (see the "Exclusion" section of docs/data-sources.md).
+EXCLUDED_ACCESS = config.get(
+    "download", "osm", "excluded_access", fail_if_none = False,
+) or []
 OVERWRITE_DOWNLOAD = config.get("download", "osm", "overwrite_download")
 OVERWRITE_FILTER = config.get("download", "osm", "overwrite_filter")
 SOURCE_LABEL = config.get("download", "osm", "source_label")
@@ -127,6 +132,7 @@ if __name__ == "__main__":
         chunk_dir = CHUNK_DIR,
         verbose = VERBOSE,
         exclusions = EXCLUSIONS,
+        excluded_access = EXCLUDED_ACCESS,
     )
 
     # -------------------------------------------------------------------------

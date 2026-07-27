@@ -47,6 +47,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from collections.abc import Sequence
 from typing import NamedTuple
 
 import geopandas as gpd
@@ -218,21 +219,54 @@ def _drop_excluded_rows(
     return gdf.loc[~drop]
 
 
+def _drop_unnamed_private_rows(
+    gdf: gpd.GeoDataFrame,
+    excluded_access: Sequence[str] | None,
+) -> gpd.GeoDataFrame:
+    """Drop POIs that are unnamed *and* tagged with an excluded access.
+
+    These are anonymous non-public features — overwhelmingly
+    residential and HOA swimming pools — that add noise without value.
+    A named feature is always kept, however it is access-tagged, and
+    ``access=restricted`` is deliberately not in the excluded set (those
+    rows are mostly named facilities). See the "Exclusion" section of
+    docs/data-sources.md.
+
+    Both conditions must hold, so an untagged ``access`` (the common
+    case) never drops a row.
+    """
+    if not excluded_access:
+        return gdf
+    if "name" not in gdf.columns or "access" not in gdf.columns:
+        return gdf
+    name = gdf["name"]
+    unnamed = (name.isna() | (name.astype(str) == "")).to_numpy()
+    blocked = gdf["access"].isin(list(excluded_access)).to_numpy()
+    drop = unnamed & blocked
+    if not drop.any():
+        return gdf
+    return gdf.loc[~drop]
+
+
 def _flush_chunk(
     records: list[dict],
     chunk_dir: Path,
     chunk_idx: int,
     exclusions: dict[str, set[str]] | None = None,
     filter_keys: list[str] | None = None,
+    excluded_access: Sequence[str] | None = None,
 ) -> Path:
     """Write a list of record dicts to a temporary GeoParquet chunk file.
 
-    Excluded non-POI rows (see :func:`_drop_excluded_rows`) are filtered
-    out before the chunk is written, keeping them out of the snapshot.
+    Excluded non-POI rows (see :func:`_drop_excluded_rows`) and unnamed
+    private/no-access rows (see :func:`_drop_unnamed_private_rows`) are
+    filtered out before the chunk is written, keeping them out of the
+    snapshot.
     """
     df = pd.DataFrame(records)
     gdf = gpd.GeoDataFrame(df, geometry = "geometry", crs = "EPSG:4326")
     gdf = _drop_excluded_rows(gdf, exclusions, filter_keys)
+    gdf = _drop_unnamed_private_rows(gdf, excluded_access)
     chunk_path = chunk_dir / f"chunk_{chunk_idx:04d}.parquet"
     gdf.to_parquet(chunk_path)
     return chunk_path
@@ -300,6 +334,7 @@ def parse_pbf_to_parquet(
     chunk_dir: Path | None = None,
     verbose: bool = True,
     exclusions: dict[str, set[str]] | None = None,
+    excluded_access: Sequence[str] | None = None,
 ) -> Path:
     """
     Parses a filtered PBF file with pyosmium and writes the result as a
@@ -369,6 +404,7 @@ def parse_pbf_to_parquet(
                     _flush_chunk(
                         records, work_dir, chunk_idx,
                         exclusions = exclusions, filter_keys = filter_keys,
+                        excluded_access = excluded_access,
                     )
                     total_records += len(records)
                     if verbose:
@@ -384,6 +420,7 @@ def parse_pbf_to_parquet(
             _flush_chunk(
                 records, work_dir, chunk_idx,
                 exclusions = exclusions, filter_keys = filter_keys,
+                excluded_access = excluded_access,
             )
             total_records += len(records)
 
@@ -479,6 +516,7 @@ def _download_filter_parse_to_parquet(
     verbose: bool,
     tag_filter_exprs: list[str] | None = None,
     exclusions: dict[str, set[str]] | None = None,
+    excluded_access: Sequence[str] | None = None,
 ) -> Path:
     """Download a single Geofabrik PBF, filter it, and parse it to a parquet
     file at `parsed_parquet_path` without materialising a GeoDataFrame."""
@@ -505,6 +543,7 @@ def _download_filter_parse_to_parquet(
         chunk_dir = chunk_dir,
         verbose = verbose,
         exclusions = exclusions,
+        excluded_access = excluded_access,
     )
 
 
@@ -523,6 +562,7 @@ def download_osm_snapshot(
     verbose: bool = True,
     tag_filter_exprs: list[str] | None = None,
     exclusions: dict[str, set[str]] | None = None,
+    excluded_access: Sequence[str] | None = None,
 ) -> Path:
     """
     End-to-end orchestrator: download each Geofabrik extract in ``extracts``,
@@ -613,6 +653,7 @@ def download_osm_snapshot(
             verbose = verbose,
             tag_filter_exprs = tag_filter_exprs,
             exclusions = exclusions,
+            excluded_access = excluded_access,
         )
         parsed_paths.append(parsed_path)
 
