@@ -4,7 +4,13 @@ How a candidate (OSM, Overture) pair gets a score, how the threshold was
 calibrated, and what to check when changing any of it. The type component has
 its own deep-dive in [type-affinity-metric.md](type-affinity-metric.md).
 
-Reworked 2026-07-26/27. Everything below reflects the `20260729` run.
+Reworked 2026-07-26/27. Everything below still reflects the `20260729` run, and
+is unchanged by the `20260730` run: that one added two *exclusions* (residential
+landuse and the wildcard-to-inclusion-set taxonomy change) and touched no weight,
+component or threshold. The one scoring-adjacent movement in `20260730` is on the
+*shadow* matcher, not this one — `min_shadow_match_score` reached 0.70 for the
+first time. See
+[conflation-match-status-by-label-20260728.md](conflation-match-status-by-label-20260728.md).
 
 ## Pipeline
 

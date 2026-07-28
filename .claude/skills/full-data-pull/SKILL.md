@@ -32,7 +32,7 @@ Downloads the snapshot sources (50 US states + DC + 5 inhabited territories: PR,
 2. **Run the downloads** (independent — order doesn't matter, can run in parallel):
 
    ```bash
-   python scripts/osm_snapshot/download.py     # 4 Geofabrik PBFs → osm_snapshot.parquet
+   python scripts/osm_snapshot/download.py     # 4 Geofabrik PBFs → osm_snapshot.parquet + landuse_residential.parquet
    python scripts/overture/download.py         # DuckDB over S3   → overture_snapshot.parquet
    python scripts/osm_data/download_history.py # 4 internal OSH PBFs → osm_versions.parquet + osm_changes.parquet
    ```
@@ -69,6 +69,18 @@ Downloads the snapshot sources (50 US states + DC + 5 inhabited territories: PR,
    > drop the step. See the "Exclusion" section of
    > [docs/data-sources.md](../../docs/data-sources.md).
 
+   > **Snapshots built before 2026-07-27 only:** the same applies to the
+   > residential-landuse exclusion. Build the layer, then apply it to *both*
+   > files — the snapshot too, or the next `make rate` resurrects the rows:
+   > ```bash
+   > python -u scripts/osm_snapshot/build_residential_areas.py
+   > python -u scripts/osm_snapshot/apply_residential_exclusion.py --report-only
+   > python -u scripts/osm_snapshot/apply_residential_exclusion.py --target snapshot
+   > python -u scripts/osm_snapshot/apply_residential_exclusion.py --target rated_snapshot
+   > ```
+   > From the 2026-08 pull onward `download.py` does this inline and both
+   > report 0 dropped.
+
 4. **Optional schema snapshot** — produces small CSV snippets for spec review:
    ```bash
    python scripts/snapshots/load_samples.py
@@ -80,11 +92,26 @@ Hand off to [skills/verify-pipeline-run](../verify-pipeline-run/SKILL.md). Basel
 - OSM: ~7.78M POIs
 - Overture: ~13.05M POIs (jumped from ~7.23M after widening `download.overture.taxonomy_allowlist` to include `services_and_business` + `lifestyle_services` sub-branches)
 
-**Current baselines (2026-07 refresh)**: OSM 5,492,413 raw → 5,015,126 after the
-unnamed private/no-access exclusion; Overture 12,606,804 under the widened
-`taxonomy_allowlist`. The Overture extraction gained `brand_wikidata` on
-2026-07-26 — a snapshot without it still conflates, but identifier scoring loses
-the Wikidata clause.
+**Current baselines (2026-07 refresh).** The OSM snapshot now passes through two
+exclusions, so compare at the matching stage rather than to a single number:
+
+| stage | rows |
+|---|--:|
+| raw parse | 5,492,413 |
+| after unnamed `access=private\|no` | 5,015,126 (−8.7%) |
+| after residential landuse, *rated* file | 4,764,221 (−5.0%) |
+| after residential landuse, *base snapshot* | 4,935,585 (−10.1% of raw) |
+
+The base-snapshot and rated figures differ because the 2026-07 run applied the
+access exclusion only after rating; from the 2026-08 pull both exclusions run at
+snapshot build and the single expected number is **~4.72M** (raw, minus both).
+
+Overture 12,606,804 under the widened `taxonomy_allowlist`. The Overture
+extraction gained `brand_wikidata` on 2026-07-26 — a snapshot without it still
+conflates, but identifier scoring loses the Wikidata clause.
+
+Conflated output for reference: `20260730` = 14,613,331 rows (matched 1,787,072 /
+OSM-only 2,678,337 / Overture-only 10,147,922).
 
 **First territory-inclusive run (≥ 2026-05-21)**: expect ~20–50K additional POIs combined across the 4 new territories (GU/VI/MP/AS). The first such run has no per-territory baseline yet — record actuals in the verify-pipeline-run output so future runs have a comparison point.
 
