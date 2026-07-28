@@ -52,12 +52,37 @@ The rules land within a handful of names of an LLM second opinion over all 2,637
 
 `build_osm_tag_filter_expressions(load_osm_crosswalk())` turns the OSM crosswalk into `osmium tags-filter` expressions, so we only ingest tag *values* the taxonomy actually maps. Per `osm_key`:
 
-- has a wildcard `*` row → matched at key level (`nwr/amenity`)
-- no wildcard row → **value-scoped** to the listed values (`nwr/landuse=cemetery,religious`, `nwr/craft=<28 values>`)
+- has a wildcard `*` row → matched at key level (`nwr/shop`; only `shop` and `healthcare` still do, see below)
+- no wildcard row → **value-scoped** to the listed values (`nwr/landuse=cemetery,religious`, `nwr/amenity=<130 values>`, `nwr/craft=<28 values>`)
 
 Both ingest pipelines consume these via the `tag_filter_exprs` argument — snapshot (`scripts/osm_snapshot/download.py` → `download_osm_snapshot` → `filter_pbf`) and history (`scripts/osm_data/download_history.py` → `download_osm_history` → `filter_history_pbf`). This keeps both POI sets aligned with the taxonomy and avoids dragging in every value of a broad key (e.g. all `landuse=*` polygons).
 
-Consequence when editing the CSV: adding a row under a **wildcard-less** key (currently `landuse`, `craft`) widens what gets ingested on the next data pull; removing one narrows it. Adding a value under a key that has a `*` row changes only the label, not ingest. `config.yaml` `download.osm.filter_keys` must still list every `osm_key` (it sets the label-assignment priority order and the parse-time element gate).
+Consequence when editing the CSV: adding a row under a **wildcard-less** key (currently `landuse`, `craft`, `historic`, `amenity`, `office`, `leisure`, `tourism`) widens what gets ingested on the next data pull; removing one narrows it. Adding a value under a key that has a `*` row changes only the label, not ingest. `config.yaml` `download.osm.filter_keys` must still list every `osm_key` (it sets the label-assignment priority order and the parse-time element gate).
+
+### Only `shop` and `healthcare` keep a wildcard
+
+*Other Shop* and *Other Healthcare* are deliberate catch-alls for genuine one-off retail and clinical types. Every other key is value-scoped, and `tests/test_taxonomy.py::test_only_shop_and_healthcare_keep_a_wildcard` pins that.
+
+The `amenity`, `office`, `leisure` and `tourism` wildcards were removed on 2026-07-27. Together they were labelling **157,460 rows across 3,502 values** the crosswalk had no opinion about: street furniture (`amenity=chair` 424, `table` 720, `lounger` 1,396, `street_lamp` 352, `stadium_seating` 428, `leaning_bench`, `grit_bin`, `Stairs`, `swimming_pool_deck`), rooms and desks (`dressing_room`, `mailroom`, `reception_desk`, `check_in`), and untyped placeholders (`office=yes` 26,500). A blocklist of `EXCLUDE` rows — the previous approach — cannot keep pace with a tail that wide.
+
+**Not all 157,460 are dropped.** `assign_osm_shared_label` skips a key whose value the crosswalk does not map and lets a *lower-priority* key label the row, so a POI carrying both an omitted `leisure` value and a mapped `amenity` value still publishes. Measured against the 2026-07 rated snapshot, **61,764 rows (1.23%) lose their label entirely** and are dropped by `conflation.drop_unlabeled`; the other 95,696 fall through to a second tag. Dominated by `office=yes` (26,517) and `amenity=recycling` (15,161). For reference the pre-existing unlabeled count was 237,048, so the post-change total is ~298,812.
+
+**The criterion is destination vs object.** A *destination* is a place, institution, playing field or facility; it keeps a row, and mapping it to an existing catch-all label (*Other Amenity*, *Other Professional*, *Recreation*) is fine — the point of dropping the wildcard is to make membership explicit and reviewable, not to relabel everything. An *object* — a chair, bench, grill, lamp, seat, bin — gets no row.
+
+The review covered the 247 values occurring ≥20 times (95.6% of the tail): **165 kept, 82 omitted**. The 3,255 rarer values (6,877 rows, 0.14% of the snapshot) are omitted by default. Per-value dispositions are recoverable from the crosswalk diff in git history.
+
+Judgement calls worth knowing about:
+
+- **Placeholders are omitted**, both `=yes` and `=vacant`. This drops 14,375 *named* `office=yes` rows — real businesses that happen to be untyped — as the accepted cost of the rule. Consistent with the pre-existing `shop,vacant,EXCLUDE`.
+- **`amenity=recycling` (15,168) is omitted**: 11,064 of its rows are `recycling_type=container` (97% unnamed) against 2,722 `centre` (26% unnamed). Recovering the centres needs a `recycling_type` guard, which a `(key, value)` crosswalk cannot express — see [TODO.md](../TODO.md).
+- **`amenity=fountain` (39,076) is kept** and instead handled spatially by the residential exclusion, so named and civic fountains still publish.
+
+Two consequences of removing a wildcard, both accepted:
+
+1. `scripts/osm_data/download_history.py` builds `TAG_FILTER_EXPRS` from the *same* function, so the next history pull narrows too and ghosts stop being reconstructed for omitted values. Consistent — those POIs are not published — but ghost counts will move.
+2. A newly-popular `amenity=` value is now invisible until someone adds it, and backfilling needs a re-download.
+
+Adding a value here that maps to a **new** `shared_label` is a bigger change: it needs a `match_radii.csv` radius, an entry in `taxonomy_crosswalk_overture_maps.csv` (without one the label is OSM-only and can never match an Overture POI), possibly a `top_level_matches.csv` `(overture_l0, osm_key)` pair — `test_two_sided_labels_have_top_level_matches` enforces this — a `build_type_affinity.py` rebuild, and a full [sync-taxonomy](../skills/sync-taxonomy/SKILL.md) pass.
 
 ## Regenerating the site's taxonomy artifacts
 

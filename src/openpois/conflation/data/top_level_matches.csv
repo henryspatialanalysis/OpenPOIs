@@ -39,4 +39,6 @@ education,office
 travel_and_transportation,amenity
 travel_and_transportation,shop
 lodging,tourism
+lodging,leisure
+lodging,amenity
 geographic_entities,leisure

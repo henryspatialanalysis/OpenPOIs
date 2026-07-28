@@ -74,15 +74,23 @@ healthcare,psychotherapist,Mental Health
 healthcare,rehabilitation,Physical Therapy
 healthcare,speech_therapist,Speech Therapist
 amenity,animal_boarding,Pet Store
+amenity,animal_breeding,Other Amenity
 amenity,animal_shelter,Animal Shelter
+amenity,animal_training,Other Amenity
+amenity,archive,Library
+amenity,art_school,School
 amenity,arts_centre,Arts Venue
 amenity,atm,ATM
+amenity,auditorium,Performing Arts
 amenity,bank,Bank
 amenity,bar,Bar
 amenity,biergarten,Bar
+amenity,boat_rental,Recreation
 amenity,boat_storage,Self-Storage
 amenity,bureau_de_change,Other Financial
+amenity,bus_station,Other Amenity
 amenity,cafe,Cafe
+amenity,canteen,Restaurant
 amenity,car_rental,Car Rental
 amenity,car_wash,Car Wash
 amenity,casino,Casino
@@ -90,76 +98,170 @@ amenity,charging_station,Charging Station
 amenity,childcare,Childcare
 amenity,cinema,Movie Theater
 amenity,clinic,Clinic
+amenity,clubhouse,Social Club
 amenity,college,University
 amenity,community_centre,Community Center
+amenity,concert_hall,Performing Arts
 amenity,conference_centre,Event Venue
+amenity,cooking_school,School
 amenity,courthouse,Government Office
+amenity,coworking_space,Other Professional
+amenity,crematorium,Funeral Services
+amenity,customs,Government Office
 amenity,dancing_school,Performing Arts
 amenity,dentist,Dentist
+amenity,dive_centre,Recreation
 amenity,doctors,Clinic
 amenity,dojo,Fitness Center
+amenity,dormitory,Other Amenity
+amenity,driver_training,School
 amenity,driving_school,School
+amenity,events_centre,Event Venue
 amenity,events_venue,Event Venue
 amenity,exhibition_centre,Event Venue
 amenity,fast_food,Fast Food
+amenity,ferry_terminal,Other Amenity
+amenity,festival_grounds,Event Venue
+amenity,financial_advice,Other Financial
 amenity,fire_station,Public Safety
+amenity,flight_school,School
 amenity,food_court,Restaurant
+amenity,fortune_teller,Other Amenity
+amenity,fountain,Other Amenity
+amenity,fraternity,Social Club
 amenity,fuel,Gas Station
 amenity,funeral_hall,Funeral Services
+amenity,gambling,Casino
 amenity,grave_yard,Cemetery
+amenity,healthcare,Other Healthcare
+amenity,hookah_lounge,Bar
 amenity,hospital,Hospital
 amenity,ice_cream,Dessert Shop
+amenity,internet_cafe,Cafe
+amenity,karaoke_box,Nightclub
 amenity,kindergarten,Kindergarten
+amenity,language_school,School
 amenity,library,Library
+amenity,lounge,Other Amenity
 amenity,marketplace,Market
+amenity,monastery,Place of Worship
 amenity,money_transfer,Other Financial
+amenity,mortuary,Funeral Services
+amenity,motorcycle_rental,Car Rental
+amenity,mountain_rescue,Public Safety
 amenity,museum,Museum
 amenity,music_school,School
+amenity,music_venue,Performing Arts
 amenity,nightclub,Nightclub
+amenity,nursing_home,Other Healthcare
+amenity,payment_centre,Other Financial
 amenity,pharmacy,Pharmacy
 amenity,place_of_worship,Place of Worship
+amenity,planetarium,Museum
 amenity,police,Public Safety
+amenity,polling_station,Government Office
+amenity,post_depot,Post Office
 amenity,post_office,Post Office
 amenity,prep_school,School
+amenity,prison,Public Safety
 amenity,pub,Bar
+amenity,public_bath,Recreation
+amenity,public_building,Government Office
+amenity,ranger_station,Other Amenity
+amenity,research_institute,Other Professional
 amenity,restaurant,Restaurant
+amenity,retirement_home,Other Healthcare
+amenity,rv_storage,Self-Storage
 amenity,school,School
+amenity,self_storage,Self-Storage
+amenity,shower,Other Amenity
+amenity,ski_rental,Sports Outlet
+amenity,ski_school,School
 amenity,social_centre,Social Club
+amenity,social_club,Social Club
 amenity,social_facility,Community Center
+amenity,sorority,Social Club
+amenity,spa,Hair and Beauty
 amenity,stripclub,Nightclub
+amenity,student_accommodation,Other Amenity
+amenity,student_accomodation,Other Amenity
+amenity,student_accomodations,Other Amenity
+amenity,studio,Arts Venue
+amenity,swingerclub,Nightclub
+amenity,tent_pad,Campground
 amenity,theatre,Performing Arts
 amenity,toilets,Public Restroom
+amenity,towing,Car Repair
 amenity,townhall,Government Office
+amenity,trade_school,School
+amenity,traffic_park,Recreation
+amenity,trailer_park,Campground
+amenity,training,School
 amenity,university,University
+amenity,vehicle_inspection,Car Repair
 amenity,veterinary,Veterinarian
+amenity,warehouse,Other Amenity
+amenity,waste_transfer_station,Other Amenity
+amenity,weigh_station,Other Amenity
+leisure,adult_gaming_centre,Arcade
 leisure,amusement_arcade,Arcade
+leisure,axe_throwing,Recreation
+leisure,bandstand,Performing Arts
+leisure,bathing_place,Swimming Pool
+leisure,batting_cage,Recreation
+leisure,beach_resort,Hotel
+leisure,bird_hide,Recreation
 leisure,bowling_alley,Bowling Alley
+leisure,common,Park
+leisure,commons,Park
 leisure,dance,Performing Arts
 leisure,disc_golf_course,Recreation
 leisure,dog_park,Dog Park
 leisure,escape_game,Recreation
+leisure,fishing,Recreation
 leisure,fitness_centre,Fitness Center
 leisure,garden,Park
 leisure,golf_course,Golf Course
+leisure,hackerspace,Social Club
 leisure,horse_riding,Recreation
 leisure,ice_rink,Recreation
+leisure,indoor_play,Recreation
 leisure,marina,Marina
+leisure,maze,Recreation
 leisure,miniature_golf,Recreation
+leisure,mixed-use_track,Recreation
 leisure,nature_reserve,Park
+leisure,offroad_driving,Recreation
+leisure,paddling_pool,Swimming Pool
 leisure,park,Park
+leisure,parklet,Park
 leisure,pitch,Recreation
 leisure,playground,Playground
+leisure,practice_pitch,Recreation
+leisure,recreation_ground,Recreation
+leisure,resort,Hotel
+leisure,sauna,Recreation
+leisure,schoolyard,Recreation
+leisure,shooting_ground,Recreation
+leisure,social_club,Social Club
+leisure,spa,Hair and Beauty
 leisure,sports_centre,Recreation
+leisure,sports_hall,Recreation
 leisure,stadium,Stadium
+leisure,summer_camp,Campground
+leisure,swimming_area,Swimming Pool
 leisure,swimming_pool,Swimming Pool
+leisure,tanning_salon,Hair and Beauty
 leisure,track,Recreation
 leisure,trampoline_park,Recreation
 leisure,water_park,Recreation
+leisure,wildlife_hide,Recreation
 tourism,alpine_hut,Hotel
 tourism,apartment,Hotel
 tourism,aquarium,Recreation
 tourism,artwork,Other Amenity
 tourism,attraction,Recreation
+tourism,cabin,Hotel
 tourism,camp_site,Campground
 tourism,caravan_site,Campground
 tourism,chalet,Hotel
@@ -169,40 +271,103 @@ tourism,hostel,Hotel
 tourism,hotel,Hotel
 tourism,motel,Hotel
 tourism,museum,Museum
+tourism,nature_centre,Museum
+tourism,ruins,Historic Site
+tourism,rv_pitch,Campground
 tourism,theme_park,Recreation
+tourism,trail_riding_station,Recreation
 tourism,viewpoint,Other Amenity
 tourism,wilderness_hut,Hotel
+tourism,winery,Other Amenity
 tourism,zoo,Recreation
 office,accountant,Other Financial
+office,administrative,Government Office
+office,adoption_agency,Other Professional
 office,advertising_agency,Other Professional
+office,apartments,Real Estate
 office,architect,Other Professional
 office,association,Community Center
+office,auctioneer,Other Professional
+office,bail_bond_agent,Legal Service
+office,bank,Bank
+office,camping,Other Professional
+office,charity,Other Professional
+office,cheque_cashing,Other Financial
+office,church,Place of Worship
+office,cleaning,Home Service
 office,company,Other Professional
+office,construction,Other Professional
+office,construction_company,Other Professional
 office,consulting,Other Professional
+office,contractor,Other Professional
+office,cooperative,Other Professional
+office,courier,Other Professional
+office,coworking,Other Professional
+office,design,Other Professional
 office,diplomatic,Government Office
+office,education,School
 office,educational_institution,School
 office,employment_agency,Other Professional
 office,engineer,Other Professional
 office,energy_supplier,Other Professional
+office,engineering,Other Professional
 office,estate_agent,Real Estate
 office,financial,Other Financial
 office,financial_advisor,Other Financial
+office,forestry,Other Professional
+office,foundation,Other Professional
+office,general_contractor,Other Professional
 office,government,Government Office
+office,graphic_design,Other Professional
+office,guide,Other Professional
+office,harbour_master,Government Office
+office,healthcare,Other Healthcare
+office,home_care,Other Healthcare
 office,insurance,Other Financial
+office,interior_design,Other Professional
+office,investment,Other Financial
 office,it,Other Professional
 office,lawyer,Legal Service
+office,leasing,Real Estate
 office,logistics,Other Professional
+office,logistics_service,Other Professional
+office,marketing,Other Professional
+office,medical,Clinic
+office,military,Government Office
+office,mortgage,Other Financial
 office,moving_company,Home Service
 office,newspaper,Other Professional
 office,ngo,Community Center
 office,notary,Legal Service
+office,parish,Place of Worship
+office,pest_control,Home Service
+office,physician,Clinic
 office,political_party,Community Center
+office,private_investigator,Other Professional
 office,property_management,Real Estate
+office,publisher,Other Professional
+office,quango,Government Office
+office,rectory,Place of Worship
 office,religion,Place of Worship
 office,research,Other Professional
+office,school,School
 office,security,Other Professional
+office,software,Other Professional
+office,surveyor,Other Professional
 office,tax_advisor,Other Financial
+office,taxi,Other Professional
 office,telecommunication,Other Professional
+office,therapist,Counseling
+office,towing,Other Professional
+office,transport,Other Professional
+office,transportation,Other Professional
+office,travel_agent,Other Professional
+office,tutoring,School
+office,union,Other Professional
+office,university,University
+office,utility,Government Office
+office,water_utility,Government Office
+office,wedding_planner,Other Professional
 craft,brewery,Bar
 craft,builder,Home Service
 craft,carpenter,Home Service
@@ -290,9 +455,5 @@ shop,vacant,EXCLUDE
 tourism,camp_pitch,EXCLUDE
 tourism,information,EXCLUDE
 tourism,picnic_site,EXCLUDE
-amenity,*,Other Amenity
 healthcare,*,Other Healthcare
 shop,*,Other Shop
-leisure,*,Recreation
-tourism,*,Other Amenity
-office,*,Other Professional

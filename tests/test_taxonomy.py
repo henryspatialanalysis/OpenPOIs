@@ -174,10 +174,23 @@ class TestLoadOsmCrosswalk:
             "osm_key", "osm_value", "shared_label",
         }
 
-    def test_has_wildcard_rows(self):
+    def test_only_shop_and_healthcare_keep_a_wildcard(self):
+        """Exactly two keys may fall back to a catch-all.
+
+        *Other Shop* and *Other Healthcare* are deliberate catch-alls for
+        genuine one-off retail and clinical types. Every other key is
+        value-scoped: a wildcard there labels whatever the crosswalk has no
+        opinion about, which in 2026-07 meant 157,460 rows of street
+        furniture (``amenity=chair``, ``street_lamp``, ``stadium_seating``)
+        and untyped placeholders (``office=yes``) — 61,764 of which had no
+        other mapped tag to fall back on. A wildcard also makes the
+        key's osmium ingest expression a bare ``nwr/<key>``, so reinstating
+        one silently widens the PBF pull as well. See
+        .claude/docs/taxonomy-setup.md.
+        """
         cw = load_osm_crosswalk()
-        wildcards = cw[cw["osm_value"] == "*"]
-        assert len(wildcards) >= 4
+        wildcards = set(cw.loc[cw["osm_value"] == "*", "osm_key"])
+        assert wildcards == {"shop", "healthcare"}
 
 
 class TestLoadOvertureCrosswalk:
