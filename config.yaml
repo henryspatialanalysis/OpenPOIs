@@ -90,6 +90,29 @@ download:
     # keeps these rows — a nameless POI carries no name-change signal, so it
     # cannot affect the turnover fit.
     excluded_access: ['private', 'no']
+    # Second, mapper-independent private-property exclusion. `access` only
+    # catches features somebody bothered to tag; the 2026-07 validation round
+    # found the OSM-only segment's unverifiable rate is still dominated by
+    # unnamed, imagery-traced features on private land (backyard pools, HOA
+    # gardens, unnamed pitches). landuse=residential polygons are extracted
+    # from the raw PBFs by a second osmium pass, and an unnamed POI whose
+    # representative point falls inside one is dropped.
+    #
+    # Deliberately tag-scoped: in the US landuse=residential is routinely drawn
+    # around a whole subdivision, so an unscoped rule would also remove unnamed
+    # convenience stores, places of worship, fuel stations and schools that
+    # legitimately sit inside those blocks. Named features are never dropped.
+    # Scoping applies to the POI's *primary* tag (first non-null key in
+    # filter_keys order), matching how shared_label is assigned.
+    #
+    # Set landuse_values to [] to disable the whole step.
+    residential_exclusion:
+      landuse_values: ['residential']
+      scoped_tags:
+        leisure: ['pitch', 'swimming_pool', 'playground', 'garden', 'track',
+                  'common', 'batting_cage', 'practice_pitch', 'paddling_pool']
+        amenity: ['fountain', 'shower', 'boat_storage', 'rv_storage']
+        tourism: ['rv_pitch']
     extract_keys: [
       'addr:city','addr:country','addr:housename','addr:housenumber','addr:postcode',
       'addr:state','addr:street','addr:unit','access','amenity','atm','bar','bicycle',
@@ -350,6 +373,16 @@ directories:
       filtered_usvi_pbf: us-virgin-islands-pois.osm.pbf
       raw_american_oceania_pbf: american-oceania-latest.osm.pbf
       filtered_american_oceania_pbf: american-oceania-pois.osm.pbf
+      # landuse=residential polygons, extracted from the raw PBFs by a second
+      # osmium pass (the POI ingest filter is value-scoped to
+      # landuse=cemetery,religious so residential never reaches it). Persisted
+      # because download.py unlinks the raw PBFs, and rebuilding the layer
+      # otherwise means another ~11 GB Geofabrik pull.
+      residential_filtered_pbf: us-residential.osm.pbf
+      residential_pr_filtered_pbf: puerto-rico-residential.osm.pbf
+      residential_usvi_filtered_pbf: us-virgin-islands-residential.osm.pbf
+      residential_american_oceania_filtered_pbf: american-oceania-residential.osm.pbf
+      residential_areas: landuse_residential.parquet
       snapshot: osm_snapshot.parquet
       rated_snapshot: osm_snapshot_rated.parquet
       partitioned: osm_snapshot_partitioned

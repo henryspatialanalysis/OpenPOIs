@@ -81,6 +81,105 @@ before it.
 The history/observations path deliberately keeps these rows: a nameless POI
 contributes no name-change signal, so it cannot affect the turnover fit.
 
+### Exclusion: unnamed POIs inside `landuse=residential`
+
+`access` only catches features whose mapper bothered to tag them. The 2026-07
+validation round (155 POIs, `openpois-validator` round `20260724`) found the
+OSM-only segment's unverifiable rate is still dominated by unnamed,
+imagery-traced features on private land — backyard pools, HOA gardens, unnamed
+pitches and playgrounds. None can be desk- or phone-verified.
+
+`landuse=residential` polygons are a **mapper-independent** proxy for private
+property. An unnamed POI whose representative point falls inside one, and whose
+primary tag is in `download.osm.residential_exclusion.scoped_tags`, is dropped.
+
+Three properties of the rule matter:
+
+- **Tag-scoped.** In the US `landuse=residential` is routinely drawn around a
+  whole subdivision or neighbourhood block, so an unscoped rule would also
+  remove unnamed convenience stores (14k), places of worship (24k), fuel
+  stations (23k) and schools (12k) that legitimately sit inside those blocks.
+- **Named features are always kept**, wherever they sit. A name is the single
+  strongest signal that somebody verified the feature on the ground.
+- **Scoping uses the *primary* tag** — the first non-null key in
+  `download.osm.filter_keys` order — so a POI is never scoped by an incidental
+  secondary tag. This is deliberately *not* identical to
+  `assign_osm_shared_label`, which skips a key whose value the crosswalk does
+  not map and lets a lower-priority key label the row. The difference only
+  bites when the top-priority key carries an unmapped value, and it resolves
+  towards *keeping* the row — the right error direction for a rule that
+  deletes data.
+
+A contact-field guard (spare anything with a website/phone/opening_hours/
+housenumber) was considered and rejected on the data: those tags are present on
+only ~0.1% of the scoped values — 778 of 612,854 `leisure=pitch` — so it would
+rescue almost nothing while complicating the predicate.
+
+**Measured, 2026-07 (`landuse_residential.parquet`, 1,172,498 usable polygons):**
+
+| target | before | after | dropped |
+|---|--:|--:|--:|
+| `osm_snapshot_rated.parquet` | 5,015,126 | 4,764,221 | 250,905 (5.00%) |
+| `osm_snapshot.parquet` | 5,492,413 | 4,935,585 | 556,828 (10.14%) |
+
+The base snapshot drops twice as many because it still contains the 477,287
+unnamed `access=private|no` rows that `apply_access_exclusion.py` strips *after*
+rating — 294,041 of the extra drops are swimming pools. The two exclusions
+independently converge on the same backyard pools, which is a useful check that
+the spatial rule is finding what it is meant to.
+
+By tag on the rated snapshot, with the share of that tag's unnamed population:
+`leisure=swimming_pool` 127,799 (**50.6%**), `pitch` 66,176 (10.8%),
+`playground` 30,911 (20.0%), `garden` 13,792 (9.9%), `amenity=fountain` 10,414
+(28.0%), `leisure=track` 1,073 (3.6%), everything else 740. Half of all unnamed
+pools sitting inside residential landuse against only 11% of pitches is exactly
+what the private-property hypothesis predicts.
+
+**False-exclusion check.** Cross-referenced against the 155-POI
+`openpois-validator` round `20260724` (100 have an OSM side). Of the 22 POIs
+actually *eligible* — unnamed and in scope — the rule removed 6, **all of them
+`unverifiable`, and neither of the 2 eligible `exists` POIs**. Directionally
+right, but note the small denominator: with only 2 eligible `exists` POIs this
+establishes no useful upper bound on the false-exclusion rate.
+
+**Do not use `conf_mean` to sanity-check this exclusion.** Dropped rows skew
+*high* (93,943 in the 0.8–1.0 band against 568 below 0.2), because the turnover
+model scores name-change stability and an unnamed POI has no name to change. The
+two signals measure different things.
+
+Values already carrying an `EXCLUDE` crosswalk row need no residential rule and
+are deliberately absent from `scoped_tags`: `amenity=bbq`, `amenity=shelter`,
+`leisure=firepit`, `leisure=hot_tub`, `leisure=slipway`,
+`leisure=fitness_station`, `tourism=picnic_site`, `tourism=camp_pitch`.
+
+**Where it is applied.** The polygon layer is built by a second osmium pass
+(`wr/landuse=residential`) over the raw Geofabrik extracts — the POI ingest
+filter value-scopes `landuse` to `cemetery,religious`, so residential never
+reaches it. `download.py` runs this immediately after the snapshot is
+assembled and **before** it unlinks the raw PBFs, then filters
+`osm_snapshot.parquet` in place, keeping `osm_snapshot.preresidential.parquet`.
+The layer is persisted as `landuse_residential.parquet` so retuning the rule is
+a config edit plus a re-run of
+[apply_residential_exclusion.py](../../scripts/osm_snapshot/apply_residential_exclusion.py),
+not another ~11 GB Geofabrik pull.
+
+**This takes effect from the 2026-08 OSM pull onward**, exactly as the access
+exclusion did. The 2026-07 snapshot was built before the wiring, so that run
+applied the filter retroactively to both `osm_snapshot.parquet` and
+`osm_snapshot_rated.parquet` — the snapshot too, because `make rate`
+regenerates the rated file from it and would otherwise resurrect the rows.
+
+Predicate and helpers live in
+[openpois/osm/residential.py](../../src/openpois/osm/residential.py); the layer
+builder is
+[build_residential_areas.py](../../scripts/osm_snapshot/build_residential_areas.py).
+`tests/test_residential_exclusion.py` pins the predicate and asserts every
+`scoped_tags` value still resolves to a published crosswalk row — without that,
+a taxonomy edit could leave the spatial rule with nothing to filter.
+
+As with `access`, the history/observations path keeps these rows: they carry no
+name-change signal and cannot affect the turnover fit.
+
 ## Overture Maps
 
 **Used by**: current-state Overture snapshot (`overture_snapshot.parquet`).
