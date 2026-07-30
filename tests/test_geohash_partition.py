@@ -15,9 +15,12 @@ from __future__ import annotations
 import warnings
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 import pygeohash
 import pytest
+import shapely
+from pathlib import Path
 from shapely.geometry import MultiPolygon, Point, Polygon
 
 from openpois.io.geohash_partition import (
@@ -25,6 +28,7 @@ from openpois.io.geohash_partition import (
     add_geohash_columns,
     compute_primary_osm_tag,
     write_label_partitioned_dataset,
+    write_label_partitioned_from_parquet,
     write_partitioned_dataset,
 )
 
@@ -571,3 +575,112 @@ class TestDuckDBHiveRoundtrip:
         ).fetchall()
 
         assert rows == [("Bakery", 1), ("Fast Food Restaurant", 1)]
+
+
+# --- Streaming (low-memory) label partitioning ------------------------------
+# The whole-frame path does not fit in memory at national scale: 14.6M rows x
+# 58 columns peaked at 21.5 GB RSS against a 24 GB cap. These pin the streaming
+# path to produce byte-identical output.
+
+def _fixture(n = 400, seed = 9):
+    rng = np.random.default_rng(seed)
+    return gpd.GeoDataFrame(
+        {
+            "osm_id": np.arange(n),
+            "shop": rng.choice([None, "bakery"], n),
+            "healthcare": rng.choice([None, "clinic"], n),
+            "amenity": rng.choice([None, "cafe"], n),
+            "shared_label": rng.choice(
+                ["Restaurant", "Park", "Fast Food Restaurant"], n
+            ),
+            "conf_mean": rng.uniform(0, 1, n),
+            "geometry": [
+                shapely.Point(x, y)
+                for x, y in zip(rng.uniform(-124, -68, n),
+                                rng.uniform(25, 49, n))
+            ],
+        },
+        crs = "EPSG:4326",
+    )
+
+
+def _read_hive(path):
+    import pyarrow.dataset as pads
+
+    return pads.dataset(str(path), format = "parquet",
+                        partitioning = "hive").to_table()
+
+
+def _assert_same_dataset(ref_dir, stream_dir, key = "osm_id"):
+    ref, stream = _read_hive(ref_dir), _read_hive(stream_dir)
+    assert sorted(ref.schema.names) == sorted(stream.schema.names)
+    assert ref.num_rows == stream.num_rows
+    left = ref.to_pandas().sort_values(key).reset_index(drop = True)
+    right = stream.to_pandas().sort_values(key).reset_index(drop = True)
+    cols = [c for c in left.columns if c != "geometry"]
+    assert left[cols].equals(right[cols])
+    assert (sorted(p.name for p in Path(ref_dir).iterdir())
+            == sorted(p.name for p in Path(stream_dir).iterdir()))
+
+
+def test_streaming_partition_matches_whole_frame_stored_column(tmp_path):
+    """Stored partition column: streaming output must equal the in-memory one."""
+    gdf = _fixture()
+    src = tmp_path / "in.parquet"
+    gdf.to_parquet(src, row_group_size = 97)
+
+    ref = add_geohash_column(gdf.copy(), precision = 6)
+    write_label_partitioned_dataset(
+        ref, tmp_path / "ref", partition_col = "shared_label",
+        sort_col = "geohash", overwrite = True,
+    )
+    n = write_label_partitioned_from_parquet(
+        src, tmp_path / "stream", partition_col = "shared_label",
+        geohash_precision = 6, sort_col = "geohash", overwrite = True,
+    )
+    assert n == len(gdf)
+    _assert_same_dataset(tmp_path / "ref", tmp_path / "stream")
+
+
+def test_streaming_partition_matches_whole_frame_derived_labels(tmp_path):
+    """Derived partition column, with null labels and several row groups.
+
+    ``primary_tag`` is a nullable-string dtype, so an unfilled ``labels ==
+    value`` mask carries pd.NA and is unusable as an index -- the regression
+    this pins.
+    """
+    keys = ["shop", "healthcare", "amenity"]
+    gdf = _fixture()
+    src = tmp_path / "in.parquet"
+    gdf.to_parquet(src, row_group_size = 97)
+
+    ref = add_geohash_column(
+        compute_primary_osm_tag(gdf.copy(), filter_keys = keys), precision = 6
+    )
+    write_label_partitioned_dataset(
+        ref, tmp_path / "ref", partition_col = "primary_tag",
+        sort_col = "geohash", overwrite = True,
+    )
+    labels = compute_primary_osm_tag(
+        pd.read_parquet(src, columns = keys), filter_keys = keys
+    )["primary_tag"]
+    assert labels.isna().any(), "fixture should exercise null labels"
+    n = write_label_partitioned_from_parquet(
+        src, tmp_path / "stream", partition_col = "primary_tag",
+        geohash_precision = 6, sort_col = "geohash", overwrite = True,
+        labels = labels,
+    )
+    assert n == int(labels.notna().sum())
+    _assert_same_dataset(tmp_path / "ref", tmp_path / "stream")
+
+
+def test_streaming_partition_rejects_misaligned_labels(tmp_path):
+    gdf = _fixture(n = 50)
+    src = tmp_path / "in.parquet"
+    gdf.to_parquet(src)
+    with pytest.raises(ValueError, match = "labels length"):
+        write_label_partitioned_from_parquet(
+            src, tmp_path / "out", partition_col = "primary_tag",
+            geohash_precision = 6, overwrite = True,
+            labels = pd.Series(["amenity"] * 3),
+        )
