@@ -19,7 +19,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
 ]
 requires-python = ">=3.10.0"
-version = "1.0.0"
+version = "1.1.0"
 
 [project.urls]
 Documentation = "https://github.com/henryspatialanalysis/openpois"
