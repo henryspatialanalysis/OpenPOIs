@@ -590,8 +590,13 @@ conflation:
 # prefixed by ``{repo_prefix}/``; public reads are served at
 # ``{public_base_url}/``.
 publish:
-  bucket: "us-west-2.opendata.source.coop"
-  repo_prefix: "henryspatialanalysis/openpois"
+  # Source Coop serves S3 through a data proxy where the BUCKET is the account
+  # and the repository is the first key segment. The former direct-S3 layout
+  # (bucket us-west-2.opendata.source.coop, keys henryspatialanalysis/openpois/)
+  # no longer authenticates with proxy-issued credentials.
+  endpoint_url: "https://data.source.coop"
+  bucket: "henryspatialanalysis"
+  repo_prefix: "openpois"
   public_base_url: "https://data.source.coop/henryspatialanalysis/openpois"
   credentials_file: "~/repos/openpois/.env.json"
   geohash_precision_sort: 6       # ~0.6 km x 1.2 km; within-partition sort key for spatial row-group pruning
