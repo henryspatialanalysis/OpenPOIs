@@ -42,9 +42,19 @@ Cooperative version folder.
 
    **Post-territory-expansion**: tippecanoe (run upstream during `conflate-snapshots`) now widens its tile pyramid to cover both hemispheres now that territory POIs span ~+144°E to ~-170°W. The PMTiles archive should still be small (z14, point data only), but a >2× jump in `osm.pmtiles` / `conflated.pmtiles` size vs the prior version suggests an unwanted full-globe tile pyramid — investigate before deploying.
 
-5. **Deploy** — per host's deployment mechanism (not scripted in-repo).
+5. **Deploy — automatic.** [.github/workflows/deploy-site.yml](../../../.github/workflows/deploy-site.yml)
+   builds and publishes to GitHub Pages on every push to `main` touching
+   `site/**`, `src/**`, `docs/**`, `scripts/**` or the workflows. Merging the
+   release PR is the deploy; there is nothing to run by hand. Trigger a rebuild
+   without a code change via `workflow_dispatch`, and watch a run with:
+   ```bash
+   gh run list --workflow=deploy-site.yml --limit 5
+   ```
+   Note CI regenerates `site/public/taxonomy.html` from the crosswalk CSVs and
+   builds the Sphinx docs into `site/dist/docs`, so both can differ from what a
+   local `npm run build` produces.
 
-6. **Post-deploy check** — load the deployed site, open browser console, confirm no CORS or 404s on the new Source Coop URLs.
+6. **Post-deploy check** — load the deployed site, open browser console, confirm no CORS or 404s on the new Source Coop URLs. After a taxonomy change also check `/taxonomy.html` lists the new labels, and after an `api.rst` change check `/docs`.
 
 ## Commit convention
 
