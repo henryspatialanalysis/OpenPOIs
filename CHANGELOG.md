@@ -1,5 +1,62 @@
 # Changelog
 
+## 2026-07-30-v0
+
+### Snapshot inputs
+
+| Source                 | Value                                       |
+| ---------------------- | ------------------------------------------- |
+| OSM snapshot date      | 2026-07-24                                  |
+| Overture release       | `2026-07-22.0` (pinned)                     |
+| OSM snapshot rows      | 4,764,221                                   |
+| Overture snapshot rows | 12,606,804                                  |
+| Boundary footprint     | US + all territories (PR, USVI, GU, MP, AS) |
+
+### Conflated output
+
+| Metric                       | This run    | Prior        | Δ                       |
+| ---------------------------- | ----------- | ------------ | ----------------------- |
+| Total rows                   | 14,613,331  | 14,922,534   | −309,203 (−2.07%)       |
+| Matched OSM × Overture       | 1,787,072   | —            | see note                |
+| OSM-only                     | 2,678,337   | —            | see note                |
+| Overture-only                | 10,147,922  | —            | see note                |
+| Shadow-matched (CD penalty)  | 30,340      | —            | —                       |
+| Shared labels                | 102         | 93           | +9                      |
+
+Row counts are not directly comparable to the 2026-06-27 release: the July run
+also introduced the taxonomy overhaul and two non-POI exclusions (the
+residential-landuse spatial rule and the wildcard → inclusion-set change).
+
+### Methods changes vs. prior release
+
+- **Confidence calibration (new, headline change).** `conf_mean` on the
+  conflated dataset is now a **calibrated probability that the POI exists and
+  is currently open to the public**, estimated from an independent validation
+  sample (7,504 researched POIs, 2,362 with human-confirmed status) via a
+  design-based two-phase estimator, and fitted separately per detection
+  segment. This replaces three uncalibrated constants: the `0.588/0.412`
+  matched blend, the flat `×0.7` downweight on Overture-only confidence, and
+  the OSM-only passthrough. **`conf_mean` is therefore not comparable to any
+  earlier release**; `conf_mean_uncalibrated` retains the old-style value.
+  Matched POIs now combine both source scores through a *fitted* log-odds pool
+  rather than a fixed linear blend.
+  - New columns: `conf_mean_uncalibrated`, `calibration_flag`.
+  - `conf_lower` / `conf_upper` are now populated for **all** segments; they
+    were null for every Overture-only row in prior releases.
+  - Mean `conf_mean` by segment: matched 0.878 → 0.907, OSM-only 0.780 →
+    0.802, Overture-only 0.570 → 0.684.
+  - `conf_mean` in `osm-parquet/` is unchanged and remains the *uncalibrated*
+    OSM turnover posterior. The two datasets' confidence columns are no longer
+    numerically comparable — see the README.
+- **Taxonomy overhaul.** Crosswalk wildcards for `amenity`/`office`/`leisure`/
+  `tourism` replaced with explicit inclusion sets; only `shop` and `healthcare`
+  keep a wildcard. Shared labels 93 → 102.
+- **Non-POI exclusions.** Unnamed POIs inside `landuse=residential` polygons,
+  and unnamed POIs with `access=private|no`, are no longer published.
+- **Match scoring rework.** Type affinity replaces the exact/0.5/0 type tiers,
+  real identifier scoring, per-pair conditional component weights, and
+  `min_match_score` raised 0.50 → 0.70.
+
 ## 2026-05-21-v0
 
 ### Snapshot inputs
