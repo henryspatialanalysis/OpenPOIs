@@ -20,6 +20,7 @@ from pathlib import Path
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import pyarrow.parquet as pq
 import pygeohash
 import shapely
@@ -253,57 +254,214 @@ def write_label_partitioned_dataset(
     n_partitions = len(groups)
     print(f"Writing {n_partitions} partitions to {output_dir} ...")
     for i, (value, group) in enumerate(groups):
-        safe_value = urllib.parse.quote(str(value), safe = "")
-        partition_dir = output_dir / f"{partition_col}={safe_value}"
-        partition_dir.mkdir()
-        part_path = partition_dir / "part-0.parquet"
-
-        # np.argsort + iloc avoids the full-partition copy that
-        # pandas .sort_values() would make; on the 3.9M-row "Other
-        # Amenity" partition that single dropped copy is ~3 GB.
-        sort_keys = group[sort_col].to_numpy()
-        sort_indices = np.argsort(sort_keys, kind = "mergesort")
-        del sort_keys
-
-        n_rows = len(group)
-        if n_rows <= chunk_rows:
-            # Small partitions: single write_table — same end state
-            # as the old code path.
-            sorted_slice = group.iloc[sort_indices][cols]
-            table = _geopandas_to_arrow(
-                sorted_slice, write_covering_bbox = True,
-            )
-            pq.write_table(
-                table, str(part_path),
-                row_group_size = 100_000,
-            )
-            del sorted_slice, table
-        else:
-            # Large partitions: stream via ParquetWriter in row-group
-            # chunks so the Arrow Table never coexists at full size
-            # with the parent GeoDataFrame.
-            sample_slice = group.iloc[sort_indices[:1]][cols]
-            sample_tbl = _geopandas_to_arrow(
-                sample_slice, write_covering_bbox = True,
-            )
-            schema = sample_tbl.schema
-            del sample_slice, sample_tbl
-
-            with pq.ParquetWriter(str(part_path), schema) as writer:
-                for chunk_start in range(0, n_rows, chunk_rows):
-                    chunk_end = min(chunk_start + chunk_rows, n_rows)
-                    chunk_indices = sort_indices[chunk_start:chunk_end]
-                    chunk_slice = group.iloc[chunk_indices][cols]
-                    chunk_tbl = _geopandas_to_arrow(
-                        chunk_slice, write_covering_bbox = True,
-                    )
-                    writer.write_table(
-                        chunk_tbl, row_group_size = 100_000,
-                    )
-                    del chunk_slice, chunk_tbl
-                    gc.collect()
-
-        gc.collect()
-
+        _write_one_partition(
+            group, cols, output_dir, partition_col, value, sort_col,
+            chunk_rows,
+        )
         if (i + 1) % 25 == 0:
             print(f"  {i + 1}/{n_partitions} partitions written...")
+
+
+def _write_one_partition(group, cols, output_dir: Path, partition_col: str,
+                         value, sort_col: str, chunk_rows: int) -> int:
+    """Write one Hive partition directory, geohash-sorted. Returns row count."""
+    safe_value = urllib.parse.quote(str(value), safe = "")
+    partition_dir = output_dir / f"{partition_col}={safe_value}"
+    partition_dir.mkdir(parents = True, exist_ok = True)
+    part_path = partition_dir / "part-0.parquet"
+
+    # np.argsort + iloc avoids the full-partition copy that
+    # pandas .sort_values() would make; on the 3.9M-row "Other
+    # Amenity" partition that single dropped copy is ~3 GB.
+    sort_keys = group[sort_col].to_numpy()
+    sort_indices = np.argsort(sort_keys, kind = "mergesort")
+    del sort_keys
+
+    n_rows = len(group)
+    if n_rows <= chunk_rows:
+        # Small partitions: single write_table — same end state
+        # as the old code path.
+        sorted_slice = group.iloc[sort_indices][cols]
+        table = _geopandas_to_arrow(
+            sorted_slice, write_covering_bbox = True,
+        )
+        pq.write_table(
+            table, str(part_path),
+            row_group_size = 100_000,
+        )
+        del sorted_slice, table
+    else:
+        # Large partitions: stream via ParquetWriter in row-group
+        # chunks so the Arrow Table never coexists at full size
+        # with the parent GeoDataFrame.
+        sample_slice = group.iloc[sort_indices[:1]][cols]
+        sample_tbl = _geopandas_to_arrow(
+            sample_slice, write_covering_bbox = True,
+        )
+        schema = sample_tbl.schema
+        del sample_slice, sample_tbl
+
+        with pq.ParquetWriter(str(part_path), schema) as writer:
+            for chunk_start in range(0, n_rows, chunk_rows):
+                chunk_end = min(chunk_start + chunk_rows, n_rows)
+                chunk_indices = sort_indices[chunk_start:chunk_end]
+                chunk_slice = group.iloc[chunk_indices][cols]
+                chunk_tbl = _geopandas_to_arrow(
+                    chunk_slice, write_covering_bbox = True,
+                )
+                writer.write_table(
+                    chunk_tbl, row_group_size = 100_000,
+                )
+                del chunk_slice, chunk_tbl
+                gc.collect()
+
+    gc.collect()
+    return n_rows
+
+
+def _read_rows_by_position(input_path: Path, keep_mask: np.ndarray,
+                           columns: list) -> gpd.GeoDataFrame:
+    """Read only the rows flagged in ``keep_mask``, one row group at a time.
+
+    Used when the partition label is *derived* rather than stored, so a dataset
+    predicate cannot select the rows. Peak memory is one row group plus the
+    accumulated matches for the single partition being built.
+    """
+    parquet_file = pq.ParquetFile(str(input_path))
+    pieces = []
+    offset = 0
+    for group_index in range(parquet_file.metadata.num_row_groups):
+        n_rows = parquet_file.metadata.row_group(group_index).num_rows
+        group_mask = keep_mask[offset:offset + n_rows]
+        offset += n_rows
+        if not group_mask.any():
+            continue
+        table = parquet_file.read_row_group(group_index, columns = columns)
+        pieces.append(table.filter(pa.array(group_mask)))
+        del table
+        gc.collect()
+    if not pieces:
+        return gpd.GeoDataFrame()
+    combined = pa.concat_tables(pieces)
+    del pieces
+    frame = gpd.GeoDataFrame.from_arrow(combined)
+    del combined
+    gc.collect()
+    return frame
+
+
+def write_label_partitioned_from_parquet(
+    input_path,
+    output_dir,
+    partition_col: str,
+    geohash_precision: int,
+    sort_col: str = "geohash",
+    overwrite: bool = True,
+    chunk_rows: int = 1_000_000,
+    labels = None,
+) -> int:
+    """Label-partition a parquet file **without ever loading it whole**.
+
+    Same on-disk result as :func:`write_label_partitioned_dataset` — identical
+    columns, Hive directory names, geohash sort, GeoParquet 1.1 covering bbox,
+    and ``row_group_size`` — but one partition is resident at a time instead of
+    the entire dataset.
+
+    This exists because the whole-frame path does not fit in memory at CONUS
+    scale. Reading 14.6M rows x 58 columns as a GeoDataFrame peaked at 21.5 GB
+    RSS against a 24 GB cap, spilling into swap; per-partition reads hold a few
+    hundred MB. Prefer this for anything national.
+
+    The pandas index is set to each row's **original file position**, so the
+    stored ``__index_level_0__`` matches what the whole-frame path would have
+    written rather than restarting at zero in every partition.
+
+    ``labels`` supplies the partition value per row when it is *derived* rather
+    than stored in the file (the OSM ``primary_tag`` case). It must be aligned
+    to file order and the same length as the dataset. When given, rows are
+    gathered by a row-group scan instead of a dataset predicate.
+
+    Returns the number of rows written.
+    """
+    # Imported here: pyarrow.dataset pulls in a lot and only this path needs it.
+    # pylint: disable-next=import-outside-toplevel
+    import pyarrow.dataset as pads
+
+    input_path = Path(input_path)
+    output_dir = Path(output_dir)
+    if output_dir.exists():
+        if overwrite:
+            print(f"Removing existing output: {output_dir}")
+            shutil.rmtree(output_dir)
+        else:
+            raise FileExistsError(
+                f"Output directory already exists: {output_dir}. "
+                "Pass overwrite=True to replace it."
+            )
+    output_dir.mkdir(parents = True, exist_ok = True)
+
+    dataset = pads.dataset(str(input_path), format = "parquet")
+    all_columns = list(dataset.schema.names)
+    derived = labels is not None
+    if not derived:
+        if partition_col not in all_columns:
+            raise KeyError(
+                f"partition_col not in {input_path}: {partition_col!r}"
+            )
+        # One narrow pass for the partition values, so each label's original
+        # row positions are known before any wide read happens.
+        labels = dataset.to_table(columns = [partition_col])[
+            partition_col
+        ].to_pandas()
+    else:
+        labels = pd.Series(labels).reset_index(drop = True)
+        if len(labels) != dataset.count_rows():
+            raise ValueError(
+                f"labels length {len(labels):,} does not match "
+                f"{input_path} row count {dataset.count_rows():,}"
+            )
+    null_mask = labels.isna()
+    if null_mask.any():
+        print(f"Skipping {int(null_mask.sum()):,} rows with null "
+              f"{partition_col}")
+    values = pd.unique(labels[~null_mask])
+    read_columns = [c for c in all_columns if c != partition_col]
+
+    print(f"Writing {len(values)} partitions to {output_dir} ...")
+    written = 0
+    for i, value in enumerate(values):
+        # fillna before to_numpy: on a nullable dtype (the derived primary_tag
+        # is pandas "string") the comparison yields pd.NA for null rows, and a
+        # mask carrying NA is neither indexable nor safe for flatnonzero.
+        match_mask = (labels == value).fillna(False).to_numpy(dtype = bool)
+        positions = np.flatnonzero(match_mask)
+        if derived:
+            group = _read_rows_by_position(input_path, match_mask,
+                                           read_columns)
+        else:
+            # A dataset filter preserves file order, so the k-th returned row
+            # is the k-th match — which makes `positions` the right index.
+            table = dataset.to_table(
+                columns = read_columns,
+                filter = pads.field(partition_col) == value,
+            )
+            group = gpd.GeoDataFrame.from_arrow(table)
+            del table
+        # Carry the positions as a COLUMN, not the index: add_geohash_column
+        # resets the index when it drops empty geometries, which would silently
+        # renumber them.
+        group["__row_position"] = positions
+        group = add_geohash_column(group, precision = geohash_precision)
+        group.index = group.pop("__row_position").to_numpy()
+        written += _write_one_partition(
+            group, list(group.columns), output_dir, partition_col, value,
+            sort_col, chunk_rows,
+        )
+        del group
+        gc.collect()
+        if (i + 1) % 25 == 0:
+            print(f"  {i + 1}/{len(values)} partitions written "
+                  f"({written:,} rows)...")
+    print(f"  {len(values)}/{len(values)} partitions written "
+          f"({written:,} rows)")
+    return written

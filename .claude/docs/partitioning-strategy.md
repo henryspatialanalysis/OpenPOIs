@@ -119,3 +119,42 @@ Each script deletes the existing partitioned directory at its versioned path and
 - [tests/test_geohash_partition.py](../../tests/test_geohash_partition.py) — unit tests + a DuckDB Hive-decode round-trip.
 
 The Source Cooperative publish flow ([scripts/publish/upload_to_source_coop.py](../../scripts/publish/upload_to_source_coop.py)) uploads these same partitioned trees to `<version>/osm-parquet/` and `<version>/conflated-parquet/`. PMTiles generation remains downstream of partitioning.
+
+
+## Writing the partitioned datasets (memory)
+
+Both trees are written by `openpois.io.geohash_partition`, which offers two
+entry points. **Use the streaming one for anything national.**
+
+| Function | Reads | When |
+|---|---|---|
+| `write_label_partitioned_dataset(gdf, ...)` | a whole in-memory GeoDataFrame | small / test-scale frames, and the reference implementation the streaming path is tested against |
+| `write_label_partitioned_from_parquet(path, ...)` | one partition at a time, off disk | production; what both `format_for_upload.py` scripts call |
+
+The whole-frame path does not fit at CONUS scale. Reading the 20260730
+conflated parquet (14.6M rows × 58 columns) as a single GeoDataFrame peaked at
+**21.5 GB RSS against this machine's 24 GB WSL cap**, spilled 2.2 GB into swap,
+and started consuming the Windows C: pagefile — the documented VM-crash mode.
+The streaming path holds a few hundred MB and ran with 15–16 GB still free.
+
+Output is identical between the two, and that equivalence is pinned by tests
+(`tests/test_geohash_partition.py`): same columns, row counts, Hive directory
+names, geohash sort, GeoParquet 1.1 `bbox` covering column, and the same
+`__index_level_0__` values — the streaming path carries each row's original
+*file position* rather than restarting the index at zero per partition.
+
+Two wrinkles worth knowing:
+
+* **Derived partition columns.** `primary_tag` is computed, not stored, so a
+  dataset predicate cannot select its rows. The OSM path therefore derives the
+  labels in a narrow pass over just the filter-key columns and passes them via
+  `labels=`, after which rows are gathered by a row-group scan. Pass `labels=`
+  only when the column is absent from the file.
+* **Nullable label dtypes.** `compute_primary_osm_tag` returns pandas `string`
+  dtype, so `labels == value` yields `pd.NA` for unlabeled rows and the mask is
+  unusable until `.fillna(False)`. Same family of trap as the pyarrow Kleene
+  issue in CLAUDE.md, different library.
+
+Cost of streaming: one filtered scan of the source file per partition (102 for
+the conflated tree). It is I/O-bound rather than memory-bound, which is the
+trade being made deliberately.

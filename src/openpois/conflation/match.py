@@ -286,25 +286,49 @@ def compute_type_scores(
     overture_l0_bits: np.ndarray,
     osm_idx: np.ndarray,
     overture_idx: np.ndarray,
+    affinity_index: dict[str, int] | None = None,
+    affinity_matrix: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     Score how well the POI types match between OSM and Overture.
 
-    - Exact shared_label match: 1.0
-    - L0 broad-group overlap (bitmask): 0.5
-    - Otherwise: 0.0
+    With an affinity table (``affinity_index`` / ``affinity_matrix`` from
+    ``taxonomy.build_affinity_matrix``), the score is the derived similarity
+    of the two labels: 1.0 for identical labels, a value in (0, 1) for labels
+    the Overture hierarchy or the identifier-confirmed confusion data show to
+    be related, 0 otherwise. See docs/type-affinity-metric.md.
+
+    Without a table, falls back to the legacy tiers — exact match 1.0, L0
+    bitmask overlap 0.5, else 0.0 — so the matcher still runs before the table
+    has been built.
     """
     o_labels = osm_shared_labels[osm_idx]
     v_labels = overture_shared_labels[overture_idx]
 
     scores = np.zeros(len(osm_idx), dtype = np.float64)
-
-    # Tier 1: exact shared_label match
     both_present = (o_labels != "") & (v_labels != "")
+
+    if affinity_matrix is not None and affinity_index:
+        # Map labels to matrix rows/cols; -1 marks a label the table omits.
+        o_pos = np.array(
+            [affinity_index.get(lb, -1) for lb in o_labels], dtype = np.int32,
+        )
+        v_pos = np.array(
+            [affinity_index.get(lb, -1) for lb in v_labels], dtype = np.int32,
+        )
+        known = both_present & (o_pos >= 0) & (v_pos >= 0)
+        if known.any():
+            scores[known] = affinity_matrix[o_pos[known], v_pos[known]]
+        # A label missing from the table still scores full marks against
+        # itself (e.g. an OSM-only label such as Car Rental).
+        missing_exact = both_present & ~known & (o_labels == v_labels)
+        scores[missing_exact] = 1.0
+        return scores
+
+    # --- legacy fallback ------------------------------------------------
     exact = both_present & (o_labels == v_labels)
     scores[exact] = 1.0
 
-    # Tier 2: L0 bitmask overlap for non-exact pairs
     not_exact = ~exact
     if not_exact.any():
         o_bits = osm_l0_bits[osm_idx[not_exact]]
@@ -321,18 +345,126 @@ def compute_type_scores(
 # -----------------------------------------------------------------
 
 
+_NON_DIGIT_RE = re.compile(r"\D+")
+_URL_SCHEME_RE = re.compile(r"^\s*https?://")
+_URL_WWW_RE = re.compile(r"^www\.")
+_WIKIDATA_RE = re.compile(r"^Q[1-9][0-9]*$")
+
+
+def normalize_website(value) -> str:
+    """Reduce a URL to a comparable host+path.
+
+    Lowercases, drops the scheme and a leading ``www.``, cuts any query
+    string or fragment, and strips trailing slashes. The query string
+    matters: Overture carries campaign-tagged URLs such as
+    ``westernunion.com/?utm_source=bingmaps&utm_medium=pml-yex`` that
+    would never equal OSM's plain ``westernunion.com``.
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ""
+    text = str(value).strip().lower()
+    text = _URL_SCHEME_RE.sub("", text)
+    text = _URL_WWW_RE.sub("", text)
+    for cut in ("?", "#"):
+        pos = text.find(cut)
+        if pos >= 0:
+            text = text[:pos]
+    return text.rstrip("/").strip()
+
+
+def normalize_wikidata(value) -> str:
+    """Normalize a Wikidata entity id, or '' if it is not a valid Q-id.
+
+    OSM's ``brand:wikidata`` and Overture's ``brand.wikidata`` both hold
+    Q-ids (``Q38076``). Case and stray whitespace vary; anything that is
+    not a well-formed Q-id is discarded rather than compared, so a
+    malformed value cannot produce a spurious agreement.
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ""
+    text = str(value).strip().upper()
+    return text if _WIKIDATA_RE.match(text) else ""
+
+
+def normalize_phone(value) -> str:
+    """Reduce to the last 10 digits (US NANP), or '' if too short."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ""
+    digits = _NON_DIGIT_RE.sub("", str(value))
+    return digits[-10:] if len(digits) >= 10 else ""
+
+
+_IDENTIFIER_NORMALIZERS = {
+    "website": normalize_website,
+    "phone": normalize_phone,
+    "wikidata": normalize_wikidata,
+}
+
+
+def normalize_identifier_array(arr: np.ndarray, kind: str) -> np.ndarray:
+    """Normalize a whole array of websites, phones or Wikidata ids."""
+    try:
+        fn = _IDENTIFIER_NORMALIZERS[kind]
+    except KeyError:
+        raise ValueError(
+            f"unknown identifier kind {kind!r}; expected one of "
+            f"{sorted(_IDENTIFIER_NORMALIZERS)}"
+        ) from None
+    return np.array([fn(v) for v in arr], dtype = object)
+
+
 def compute_identifier_scores(
+    osm_websites: np.ndarray,
+    osm_phones: np.ndarray,
+    osm_wikidata: np.ndarray,
+    overture_websites: np.ndarray,
+    overture_phones: np.ndarray,
+    overture_wikidata: np.ndarray,
     osm_idx: np.ndarray,
     overture_idx: np.ndarray,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
     """
-    Score identifier matches.
+    Score shared identifiers, and report where the comparison was possible.
 
-    Returns 0.5 (neutral) for all pairs. Overture schema does not
-    currently expose website/phone/wikidata fields. This component
-    can be extended when those fields become available.
+    Inputs are expected pre-normalized (see ``normalize_identifier_array``),
+    with ``""`` marking absent.
+
+    A pair is *comparable* when any one identifier kind — website, phone or
+    Wikidata brand id — is present on both sides. Only then does the
+    subscore carry information, which is why the caller reweights per pair
+    rather than folding a neutral constant into every composite.
+
+    The subscore is binary: 1.0 if any comparable kind agrees, 0.0
+    otherwise. Agreement on one kind is enough even if another disagrees,
+    since a match on a strong identifier is evidence and a mismatch on a
+    second (a branch phone against a head-office number, say) is not
+    counter-evidence of equal weight.
+
+    Any of the six arrays may be None — a snapshot lacking that field
+    simply contributes no comparability.
+
+    Returns ``(scores, comparable)``.
     """
-    return np.full(len(osm_idx), 0.5, dtype = np.float64)
+    n = len(osm_idx)
+    scores = np.zeros(n, dtype = np.float64)
+    comparable = np.zeros(n, dtype = bool)
+
+    for osm_arr, ov_arr in (
+        (osm_websites, overture_websites),
+        (osm_phones, overture_phones),
+        (osm_wikidata, overture_wikidata),
+    ):
+        if osm_arr is None or ov_arr is None:
+            continue
+        left = osm_arr[osm_idx]
+        right = ov_arr[overture_idx]
+        both = (left != "") & (right != "")
+        if not both.any():
+            continue
+        comparable |= both
+        scores[both & (left == right)] = 1.0
+
+    return scores, comparable
 
 
 # -----------------------------------------------------------------
@@ -356,6 +488,16 @@ def compute_match_scores(
     type_weight: float = 0.25,
     identifier_weight: float = 0.20,
     score_chunk_size: int = 2_000_000,
+    affinity_index: dict[str, int] | None = None,
+    affinity_matrix: np.ndarray | None = None,
+    osm_websites: np.ndarray | None = None,
+    osm_phones: np.ndarray | None = None,
+    osm_wikidata: np.ndarray | None = None,
+    overture_websites: np.ndarray | None = None,
+    overture_phones: np.ndarray | None = None,
+    overture_wikidata: np.ndarray | None = None,
+    id_weights: tuple[float, float, float, float] | None = None,
+    no_id_weights: tuple[float, float, float, float] | None = None,
 ) -> pd.DataFrame:
     """
     Compute composite match scores for all candidate pairs.
@@ -371,6 +513,15 @@ def compute_match_scores(
     overture_idx = candidates["overture_idx"].to_numpy()
     distance_m = candidates["distance_m"].to_numpy()
     n = len(candidates)
+
+    # Fall back to the flat scalar weights when the caller does not supply
+    # the two per-pair sets (keeps older callers and tests working).
+    if no_id_weights is None:
+        no_id_weights = (
+            distance_weight, name_weight, type_weight, identifier_weight,
+        )
+    if id_weights is None:
+        id_weights = no_id_weights
 
     # A) Distance score (cheap vectorized arithmetic)
     pair_radii = osm_radii_m[osm_idx]
@@ -396,17 +547,47 @@ def compute_match_scores(
             osm_l0_bits, overture_l0_bits,
             osm_idx[start:end],
             overture_idx[start:end],
+            affinity_index = affinity_index,
+            affinity_matrix = affinity_matrix,
         )
 
-    # D) Identifier score (neutral placeholder)
-    identifier_score = np.full(n, 0.5, dtype = np.float64)
-
-    composite = (
-        distance_weight * distance_score
-        + name_weight * name_score
-        + type_weight * type_score
-        + identifier_weight * identifier_score
+    # D) Identifier score, plus the mask of pairs where the comparison
+    #    was actually possible (both sides carry a website or a phone).
+    identifier_score, identifier_comparable = compute_identifier_scores(
+        osm_websites, osm_phones, osm_wikidata,
+        overture_websites, overture_phones, overture_wikidata,
+        osm_idx, overture_idx,
     )
+
+    # Per-pair weights. Identifier evidence is decisive when present but
+    # missing on ~5 of 6 pairs (OSM carries a website on 17% of rows), so a
+    # fixed identifier weight would spend score mass on a blank for most
+    # candidates. Where both sides have an identifier we redistribute toward
+    # it; where they do not, its weight goes back to the other components
+    # rather than being multiplied by a neutral constant.
+    if identifier_comparable.any():
+        composite = np.empty(n, dtype = np.float64)
+        for mask, weights in (
+            (identifier_comparable, id_weights),
+            (~identifier_comparable, no_id_weights),
+        ):
+            if not mask.any():
+                continue
+            w_dist, w_name, w_type, w_id = weights
+            composite[mask] = (
+                w_dist * distance_score[mask]
+                + w_name * name_score[mask]
+                + w_type * type_score[mask]
+                + w_id * identifier_score[mask]
+            )
+    else:
+        w_dist, w_name, w_type, w_id = no_id_weights
+        composite = (
+            w_dist * distance_score
+            + w_name * name_score
+            + w_type * type_score
+            + w_id * identifier_score
+        )
 
     # Mutate in place to avoid copying the full DataFrame
     candidates["distance_score"] = distance_score
@@ -509,6 +690,16 @@ def _match_one_chunk(
     min_match_score: float,
     max_radius_m: float,
     chunk_size: int,
+    affinity_index: dict[str, int] | None = None,
+    affinity_matrix: np.ndarray | None = None,
+    osm_websites: np.ndarray | None = None,
+    osm_phones: np.ndarray | None = None,
+    osm_wikidata: np.ndarray | None = None,
+    overture_websites: np.ndarray | None = None,
+    overture_phones: np.ndarray | None = None,
+    overture_wikidata: np.ndarray | None = None,
+    id_weights: tuple[float, float, float, float] | None = None,
+    no_id_weights: tuple[float, float, float, float] | None = None,
 ) -> pd.DataFrame:
     """
     Run the candidates → score → select sequence for one chunk and
@@ -543,6 +734,27 @@ def _match_one_chunk(
     osm_brands_sub = osm_brands[osm_global_idx]
     ov_names_sub = overture_names[ov_global_idx]
     ov_brands_sub = overture_brands[ov_global_idx]
+    osm_web_sub = (
+        osm_websites[osm_global_idx] if osm_websites is not None else None
+    )
+    osm_phone_sub = (
+        osm_phones[osm_global_idx] if osm_phones is not None else None
+    )
+    osm_wd_sub = (
+        osm_wikidata[osm_global_idx] if osm_wikidata is not None else None
+    )
+    ov_web_sub = (
+        overture_websites[ov_global_idx]
+        if overture_websites is not None else None
+    )
+    ov_phone_sub = (
+        overture_phones[ov_global_idx]
+        if overture_phones is not None else None
+    )
+    ov_wd_sub = (
+        overture_wikidata[ov_global_idx]
+        if overture_wikidata is not None else None
+    )
 
     candidates = find_spatial_candidates(
         osm_geom = None,
@@ -570,6 +782,16 @@ def _match_one_chunk(
         distance_weight = distance_weight,
         name_weight = name_weight,
         type_weight = type_weight,
+        affinity_index = affinity_index,
+        affinity_matrix = affinity_matrix,
+        osm_websites = osm_web_sub,
+        osm_phones = osm_phone_sub,
+        osm_wikidata = osm_wd_sub,
+        overture_websites = ov_web_sub,
+        overture_phones = ov_phone_sub,
+        overture_wikidata = ov_wd_sub,
+        id_weights = id_weights,
+        no_id_weights = no_id_weights,
         identifier_weight = identifier_weight,
     )
 
@@ -695,6 +917,16 @@ def find_and_score_matches_chunked(
     min_match_score: float,
     max_radius_m: float,
     chunk_target_pois: int,
+    affinity_index: dict[str, int] | None = None,
+    affinity_matrix: np.ndarray | None = None,
+    osm_websites: np.ndarray | None = None,
+    osm_phones: np.ndarray | None = None,
+    osm_wikidata: np.ndarray | None = None,
+    overture_websites: np.ndarray | None = None,
+    overture_phones: np.ndarray | None = None,
+    overture_wikidata: np.ndarray | None = None,
+    id_weights: tuple[float, float, float, float] | None = None,
+    no_id_weights: tuple[float, float, float, float] | None = None,
     chunk_size: int = 500_000,
     checkpoint_dir: Path | None = None,
     osm_centroids_lonlat: np.ndarray | None = None,
@@ -850,6 +1082,16 @@ def find_and_score_matches_chunked(
                     min_match_score = min_match_score,
                     max_radius_m = max_radius_m,
                     chunk_size = chunk_size,
+                    affinity_index = affinity_index,
+                    affinity_matrix = affinity_matrix,
+                    osm_websites = osm_websites,
+                    osm_phones = osm_phones,
+                    osm_wikidata = osm_wikidata,
+                    overture_websites = overture_websites,
+                    overture_phones = overture_phones,
+                    overture_wikidata = overture_wikidata,
+                    id_weights = id_weights,
+                    no_id_weights = no_id_weights,
                 )
                 part.to_parquet(part_path, compression = "zstd")
                 cumulative_matches += len(part)

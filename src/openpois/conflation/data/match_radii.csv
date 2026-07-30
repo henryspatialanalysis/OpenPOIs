@@ -1,4 +1,4 @@
-﻿shared_label,match_radius_m
+shared_label,match_radius_m
 Alternative Medicine,50
 Arcade,50
 Arts Venue,100
@@ -43,7 +43,7 @@ Laundromat,50
 Library,100
 Liquor Store,50
 Marina,200
-Market,50
+Market,100
 Massage Therapy,50
 Maternity Center,50
 Mental Health,50
@@ -93,3 +93,11 @@ Place of Worship,100
 Public Restroom,50
 Public Safety,50
 Real Estate,50
+Animal Shelter,100
+Cannabis Dispensary,50
+Event Venue,100
+Funeral Services,75
+Historic Site,150
+Print and Copy Shop,50
+Self-Storage,100
+Tattoo and Piercing,50

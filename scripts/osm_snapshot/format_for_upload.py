@@ -18,13 +18,13 @@ filters prune via Parquet row-group min/max stats. Queries like
 ``WHERE primary_tag = 'shop' AND shop = 'bakery'`` read a single partition
 file.
 """
-import geopandas as gpd
 from config_versioned import Config
 
+import pyarrow.parquet as pq
+
 from openpois.io.geohash_partition import (
-    add_geohash_column,
     compute_primary_osm_tag,
-    write_label_partitioned_dataset,
+    write_label_partitioned_from_parquet,
 )
 
 # -----------------------------------------------------------------------------
@@ -46,29 +46,33 @@ PARTITION_COL = "primary_tag"
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    print(f"Reading rated snapshot from {INPUT_PATH} ...")
-    gdf = gpd.read_parquet(INPUT_PATH)
-    print(f"Loaded {len(gdf):,} POIs")
-
+    # primary_tag is DERIVED, not stored, so it is computed in a narrow pass
+    # over just the filter-key columns; the wide read then happens one
+    # partition at a time. Loading the whole rated snapshot as a single
+    # GeoDataFrame does not fit in memory at national scale.
     print(f"Deriving {PARTITION_COL} from filter_keys {FILTER_KEYS} ...")
-    gdf = compute_primary_osm_tag(
-        gdf, filter_keys = FILTER_KEYS, out_col = PARTITION_COL
-    )
+    keys = pq.read_table(str(INPUT_PATH), columns = FILTER_KEYS).to_pandas()
+    labels = compute_primary_osm_tag(
+        keys, filter_keys = FILTER_KEYS, out_col = PARTITION_COL
+    )[PARTITION_COL]
+    del keys
+    print(f"  {labels.notna().sum():,} of {len(labels):,} rows carry a "
+          f"{PARTITION_COL}")
 
-    print(f"Computing geohash-{PRECISION_SORT} sort column from centroids ...")
-    gdf = add_geohash_column(gdf, precision = PRECISION_SORT)
-
-    write_label_partitioned_dataset(
-        gdf,
+    print(f"Partitioning {INPUT_PATH} by {PARTITION_COL} ...")
+    n_rows = write_label_partitioned_from_parquet(
+        INPUT_PATH,
         output_dir = OUTPUT_DIR,
         partition_col = PARTITION_COL,
+        geohash_precision = PRECISION_SORT,
         sort_col = "geohash",
         overwrite = OVERWRITE,
+        labels = labels,
     )
 
     n_partitions = sum(1 for _ in OUTPUT_DIR.iterdir() if _.is_dir())
     print(
-        f"Done. Wrote {len(gdf):,} rows across {n_partitions} "
+        f"Done. Wrote {n_rows:,} rows across {n_partitions} "
         f"{PARTITION_COL} partitions."
     )
     print(f"Output: {OUTPUT_DIR}")

@@ -25,9 +25,42 @@ Merge matched and unmatched POIs into a unified conflated GeoDataFrame.
 Produces a superset containing matched OSM–Overture pairs with blended
 confidence scores, unmatched OSM POIs at their original confidence, and
 unmatched Overture POIs at downweighted confidence. Uses a disk-backed
-split-then-concat pattern to avoid peak memory issues at CONUS scale.
+split-then-concat pattern to avoid peak memory issues at CONUS scale. The
+confidence values it emits are *uncalibrated*; the published probabilities come
+from ``openpois.conflation.calibration``, applied as the final pipeline stage.
 
 .. automodule:: openpois.conflation.merge
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+openpois.conflation.calibration_fit
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Fit per-segment existence-confidence calibration curves from an external
+validation sample. Implements a model-assisted difference estimator on the
+validation's two-phase design: a low-dimensional working model for
+P(exists | verdict class, score) predicts every phase-1 row, and the
+design-weighted residuals of the human-labeled subsample correct it. The matched
+segment's two source scores are combined by a fitted log-odds pool rather than a
+fixed blend. Uncertainty comes from a verdict-class-stratified two-phase
+bootstrap.
+
+.. automodule:: openpois.conflation.calibration_fit
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+openpois.conflation.calibration
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Apply fitted calibration curves to a conflated dataset, turning each POI's raw
+source score into a calibrated probability that the place exists and is open.
+Runs after change detection, streams the parquet a row-group at a time, and
+records the edge rules (change-detection-demoted rows, imputed Overture
+confidence, unnamed POIs) in a ``calibration_flag`` column.
+
+.. automodule:: openpois.conflation.calibration
    :members:
    :undoc-members:
    :show-inheritance:
@@ -99,10 +132,16 @@ from S3 if a specific date is not pinned.
 openpois.io.geohash_partition
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Utilities for spatially partitioning GeoDataFrames by geohash for efficient
-web-map viewport queries. Computes geohash columns from geometry centroids,
-writes Hive-style partitioned Parquet datasets (``geohash_prefix=XX/``), and
-sorts rows within each partition by a finer geohash for spatial locality.
+Utilities for partitioning POI datasets for downstream query workloads. Two
+layouts are supported: geohash-based, for web-map viewport queries, and
+label-based (by destination type), for nationwide type-filtered queries. Both
+sort rows within each partition by geohash so spatial filters prune via Parquet
+row-group statistics, and both emit a GeoParquet 1.1 covering ``bbox`` column.
+
+Label partitioning has an in-memory entry point and a streaming one that reads a
+single partition at a time; the streaming variant is required at national scale,
+where loading the whole dataset as one GeoDataFrame exhausts memory. The two
+produce identical output.
 
 .. automodule:: openpois.io.geohash_partition
    :members:
@@ -112,10 +151,16 @@ sorts rows within each partition by a finer geohash for spatial locality.
 openpois.io.source_coop
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-Upload a locally partitioned dataset to Source Cooperative's S3-compatible
-storage. Walks the Hive partition directory, uploads each Parquet file under
-a versioned prefix, and reports the public URL on completion. Credentials
-come from a JSON file at the repo root (``publish.credentials_file``).
+Upload a locally partitioned dataset to Source Cooperative and mirror it to
+``latest/``. Walks the Hive partition directory, uploads each Parquet file under
+a versioned prefix, server-side copies the version into ``latest/``, and reports
+the public URL on completion.
+
+Writes go through Source Cooperative's data proxy, where the S3 bucket is the
+**account** and the repository is the first key segment. Both a custom
+``endpoint_url`` and that addressing are required: talking to AWS S3 directly, or
+using the older flat bucket name, fails authentication. Anonymous public reads are
+unaffected and still resolve against the legacy flat bucket.
 
 .. automodule:: openpois.io.source_coop
    :members:
@@ -125,9 +170,10 @@ come from a JSON file at the repo root (``publish.credentials_file``).
 openpois.io.credentials
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-Load Source Cooperative AWS-compatible credentials from a JSON file. Tokens
-are short-lived (~1 hour); the loader logs a clear error pointing at the
-credentials regeneration URL when the file is stale or missing.
+Load Source Cooperative's short-lived S3 credentials. Prefers the
+``source-coop`` CLI, which mints them from a cached browser login and is
+self-refreshing while that login is valid; falls back to a static JSON block at
+the repo root (``publish.credentials_file``). Tokens last about an hour.
 
 .. automodule:: openpois.io.credentials
    :members:

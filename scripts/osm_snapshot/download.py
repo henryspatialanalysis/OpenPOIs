@@ -42,6 +42,11 @@ from openpois.conflation.taxonomy import (
     load_osm_crosswalk,
 )
 from openpois.io.osm_snapshot import SnapshotExtract, download_osm_snapshot
+from openpois.osm.residential import (
+    build_residential_layer,
+    filter_parquet_by_residential,
+    load_residential_areas,
+)
 
 # -----------------------------------------------------------------------------
 # Configuration constants
@@ -59,6 +64,20 @@ TAG_FILTER_EXPRS = build_osm_tag_filter_expressions(_OSM_CROSSWALK)
 # Non-POI (key, value) tags (parking, benches, …) dropped from the snapshot
 # at parse time. Crosswalk rows whose shared_label is the EXCLUDE sentinel.
 EXCLUSIONS = get_osm_exclusions(_OSM_CROSSWALK)
+# Unnamed POIs carrying one of these access values are dropped at parse time
+# (see the "Exclusion" section of docs/data-sources.md).
+EXCLUDED_ACCESS = config.get(
+    "download", "osm", "excluded_access", fail_if_none = False,
+) or []
+# Second private-property exclusion, applied to the assembled snapshot rather
+# than at parse time: it needs the landuse layer, which is built from the same
+# raw PBFs in a separate osmium pass. Empty landuse_values disables it.
+RESIDENTIAL = config.get(
+    "download", "osm", "residential_exclusion", fail_if_none = False,
+) or {}
+RESIDENTIAL_LANDUSE_VALUES = RESIDENTIAL.get("landuse_values") or []
+RESIDENTIAL_SCOPED_TAGS = RESIDENTIAL.get("scoped_tags") or {}
+RESIDENTIAL_AREAS_PATH = config.get_file_path("snapshot_osm", "residential_areas")
 OVERWRITE_DOWNLOAD = config.get("download", "osm", "overwrite_download")
 OVERWRITE_FILTER = config.get("download", "osm", "overwrite_filter")
 SOURCE_LABEL = config.get("download", "osm", "source_label")
@@ -127,7 +146,58 @@ if __name__ == "__main__":
         chunk_dir = CHUNK_DIR,
         verbose = VERBOSE,
         exclusions = EXCLUSIONS,
+        excluded_access = EXCLUDED_ACCESS,
     )
+
+    # -------------------------------------------------------------------------
+    # Residential-landuse exclusion
+    #
+    # Must run BEFORE the cleanup below: the landuse layer needs a second
+    # osmium pass over the raw PBFs, which the cleanup unlinks. The layer is
+    # persisted so retuning the rule later never costs another Geofabrik pull.
+    # -------------------------------------------------------------------------
+    if RESIDENTIAL_LANDUSE_VALUES and RESIDENTIAL_SCOPED_TAGS:
+        print("\n=== Residential-landuse exclusion ===")
+        residential_extracts = [
+            spec._replace(
+                filtered_pbf_path = config.get_file_path(
+                    "snapshot_osm",
+                    "residential_filtered_pbf" if spec.name == "us"
+                    else f"residential_{spec.name}_filtered_pbf",
+                )
+            )
+            for spec in EXTRACTS
+        ]
+        build_residential_layer(
+            extracts = residential_extracts,
+            output_path = RESIDENTIAL_AREAS_PATH,
+            landuse_values = RESIDENTIAL_LANDUSE_VALUES,
+            chunk_dir = CHUNK_DIR,
+            verbose = VERBOSE,
+        )
+        areas = load_residential_areas(
+            RESIDENTIAL_AREAS_PATH, RESIDENTIAL_LANDUSE_VALUES,
+        )
+        # Filter to a sibling first, then swap: a crash leaves the unfiltered
+        # snapshot intact rather than a half-written one.
+        filtered_path = OUTPUT_PATH.with_suffix(".residential_filtered.parquet")
+        n_kept, report = filter_parquet_by_residential(
+            input_path = OUTPUT_PATH,
+            output_path = filtered_path,
+            residential = areas,
+            scoped_tags = RESIDENTIAL_SCOPED_TAGS,
+            filter_keys = FILTER_KEYS,
+            verbose = VERBOSE,
+        )
+        prefilter_path = OUTPUT_PATH.with_suffix(".preresidential.parquet")
+        OUTPUT_PATH.rename(prefilter_path)
+        filtered_path.rename(OUTPUT_PATH)
+        print(f"Residential exclusion: {n_kept:,} rows kept.")
+        if not report.empty:
+            print(report.to_string(index = False))
+        print(f"  pre-exclusion copy kept at {prefilter_path.name}")
+    else:
+        print("\nResidential-landuse exclusion disabled by config; skipping.")
 
     # -------------------------------------------------------------------------
     # Clean up intermediates

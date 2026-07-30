@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.abspath("../src/"))
 project = "openpois"
 copyright = "2026, Nathaniel Henry"
 author = "Nathaniel Henry"
-release = "1.0.0"
+release = "1.1.0"
 
 # -- General configuration -----------------------------------------------------
 

@@ -83,7 +83,8 @@ TEST_FLAG := $(if $(TEST),--test,)
 LOG_DIR := $(HOME)/data/openpois/logs
 LOG_TS := $(shell date +%Y%m%d_%H%M%S)
 
-.PHONY: rate conflate build_ghosts conflate_baseline apply_cd
+.PHONY: rate conflate build_ghosts conflate_baseline apply_cd \
+	fit_calibration apply_calibration calibrate
 
 # Rate the OSM snapshot with the production random_effects model (per-POI cell
 # reconstruction). Uses apply_model.model_stub from config; pass MODEL_VERSION=
@@ -109,15 +110,37 @@ conflate_baseline:
 apply_cd:
 	@mkdir -p $(LOG_DIR)
 	@$(CONDA_PYTHON) -u scripts/conflation/apply_change_detection.py \
-		--baseline-suffix=baseline --output-suffix="" $(TEST_FLAG) \
+		--baseline-suffix=baseline --output-suffix=cd $(TEST_FLAG) \
 		2>&1 | tee $(LOG_DIR)/apply_cd_$(LOG_TS).log
 
-conflate: build_ghosts conflate_baseline apply_cd
+# Fit the per-segment existence-confidence curves from the validation handoff
+# pinned by versions.calibration, then map every POI through them. Calibration
+# runs AFTER change detection: the CD penalty multiplies conf_mean, so
+# calibrating first would leave a calibrated probability scaled by delta.
+fit_calibration:
+	@mkdir -p $(LOG_DIR)
+	@$(CONDA_PYTHON) -u scripts/conflation/fit_calibration.py \
+		--input-suffix=cd $(TEST_FLAG) \
+		2>&1 | tee $(LOG_DIR)/fit_calibration_$(LOG_TS).log
+
+apply_calibration:
+	@mkdir -p $(LOG_DIR)
+	@$(CONDA_PYTHON) -u scripts/conflation/apply_calibration.py \
+		--input-suffix=cd --output-suffix="" $(TEST_FLAG) \
+		2>&1 | tee $(LOG_DIR)/apply_calibration_$(LOG_TS).log
+
+calibrate: fit_calibration apply_calibration
+	@$(CONDA_PYTHON) -u scripts/conflation/plot_calibration.py \
+		2>&1 | tee $(LOG_DIR)/plot_calibration_$(LOG_TS).log
+
+conflate: build_ghosts conflate_baseline apply_cd calibrate
 	@echo
 	@echo "Conflation pipeline complete."
 	@echo "  Canonical output: ~/data/openpois/conflation/<version>/conflated.parquet"
+	@echo "  (pre-calibration: conflated_cd.parquet)"
 	@echo "  (no-CD archive:   conflated_baseline.parquet)"
-	@echo "  Logs under: $(LOG_DIR)/{build_ghosts,conflate_baseline,apply_cd}_$(LOG_TS).log"
+	@echo "  Curves + fit report: conflation/<version>/calibration/"
+	@echo "  Logs under: $(LOG_DIR)/{build_ghosts,conflate_baseline,apply_cd,fit_calibration,apply_calibration}_$(LOG_TS).log"
 
 # Convenience target to print all of the available targets in this file
 # From https://stackoverflow.com/questions/4219255

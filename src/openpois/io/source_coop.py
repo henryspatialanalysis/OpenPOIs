@@ -6,11 +6,17 @@
 """
 Source Cooperative upload helpers.
 
-Source Coop exposes an S3-compatible endpoint; uploads go to the literal
-bucket name ``us-west-2.opendata.source.coop`` with keys prefixed by
-``{org}/{repo}/…``. Public reads are mirrored at
-``https://data.source.coop/{org}/{repo}/…``. No custom boto3 ``endpoint_url``
-is needed — the bucket is resolved by the default AWS S3 service.
+Source Coop serves its S3-compatible API through a data proxy at
+``https://data.source.coop``, where the **bucket is the account** and the
+repository is the first key segment: ``s3://{account}/{repo}/…``. Public reads
+are at ``https://data.source.coop/{account}/{repo}/…``.
+
+This replaced a direct-S3 layout that used the literal bucket
+``us-west-2.opendata.source.coop`` with ``{account}/{repo}/…`` keys. That path
+no longer authenticates: proxy-issued credentials are rejected by AWS S3 with
+``InvalidAccessKeyId``, and the legacy bucket does not exist behind the proxy.
+Both the ``endpoint_url`` and the account-as-bucket addressing are therefore
+required.
 """
 from __future__ import annotations
 
@@ -20,18 +26,24 @@ from typing import Iterable
 import boto3
 from tqdm import tqdm
 
-DEFAULT_BUCKET = "us-west-2.opendata.source.coop"
+DEFAULT_BUCKET = "henryspatialanalysis"
 DEFAULT_READ_HOST = "https://data.source.coop"
+DEFAULT_ENDPOINT = "https://data.source.coop"
 
 
-def make_client(creds: dict):
-    """Return a boto3 S3 client using explicit Source Coop credentials."""
+def make_client(creds: dict, endpoint_url: str = DEFAULT_ENDPOINT):
+    """Return a boto3 S3 client pointed at the Source Coop data proxy.
+
+    ``endpoint_url`` is not optional in practice: without it boto3 talks to AWS
+    S3, which does not recognize proxy-issued credentials.
+    """
     return boto3.client(
         "s3",
         aws_access_key_id = creds["aws_access_key_id"],
         aws_secret_access_key = creds["aws_secret_access_key"],
         aws_session_token = creds["aws_session_token"],
-        region_name = creds["region_name"],
+        region_name = creds.get("region_name") or "us-west-2",
+        endpoint_url = endpoint_url,
     )
 
 
@@ -140,9 +152,18 @@ def upload_bytes(
     return f"{DEFAULT_READ_HOST}/{key}"
 
 
-def public_url(key: str) -> str:
-    """Compose the public read URL for a given object key."""
-    return f"{DEFAULT_READ_HOST}/{key.lstrip('/')}"
+def public_url(key: str, account: str = DEFAULT_BUCKET) -> str:
+    """Compose the public read URL for a given object key.
+
+    Public reads are addressed ``{host}/{account}/{key}``. The account has to be
+    prepended explicitly because it is the *bucket* on the write side, so it is
+    absent from the keys this module uploads.
+    """
+    key = key.lstrip("/")
+    account = account.strip("/")
+    if account and not key.startswith(f"{account}/"):
+        key = f"{account}/{key}"
+    return f"{DEFAULT_READ_HOST}/{key}"
 
 
 def list_keys(client, bucket: str, prefix: str) -> list[str]:

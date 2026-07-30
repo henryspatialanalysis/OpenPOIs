@@ -5,9 +5,11 @@ Reads the local OSM snapshot + conflated outputs from paths resolved via
 ``config.yaml`` and uploads them under the configured version folder on
 Source Cooperative, alongside a freshly generated per-version README.
 
-Remote layout (see docs/data-versioning.md):
+Remote layout (see docs/data-versioning.md). Writes go through the Source Coop
+data proxy, where the BUCKET is the account and the repository is the first key
+segment:
 
-    s3://us-west-2.opendata.source.coop/henryspatialanalysis/openpois/
+    s3://henryspatialanalysis/openpois/          (endpoint https://data.source.coop)
         <YYYY-MM-DD-vN>/
             README.md
             osm-parquet/geohash_prefix=*/part-*.parquet
@@ -17,21 +19,25 @@ Remote layout (see docs/data-versioning.md):
         latest/
             (server-side mirror of the most recently published version)
 
+Public *reads* are unaffected and still work anonymously against the legacy flat
+bucket ``us-west-2.opendata.source.coop`` with ``henryspatialanalysis/openpois/``
+keys, which is what the published README's quickstart examples use.
+
 Credentials
 -----------
-Source Coop issues short-lived AWS temp credentials. Write them to
-``.env.json`` at the repo root (gitignored) as:
+Source Coop uses OIDC/STS: the ``source-coop`` CLI mints short-lived credentials
+after a browser login, and ``openpois.io.credentials`` reads them via
+``source-coop creds``. The CLI is auth-only; this script still does the transfer.
 
-    {
-      "aws_access_key_id": "ASIA...",
-      "aws_secret_access_key": "...",
-      "aws_session_token": "...",
-      "region_name": "us-west-2"
-    }
+    source-coop login          # once per session, ~1 hour of validity
+    python -u scripts/publish/upload_to_source_coop.py
 
-Regenerate at
-https://source.coop/repositories/henryspatialanalysis/openpois/manage
-if uploads fail with ``ExpiredToken``.
+A full release is ~7 GB, so check the expiry ``source-coop creds`` reports before
+starting. On ``ExpiredToken`` mid-transfer, re-login and resume with the
+``--skip-*`` flags; ``latest/`` mirrors last so it is never left half-updated.
+
+``.env.json`` at the repo root remains a fallback for a static credential block,
+but Source Coop no longer issues keys that way.
 """
 from __future__ import annotations
 

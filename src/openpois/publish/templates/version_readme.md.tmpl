@@ -13,6 +13,7 @@ These three values are what a consumer needs to reproduce this release.
 | OSM snapshot | `{osm_snapshot_date}` (Geofabrik download date) |
 | Overture release | [`{overture_release}`](https://docs.overturemaps.org/release-calendar/) |
 | Turnover model | [`{model_commit}`](https://github.com/henryspatialanalysis/openpois/commits/{model_commit}) |
+| Confidence calibration | validation round `{calibration_round}` |
 
 ## Row counts
 
@@ -26,9 +27,9 @@ These three values are what a consumer needs to reproduce this release.
 ```
 {version_folder}/
 ├── README.md                         # this file
-├── osm-parquet/                      # OSM-only snapshot, hive-partitioned by geohash prefix
-├── osm-pmtiles/osm.pmtiles           # OSM snapshot as a single PMTiles archive (z14)
-├── conflated-parquet/                # OSM × Overture conflation, hive-partitioned by geohash prefix
+├── osm-parquet/                      # OSM-only snapshot, hive-partitioned by primary_tag
+├── osm-pmtiles/osm.pmtiles           # OSM snapshot as a single PMTiles archive (z10-z14)
+├── conflated-parquet/                # OSM × Overture conflation, hive-partitioned by shared_label
 └── conflated-pmtiles/conflated.pmtiles
 ```
 

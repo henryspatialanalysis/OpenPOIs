@@ -39,7 +39,11 @@ End-to-end: Geofabrik full-history PBFs → observations table → fitted λ →
    ```bash
    python scripts/models/osm_turnover.py            # default_model_type: random_effects
    ```
-   The config default is now `random_effects` (location-aware: λ on POI type + MSA + urbanicity + interaction), written to `versions.model_output` (`{date}_by_shared_label`). The fit takes a standard **1% POI sample** (`osm_turnover_model.poi_sample_fraction`) — near-identical estimates, minutes instead of hours; pass `--sample-fraction 1.0` for the full dataset. The `{date}_constant` single-rate baseline is **no longer required** (the random_effects rater partial-pools unseen cells) — fit it only for A/B comparison via `--model-type constant --model-version {date}_constant`.
+   The config default is now `random_effects` (location-aware: λ on POI type + MSA + urbanicity + interaction), written to `versions.model_output` (`{date}_by_shared_label`).
+
+   > **Any fit used to rate a snapshot must be a full-data fit.** `poi_sample_fraction` defaults to `1.0` and should stay there — expect **~5.5 h**. Do not "save time" by sampling: at 1% the `amenity_msa` interaction collapses from ~4,000 active cells to ~18, the per-label and per-MSA levels thin out with it, and the resulting confidence estimates are much weaker *and not comparable to the previous month's*. Nothing in the output looks broken, which is what makes it dangerous — the 2026-07-27 run nearly shipped a 1% fit this way. `apply_model_random_effects.py` now reads the sample fraction out of the fit's own `config.yaml` and refuses to rate a sampled fit unless `--allow-sampled-fit` is passed. Sampling is for exploratory sweeps only; pass `--sample-fraction 0.01` on the command line rather than editing the config.
+
+   The `{date}_constant` single-rate baseline is **no longer required** (the random_effects rater partial-pools unseen cells) — fit it only for A/B comparison via `--model-type constant --model-version {date}_constant`.
 
 4. **Apply predictions to the OSM snapshot** → `osm_snapshot_rated.parquet`
    ```bash

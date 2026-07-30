@@ -145,6 +145,8 @@ def build_version_readme(
     osm_snapshot_date = _resolve_osm_snapshot_date(config)
     overture_release = _resolve_overture_release(config)
     model_commit = _resolve_model_commit(config)
+    calibration_round = config.get("versions", "calibration",
+                                   fail_if_none = False) or "not calibrated"
 
     osm_partitioned = config.get_file_path("snapshot_osm", "partitioned")
     conflated_partitioned = config.get_file_path("conflation", "partitioned")
@@ -162,6 +164,7 @@ def build_version_readme(
         osm_snapshot_date = osm_snapshot_date,
         overture_release = overture_release,
         model_commit = model_commit,
+        calibration_round = calibration_round,
         conflated_row_count = _format_int(conflated_rows),
         osm_row_count = _format_int(osm_rows),
         generation_date = dt.date.today().isoformat(),

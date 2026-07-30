@@ -13,12 +13,10 @@ Rows within each partition are sorted by the `geohash` column so spatial
 filters prune via Parquet row-group min/max stats. Queries like
 ``WHERE shared_label = 'Pharmacy'`` read a single partition file.
 """
-import geopandas as gpd
 from config_versioned import Config
 
 from openpois.io.geohash_partition import (
-    add_geohash_column,
-    write_label_partitioned_dataset,
+    write_label_partitioned_from_parquet,
 )
 
 # -----------------------------------------------------------------------------
@@ -39,24 +37,21 @@ PARTITION_COL = "shared_label"
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    print(f"Reading conflated dataset from {INPUT_PATH} ...")
-    gdf = gpd.read_parquet(INPUT_PATH)
-    print(f"Loaded {len(gdf):,} POIs")
-
-    print(f"Computing geohash-{PRECISION_SORT} sort column from centroids ...")
-    gdf = add_geohash_column(gdf, precision = PRECISION_SORT)
-
-    write_label_partitioned_dataset(
-        gdf,
+    # Streamed one partition at a time: reading all 14.6M rows x 58 columns as
+    # a single GeoDataFrame peaks around 21.5 GB and does not fit.
+    print(f"Partitioning {INPUT_PATH} by {PARTITION_COL} ...")
+    n_rows = write_label_partitioned_from_parquet(
+        INPUT_PATH,
         output_dir = OUTPUT_DIR,
         partition_col = PARTITION_COL,
+        geohash_precision = PRECISION_SORT,
         sort_col = "geohash",
         overwrite = OVERWRITE,
     )
 
     n_partitions = sum(1 for _ in OUTPUT_DIR.iterdir() if _.is_dir())
     print(
-        f"Done. Wrote {len(gdf):,} rows across {n_partitions} "
+        f"Done. Wrote {n_rows:,} rows across {n_partitions} "
         f"{PARTITION_COL} partitions."
     )
     print(f"Output: {OUTPUT_DIR}")

@@ -53,7 +53,8 @@ Then for the conflated output, also check `shared_label` distribution per territ
 ```
 
 Checks:
-- Row count in `fitted_params.csv` ≈ number of groups (after `min_value_count` filter).
+- **Was this a full-data fit?** `grep poi_sample_fraction {version}/config.yaml` must show `1.0`. A sampled fit produces a plausible-looking but much weaker model — check this *first*, because every downstream number inherits it. Corroborate in the fit log: `amenity_msa interaction: N cells >= 100 POIs` should read ~4,000, not ~18. `apply_model_random_effects.py` enforces this too, but catch it here rather than 5 h later.
+- Row count in `fitted_params.csv` ≈ number of groups (after `min_value_count` filter). A full-data `random_effects` fit is ~9,000 rows; ~1,200 means it was sampled.
 - λ values in a sensible range (spot-check against prior `fitted_params.csv`).
 - `predictions.csv` head/tail — every POI should have a prediction; no NaNs.
 - **Post-territory-expansion runs**: territories are <1% of POIs so global `logit_lambda` / `logit_delta_0` shouldn't move much. A >5% shift on the first territory-inclusive run vs the prior `fitted_params.csv` is worth investigating — could be a real mapping-behavior difference (territory POIs have fewer edits per year because smaller mapper communities) or a bug in `format_observations`.
@@ -86,6 +87,55 @@ Confirm `conf_mean`, `conf_lower`, `conf_upper` columns are populated for every 
 - `match_diagnostics.parquet` for per-pair forensics when specific matches look wrong.
 - **Territory match rates**: expect **lower** OSM × Overture match rates in territories than in CONUS — smaller mapper communities on both sides mean more source-only POIs. A territory match rate that looks CONUS-like is suspicious (possibly accepting cross-territory candidates with overly loose thresholds, or the conflation polygon clip missed a region).
 
+## Confidence calibration
+
+```
+~/data/openpois/conflation/{version}/
+  conflated_cd.parquet          # pre-calibration (CD applied)
+  conflated.parquet             # canonical, calibrated
+  calibration/fit_report.md     # read this first
+  calibration/{segment}_curve.parquet + _metadata.json
+  calibration/biggest_movers.csv, shift_by_label.csv
+  viz/calibration_{curves,reliability,shift}.png
+```
+
+Read `fit_report.md` first — see the "Reading the fit report" section of
+[docs/confidence-calibration.md](../../docs/confidence-calibration.md) for what
+each table means. Then check the deployed output:
+
+- **Row count preserved exactly** against `conflated_cd.parquet`. Calibration
+  must never add or drop a row.
+- **Range and interval invariants** — these should all be zero:
+  ```python
+  import duckdb
+  print(duckdb.sql(f"""
+    SELECT COUNT(*) rows,
+      SUM(CASE WHEN conf_mean < 0 OR conf_mean > 1 THEN 1 ELSE 0 END) out_of_range,
+      SUM(CASE WHEN conf_mean IS NULL OR isnan(conf_mean) THEN 1 ELSE 0 END) null_conf,
+      SUM(CASE WHEN conf_lower > conf_mean + 1e-9 THEN 1 ELSE 0 END) lower_gt_mean,
+      SUM(CASE WHEN conf_upper < conf_mean - 1e-9 THEN 1 ELSE 0 END) upper_lt_mean
+    FROM read_parquet('{path}')"""))
+  ```
+- **Monotonicity of the deployed map**: within a segment, a higher input score
+  must never yield a lower calibrated value. Bin the index and check for
+  inversions; there should be none.
+- **Flag counts are plausible**: `shadow_cd` should equal the change-detection
+  row count exactly, `unnamed_extrapolated` the unnamed-OSM count, and
+  `missing_conf` the count of Overture rows at exactly 0.5.
+- **Shadow rows untouched**: every `shadow_matched` row must satisfy
+  `conf_mean = conf_mean_uncalibrated` with a null interval.
+- **Composite vs reference**: the fit report's Horvitz-Thompson reference curve
+  should sit inside the composite's band over most of the grid. A systematic gap
+  means the working model is wrong — investigate before publishing.
+- **Band redistribution is expected and large.** On 20260730 the `>90%` band
+  halved and `<30%` nearly emptied. Confirm the shift matches the fit report
+  rather than assuming a bug, but do sanity-check `shift_by_label.csv`: the
+  biggest movers should be explainable (stable OSM institutions down because the
+  OSM curve has a ceiling; Overture-only up because the flat ×0.7 is gone).
+- **Curves are release-specific.** If `snapshot_overture` or the turnover model
+  moved but `versions.calibration` did not, the curves are stale — re-export the
+  handoff from openpois-validator and refit.
+
 ## Site
 
 - Open the deployed site (or `npm run dev` locally after a constants.js bump).
@@ -93,6 +143,30 @@ Confirm `conf_mean`, `conf_lower`, `conf_upper` columns are populated for every 
 - Filter dropdown: each source (OSM / Overture / Conflated) loads.
 - Popups non-empty; taxonomy legend rendered; PMTiles overlay visible at zoom 14+.
 - **Post-territory-expansion runs**: pan to all 4 new territories — Guam (~+144°E) and American Samoa (~-170°W) are the longitudes most likely to expose tile-wrap or PMTiles edge bugs that haven't been exercised before. Verify points render at all 4 territories. Geocoder check: `"Hagåtña"`, `"Charlotte Amalie"`, `"Saipan"`, `"Pago Pago"` should resolve in the search bar (Stadia `boundary.country` now includes `PR,VI,GU,MP,AS`).
+
+## Published release (Source Cooperative)
+
+Verify by reading the *public* path, which is the legacy flat bucket and not the
+proxy the upload wrote through:
+
+```python
+import pyarrow.dataset as ds, pyarrow.fs as pafs
+fs = pafs.S3FileSystem(anonymous = True, region = "us-west-2")
+BASE = "us-west-2.opendata.source.coop/henryspatialanalysis/openpois"
+d = ds.dataset(f"{BASE}/<version>/conflated-parquet/", filesystem = fs,
+               format = "parquet", partitioning = "hive")
+print(d.count_rows(), len(d.schema.names))
+```
+
+- **Row count and column count** must match the local partitioned tree.
+- **Schema is a superset of the previous release** — diff `d.schema.names`
+  against the prior version's, so third-party queries keep working. Additions
+  are fine; a disappearance is a regression.
+- **`latest/` matches the new version**, since it is mirrored last and is what
+  the site and all README quickstarts default to. Compare its row count to the
+  dated folder.
+- A `NoSuchBucket` here means you used the *write* addressing by mistake; see
+  the access-path table in [docs/data-versioning.md](../../docs/data-versioning.md).
 
 ## Recording issues
 

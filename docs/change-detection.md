@@ -3,9 +3,18 @@
 OSM edit history is used to downweight Overture POIs whose location has seen a
 recent closure / rename / lifecycle event in OSM. This is a post-processing
 pass on the conflated dataset; the no-CD baseline is preserved as
-``conflated_baseline.parquet`` and the CD-applied result becomes the canonical
-``conflated.parquet`` that downstream partition / PMTiles / publish steps
-consume.
+``conflated_baseline.parquet`` and the CD-applied result is written to
+``conflated_cd.parquet``.
+
+.. note::
+
+   Since 2026-07-30, change detection is **no longer the last stage**. The
+   confidence-calibration step consumes ``conflated_cd.parquet`` and writes the
+   canonical ``conflated.parquet`` that partition / PMTiles / publish steps
+   read. Calibration must run *after* change detection, because the δ penalty
+   is multiplicative on ``conf_mean``: calibrating first would leave a
+   calibrated probability scaled by ~0.14. See
+   ``.claude/docs/confidence-calibration.md``.
 
 ## Pipeline
 
@@ -46,8 +55,12 @@ Four stages, each separately runnable and individually inspectable:
               new_conf = old_conf × δ_group
               audit columns appended
                               │
+                              ▼  conflated_cd.parquet
+─── 4. calibration (fit_calibration.py + apply_calibration.py) ────────
+   per-segment calibrated confidence
+                              │
                               ▼  conflated.parquet (canonical)
-─── 4. downstream (unchanged) ─────────────────────────────────────────
+─── 5. downstream ─────────────────────────────────────────────────────
    summarize.py · format_for_upload.py · prepare_pmtiles.py · publish
 ```
 
@@ -162,9 +175,16 @@ copied as raw Arrow, so geometry is byte-preserved with no shapely round-trip.
 
 `summarize.py`, `format_for_upload.py`, `prepare_pmtiles.py`, and
 `publish/upload_to_source_coop.py` all read `conflated.parquet` by config and
-require no changes. They now consume the CD-applied output by default. The
-no-CD archive (`conflated_baseline.parquet`) is left on disk for spot-checks
-and ablation.
+require no changes. Since 2026-07-30 that file is the **calibrated** output,
+not the CD output directly: change detection writes `conflated_cd.parquet` and
+the calibration stage produces the canonical file from it. Two archives are
+left on disk for spot-checks and ablation — `conflated_cd.parquet` (CD applied,
+uncalibrated) and `conflated_baseline.parquet` (neither).
+
+Shadow-penalized rows are deliberately **passed through the calibration
+uncalibrated**, keeping the value this stage wrote, because the segment curve is
+indexed on the un-penalized Overture score and applying it would silently undo
+the demotion. Those rows carry `calibration_flag = 'shadow_cd'`.
 
 ## Tunables
 
@@ -247,3 +267,22 @@ session.
 | [vetting_viz/](../vetting_viz/) | Manual review UI. |
 | [Makefile](../Makefile) | `make conflate` orchestrator + sub-targets. |
 | [config.yaml](../config.yaml) → `conflation.change_detection` | All tunables. |
+
+## Scoring configuration is shared with the main matcher
+
+`apply_change_detection.py` reads the same `conflation.distance_weight` /
+`name_weight` / `type_weight` / `identifier_weight` keys as `conflate.py` and
+calls the same `compute_match_scores`. Retuning the main matcher therefore moves
+ghost matching too — the 2026-07 reweighting (0.0/0.50/0.30/0.20 with a constant
+identifier stub, to 0.20/0.40/0.40/0.00) took shadow matches from 57,760 to
+62,248 (+7.8%), mean penalty factor 0.1720 to 0.1731.
+
+The threshold is separate: `conflation.change_detection.min_shadow_match_score`,
+raised 0.50 to 0.70 on 2026-07-27 alongside the main `min_match_score`.
+
+Its scores are **not** on quite the same scale as the main matcher's. The shadow
+matcher passes all-zero L0 bit arrays and supplies no type-affinity table, so its
+type score falls back to binary exact `shared_label` equality; and it supplies no
+identifier arrays, so it always uses the no-identifier weight set. Re-calibrate it
+against its own score distribution rather than assuming the main matcher's bands
+carry over. See [../.claude/docs/match-scoring.md](../.claude/docs/match-scoring.md).

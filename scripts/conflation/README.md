@@ -1,8 +1,14 @@
 # POI Conflation: OSM + Overture Maps
 
 This pipeline conflates rated OpenStreetMap POIs with Overture Maps POIs into a
-unified superset with blended confidence scores. The output includes matched
-pairs, unmatched OSM POIs, and unmatched Overture POIs.
+unified superset. The output includes matched pairs, unmatched OSM POIs, and
+unmatched Overture POIs.
+
+`conflate.py` alone writes *uncalibrated* confidence. The full national
+pipeline is `make conflate`, which runs matching, change detection, and then
+confidence calibration — the last stage replaces the blended/downweighted
+confidence with a calibrated P(exists and open) per detection segment. See
+`../../.claude/docs/confidence-calibration.md`.
 
 ## Usage
 
@@ -14,7 +20,9 @@ python scripts/conflation/conflate.py
 python scripts/conflation/conflate.py --test
 ```
 
-Output: `~/data/openpois/conflation/{version}/conflated.parquet`
+Output: `~/data/openpois/conflation/{version}/conflated_baseline.parquet`
+(matching only). The canonical `conflated.parquet` is produced at the end of
+`make conflate`, after change detection and calibration.
 
 ## Algorithm Overview
 

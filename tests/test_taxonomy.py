@@ -6,16 +6,21 @@ import pandas as pd
 import pytest
 
 from openpois.conflation.taxonomy import (
+    EXCLUDE_LABEL,
+    MARKETPLACE_LABELS,
     assign_osm_shared_label,
     assign_overture_shared_label,
+    classify_marketplace_name,
     compute_osm_l0_bits,
     compute_overture_l0_bits,
     drop_osm_exclusions,
     get_osm_exclusions,
+    load_marketplace_names,
     load_match_radii,
     load_osm_crosswalk,
     load_overture_crosswalk,
     load_top_level_matches,
+    normalize_marketplace_name,
 )
 
 
@@ -169,10 +174,23 @@ class TestLoadOsmCrosswalk:
             "osm_key", "osm_value", "shared_label",
         }
 
-    def test_has_wildcard_rows(self):
+    def test_only_shop_and_healthcare_keep_a_wildcard(self):
+        """Exactly two keys may fall back to a catch-all.
+
+        *Other Shop* and *Other Healthcare* are deliberate catch-alls for
+        genuine one-off retail and clinical types. Every other key is
+        value-scoped: a wildcard there labels whatever the crosswalk has no
+        opinion about, which in 2026-07 meant 157,460 rows of street
+        furniture (``amenity=chair``, ``street_lamp``, ``stadium_seating``)
+        and untyped placeholders (``office=yes``) — 61,764 of which had no
+        other mapped tag to fall back on. A wildcard also makes the
+        key's osmium ingest expression a bare ``nwr/<key>``, so reinstating
+        one silently widens the PBF pull as well. See
+        .claude/docs/taxonomy-setup.md.
+        """
         cw = load_osm_crosswalk()
-        wildcards = cw[cw["osm_value"] == "*"]
-        assert len(wildcards) >= 4
+        wildcards = set(cw.loc[cw["osm_value"] == "*", "osm_key"])
+        assert wildcards == {"shop", "healthcare"}
 
 
 class TestLoadOvertureCrosswalk:
@@ -787,3 +805,171 @@ class TestL0Bitmasks:
         l0 = np.array([""])
         bits = compute_overture_l0_bits(l0)
         assert bits[0] == 0
+
+
+# -----------------------------------------------------------------
+# Referential integrity of the shipped CSVs
+# -----------------------------------------------------------------
+
+
+def _crosswalk_labels() -> tuple[set[str], set[str]]:
+    """(OSM-side labels, Overture-side labels), EXCLUDE removed."""
+    osm = load_osm_crosswalk()
+    overture = load_overture_crosswalk()
+    return (
+        set(osm["shared_label"]) - {EXCLUDE_LABEL},
+        set(overture["shared_label"]) - {EXCLUDE_LABEL},
+    )
+
+
+class TestCrosswalkIntegrity:
+    """The four CSVs have to agree on the label vocabulary.
+
+    A label missing from match_radii silently matches at the default
+    radius and never reaches the site (build_taxonomy derives
+    SHARED_LABELS from match_radii); a label with a radius but no
+    crosswalk row is dead weight.
+    """
+
+    def test_every_label_has_a_radius(self):
+        osm_labels, overture_labels = _crosswalk_labels()
+        radii = set(load_match_radii()["shared_label"])
+        assert not (osm_labels | overture_labels) - radii
+
+    def test_no_orphan_radii(self):
+        osm_labels, overture_labels = _crosswalk_labels()
+        radii = set(load_match_radii()["shared_label"])
+        assert not radii - (osm_labels | overture_labels)
+
+    def test_single_source_labels_are_documented(self):
+        # Overture has no car-rental category at all (nearest is
+        # car_sharing, ~245 US POIs), so Car Rental is OSM-only by
+        # necessity. Farmers Market has no OSM *tag*; its OSM side
+        # comes from the amenity=marketplace name split, which the
+        # static crosswalk cannot express.
+        osm_labels, overture_labels = _crosswalk_labels()
+        assert osm_labels - overture_labels == {"Car Rental"}
+        assert overture_labels - osm_labels == {"Farmers Market"}
+
+    def test_two_sided_labels_have_top_level_matches(self):
+        """Shared labels need their (L0, osm_key) pair for type scoring.
+
+        Without the pair, a near-miss between two POIs of that broad
+        group gets no partial type credit. Catch-all labels are exempt:
+        they collect whatever the finer rows did not claim, so they span
+        nearly every (L0, key) combination and would force the table to
+        become a full cross-product, handing out broad-group credit to
+        genuinely unrelated pairs.
+        """
+        catch_alls = {
+            "Other Amenity", "Other Shop", "Other Healthcare",
+            "Other Professional", "Other Financial", "Recreation",
+        }
+        osm = load_osm_crosswalk()
+        osm = osm[
+            (osm["shared_label"] != EXCLUDE_LABEL)
+            & ~osm["shared_label"].isin(catch_alls)
+        ]
+        overture = load_overture_crosswalk()
+        overture = overture[
+            (overture["shared_label"] != EXCLUDE_LABEL)
+            & ~overture["shared_label"].isin(catch_alls)
+        ]
+        pairs = {
+            (row["overture_l0"], row["osm_key"])
+            for _, row in load_top_level_matches().iterrows()
+        }
+
+        osm_keys = osm.groupby("shared_label")["osm_key"].apply(set)
+        overture_l0s = (
+            overture.groupby("shared_label")["overture_l0"].apply(set)
+        )
+        missing: list[tuple[str, str, str]] = []
+        for label in set(osm_keys.index) & set(overture_l0s.index):
+            for l0 in overture_l0s[label]:
+                for key in osm_keys[label]:
+                    if (l0, key) not in pairs:
+                        missing.append((label, l0, key))
+        assert not missing, f"missing top_level_matches rows: {missing}"
+
+
+class TestMarketplaceNames:
+    """The amenity=marketplace name split."""
+
+    def test_normalize_strips_case_and_punctuation(self):
+        assert (
+            normalize_marketplace_name("Pike Place Farmers' Market")
+            == "pike place farmers market"
+        )
+        assert normalize_marketplace_name(None) == ""
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "olney farmers market",
+            "greensgrow farmstand",
+            "ballston freshfarm",
+            "west asheville tailgate market",
+            "selma curb market",
+            "sunrise orchards",
+            "fresh for all camden",
+            "brooklyn supported agriculture",
+        ],
+    )
+    def test_farmers_market_names(self, name):
+        assert classify_marketplace_name(name) == "Farmers Market"
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "brooklyn flea",
+            "national city swap meet",
+            "kenwood market",
+            "grand central market",
+            "wilson s meat market",
+            "",
+        ],
+    )
+    def test_market_names(self, name):
+        assert classify_marketplace_name(name) == "Market"
+
+    def test_market_rule_beats_farmers_rule(self):
+        # A flea market that happens to mention farm goods is still a
+        # flea market — the Market patterns are checked first.
+        assert (
+            classify_marketplace_name("antique farm equipment flea market")
+            == "Market"
+        )
+
+    def test_exceptions_file_is_well_formed(self):
+        exceptions = load_marketplace_names()
+        assert list(exceptions.columns) == [
+            "name_normalized", "shared_label", "source",
+        ]
+        assert set(exceptions["shared_label"]) <= set(MARKETPLACE_LABELS)
+        assert exceptions["name_normalized"].is_unique
+        # Exceptions exist to override the rules; a row agreeing with
+        # them is dead weight that should be deleted.
+        redundant = [
+            row["name_normalized"]
+            for _, row in exceptions.iterrows()
+            if classify_marketplace_name(row["name_normalized"])
+            == row["shared_label"]
+        ]
+        assert not redundant, f"rules already handle: {redundant}"
+
+    def test_marketplace_split_applies_in_assignment(self):
+        gdf = pd.DataFrame(
+            {
+                "amenity": ["marketplace", "marketplace", "marketplace"],
+                "shop": [None, None, "supermarket"],
+                "name": [
+                    "Olney Farmers Market", "Brooklyn Flea", "Farm Fresh IGA",
+                ],
+            }
+        )
+        labels, _ = assign_osm_shared_label(
+            gdf, load_osm_crosswalk(), load_match_radii(),
+            ["shop", "amenity"],
+        )
+        assert list(labels) == ["Farmers Market", "Market", "Supermarket"]

@@ -133,3 +133,8 @@ dmypy.json
 # Claude ignore
 .claude/scheduled_tasks.lock
 .env.json
+
+# Fixed data inputs produced outside this repo (validation handoff for the
+# confidence calibration; see .claude/docs/confidence-calibration.md). Kept out
+# of version control deliberately -- the labels are the validation moat.
+data/

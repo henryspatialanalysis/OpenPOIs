@@ -1,248 +1,247 @@
 overture_l0,overture_l1,overture_l2,overture_l3,shared_label
-arts_and_entertainment,amusement_attraction,amusement_attraction,,Recreation
-arts_and_entertainment,amusement_attraction,,,Recreation
-arts_and_entertainment,animal_attraction,animal_attraction,,Recreation
-arts_and_entertainment,animal_attraction,,,Recreation
-arts_and_entertainment,arts_and_crafts_space,arts_centre,,Arts Venue
-arts_and_entertainment,arts_and_crafts_space,,,Arts Venue
-arts_and_entertainment,event_venue,event_venue,,Other Amenity
-arts_and_entertainment,event_venue,,,Other Amenity
-arts_and_entertainment,festival_venue,festival_venue,,Recreation
-arts_and_entertainment,festival_venue,,,Recreation
-arts_and_entertainment,gaming_venue,amusement_arcade,,Arcade
-arts_and_entertainment,gaming_venue,bowling_alley,,Bowling Alley
-arts_and_entertainment,gaming_venue,casino,,Casino
-arts_and_entertainment,gaming_venue,escape_game,,Recreation
-arts_and_entertainment,gaming_venue,,,Recreation
-arts_and_entertainment,movie_theater,cinema,,Movie Theater
-arts_and_entertainment,movie_theater,,,Movie Theater
-arts_and_entertainment,museum,museum,,Museum
-arts_and_entertainment,museum,,,Museum
-arts_and_entertainment,nightlife_venue,nightclub,,Nightclub
-arts_and_entertainment,nightlife_venue,,,Nightclub
-arts_and_entertainment,performing_arts_venue,community_centre,,Community Center
-arts_and_entertainment,performing_arts_venue,dance,,Performing Arts
-arts_and_entertainment,performing_arts_venue,theatre,,Performing Arts
 arts_and_entertainment,performing_arts_venue,,,Performing Arts
-arts_and_entertainment,rural_attraction,rural_attraction,,Recreation
-arts_and_entertainment,rural_attraction,,,Recreation
-arts_and_entertainment,science_attraction,science_attraction,,Recreation
-arts_and_entertainment,science_attraction,,,Recreation
-arts_and_entertainment,social_club,social_club,,Social Club
-arts_and_entertainment,social_club,,,Social Club
-arts_and_entertainment,stadium_arena,stadium,,Stadium
+arts_and_entertainment,arts_and_crafts_space,,,Arts Venue
+arts_and_entertainment,museum,,,Museum
+arts_and_entertainment,event_venue,,,Event Venue
+arts_and_entertainment,,arcade,,Arcade
+arts_and_entertainment,,casino,,Casino
+arts_and_entertainment,gaming_venue,,,Recreation
 arts_and_entertainment,stadium_arena,,,Stadium
-arts_and_entertainment,,college,,University
-arts_and_entertainment,,kindergarten,,Kindergarten
-arts_and_entertainment,,library,,Library
-arts_and_entertainment,,school,,School
-arts_and_entertainment,,university,,University
+arts_and_entertainment,amusement_attraction,,,Recreation
+arts_and_entertainment,nightlife_venue,,,Nightclub
+arts_and_entertainment,movie_theater,,,Movie Theater
+arts_and_entertainment,social_club,,,Social Club
+arts_and_entertainment,festival_venue,,,Recreation
+arts_and_entertainment,spiritual_advising,,,Other Amenity
+arts_and_entertainment,animal_attraction,,,Recreation
+arts_and_entertainment,rural_attraction,,,Recreation
+arts_and_entertainment,science_attraction,,,Recreation
+arts_and_entertainment,ticket_office_or_booth,,,Other Amenity
 arts_and_entertainment,,,,Other Amenity
-food_and_drink,bar,bar,,Bar
-food_and_drink,bar,biergarten,,Bar
-food_and_drink,bar,pub,,Bar
-food_and_drink,bar,,,Bar
-food_and_drink,beverage_shop,cafe,,Cafe
-food_and_drink,beverage_shop,,,Cafe
-food_and_drink,brewery_winery_distillery,brewery_winery_distillery,,Bar
-food_and_drink,brewery_winery_distillery,,,Bar
-food_and_drink,casual_eatery,bakery,,Bakery
-food_and_drink,casual_eatery,fast_food,,Fast Food
-food_and_drink,casual_eatery,ice_cream,,Dessert Shop
-food_and_drink,casual_eatery,,,Fast Food
-food_and_drink,dessert_shop,dessert_shop,,Dessert Shop
-food_and_drink,dessert_shop,,,Dessert Shop
-food_and_drink,food_truck,food_truck,,Fast Food
-food_and_drink,food_truck,,,Fast Food
-food_and_drink,lounge,lounge,,Bar
-food_and_drink,lounge,,,Bar
-food_and_drink,restaurant,food_court,,Restaurant
-food_and_drink,restaurant,restaurant,,Restaurant
+community_and_government,,housing_authority,,Government Office
+community_and_government,social_or_community_service,,,Community Center
+community_and_government,government_office,,,Government Office
+community_and_government,public_safety_service,,,Public Safety
+community_and_government,civic_organization,,,Community Center
+community_and_government,,public_restroom,,Public Restroom
+community_and_government,,public_plaza,,Park
+community_and_government,public_facility,,,Other Amenity
+community_and_government,,,,Community Center
+cultural_and_historic,religious_organization,,,Place of Worship
+cultural_and_historic,place_of_worship,,,Place of Worship
+cultural_and_historic,historic_site,,,Historic Site
+cultural_and_historic,,cemetery,,Cemetery
+cultural_and_historic,,monument,,Historic Site
+cultural_and_historic,memorial_site,,,Historic Site
+cultural_and_historic,cultural_center,,,Community Center
+cultural_and_historic,,,,Other Amenity
+education,,,preschool,Kindergarten
+education,,college_university,,University
+education,,campus_building,,University
+education,place_of_learning,,,School
+education,library,,,Library
+education,educational_service,,,School
+education,educational_facility,,,School
+education,research_institute,,,Other Professional
+education,education_office,,,Government Office
+education,,,,School
 food_and_drink,restaurant,,,Restaurant
-food_and_drink,,,,Other Amenity
+food_and_drink,,bakery,,Bakery
+food_and_drink,,bagel_shop,,Bakery
+food_and_drink,,cafe,,Cafe
+food_and_drink,,coffee_shop,,Cafe
+food_and_drink,,dessert_shop,,Dessert Shop
+food_and_drink,,candy_store,,Dessert Shop
+food_and_drink,,diner,,Restaurant
+food_and_drink,,gastropub,,Bar
+food_and_drink,,tapas_bar,,Restaurant
+food_and_drink,casual_eatery,,,Fast Food
+food_and_drink,alcoholic_beverage_venue,,,Bar
+food_and_drink,non_alcoholic_beverage_venue,,,Cafe
+food_and_drink,,,,Restaurant
+geographic_entities,,marina,,Marina
+geographic_entities,,garden,,Park
+geographic_entities,,pier,,Recreation
+geographic_entities,,bridge,,EXCLUDE
+geographic_entities,built_feature,,,Other Amenity
+geographic_entities,,,,Other Amenity
 health_care,hospital,,,Hospital
-health_care,outpatient_care_facility,,,Clinic
-health_care,specialized_medical_facility,,,Other Healthcare
-health_care,medical_service,,,Other Healthcare
-health_care,emergency_or_urgent_care_facility,,,Other Healthcare
 health_care,,primary_care_or_general_clinic,,Clinic
 health_care,,pediatric_clinic,,Clinic
 health_care,,walk_in_clinic,,Clinic
 health_care,,urgent_care_clinic,,Clinic
+health_care,,emergency_department,,Hospital
+health_care,,ambulance_or_ems_service,,Public Safety
+health_care,emergency_or_urgent_care_facility,,,Clinic
 health_care,,dental_clinic,,Dentist
 health_care,,vision_or_eye_care_clinic,,Eye Care
 health_care,,behavioral_or_mental_health_clinic,,Mental Health
 health_care,,physical_medicine_and_rehabilitation,,Physical Therapy
 health_care,,complementary_and_alternative_medicine,,Alternative Medicine
+health_care,,,chiropractic,Other Healthcare
 health_care,,specialized_health_care,,Other Healthcare
 health_care,,diagnostics_imaging_or_lab_service,,Other Healthcare
 health_care,,reproductive_perinatal_and_womens_care,,Other Healthcare
-health_care,,,,Other Healthcare
-shopping,convenience_store,convenience_store,,Convenience Store
-shopping,convenience_store,,,Convenience Store
-shopping,department_store,department_store,,Clothing Store
-shopping,department_store,,,Clothing Store
-shopping,discount_store,variety_store,,Discount Store
-shopping,discount_store,,,Discount Store
-shopping,fashion_and_apparel_store,clothing_store,,Clothing Store
-shopping,fashion_and_apparel_store,shoe_store,,Shoe Store
-shopping,fashion_and_apparel_store,,,Clothing Store
-shopping,food_and_beverage_store,liquor_store,,Liquor Store
-shopping,food_and_beverage_store,supermarket,,Supermarket
-shopping,food_and_beverage_store,,,Supermarket
-shopping,market,farmers_market,,Farmers Market
-shopping,market,,,Market
-shopping,outlet_store,outlet_store,,Clothing Store
-shopping,outlet_store,,,Clothing Store
-shopping,second_hand_store,thrift_store,,Thrift Store
-shopping,second_hand_store,,,Thrift Store
-shopping,shopping_center,mall,,Shopping Center
-shopping,shopping_center,,,Shopping Center
-shopping,specialty_store,bank,,Bank
-shopping,specialty_store,bicycle_shop,,Bike shop
-shopping,specialty_store,bookstore,,Bookstore
-shopping,specialty_store,car_parts,,Car Repair
-shopping,specialty_store,car_repair,,Car Repair
-shopping,specialty_store,car_wash,,Car Wash
-shopping,specialty_store,charging_station,,Charging Station
-shopping,specialty_store,pharmacy_and_drug_store,,Pharmacy
-shopping,specialty_store,diy_store,,Specialty Store
-shopping,specialty_store,dry_cleaning,,Dry Cleaning
-shopping,specialty_store,florist,,Florist
-shopping,specialty_store,fuel_station,,Gas Station
-shopping,specialty_store,furniture_store,,Furniture Store
-shopping,specialty_store,garden_centre,,Garden Store
-shopping,specialty_store,gift_shop,,Specialty Store
-shopping,specialty_store,hardware_store,,Hardware
-shopping,specialty_store,jewelry_store,,Jewelry Store
-shopping,specialty_store,laundry,,Laundromat
-shopping,specialty_store,mobile_phone_store,,Cell Phone Store
-shopping,specialty_store,pet_store,,Pet Store
-shopping,specialty_store,post_office,,Post Office
-shopping,specialty_store,sports_store,,Sports Outlet
-shopping,specialty_store,storage_rental,,Specialty Store
-shopping,specialty_store,tire_shop,,Tire Store
-shopping,specialty_store,tobacco_store,,Specialty Store
-shopping,specialty_store,,,Specialty Store
-shopping,superstore,superstore,,Supermarket
-shopping,superstore,,,Supermarket
-shopping,vehicle_dealer,car_dealer,,Car Dealer
-shopping,vehicle_dealer,car_rental,,Car Rental
-shopping,vehicle_dealer,,,Car Dealer
-shopping,wholesale_store,wholesale_store,,Wholesale Store
-shopping,wholesale_store,,,Wholesale Store
-shopping,,,,Other Shop
-sports_and_recreation,adventure_sport,adventure_sport,,Recreation
-sports_and_recreation,adventure_sport,,,Recreation
-sports_and_recreation,paintball,paintball,,Recreation
-sports_and_recreation,paintball,,,Recreation
-sports_and_recreation,park,dog_park,,Dog Park
-sports_and_recreation,park,garden,,Park
-sports_and_recreation,park,nature_reserve,,Park
-sports_and_recreation,park,park,,Park
-sports_and_recreation,park,playground,,Playground
-sports_and_recreation,park,,,Park
-sports_and_recreation,sports_and_fitness_instruction,fitness_centre,,Fitness Center
-sports_and_recreation,sports_and_fitness_instruction,,,Fitness Center
-sports_and_recreation,sports_and_recreation_rental_and_service,sports_rental_service,,Sports Outlet
-sports_and_recreation,sports_and_recreation_rental_and_service,,,Sports Outlet
-sports_and_recreation,sports_and_recreation_venue,disc_golf,,Recreation
-sports_and_recreation,sports_and_recreation_venue,golf_course,,Golf Course
-sports_and_recreation,sports_and_recreation_venue,horse_riding,,Recreation
-sports_and_recreation,sports_and_recreation_venue,ice_rink,,Recreation
-sports_and_recreation,sports_and_recreation_venue,marina,,Marina
-sports_and_recreation,sports_and_recreation_venue,miniature_golf,,Recreation
-sports_and_recreation,sports_and_recreation_venue,pitch,,Recreation
-sports_and_recreation,sports_and_recreation_venue,sports_centre,,Recreation
-sports_and_recreation,sports_and_recreation_venue,swimming_pool,,Swimming Pool
-sports_and_recreation,sports_and_recreation_venue,trampoline_park,,Recreation
-sports_and_recreation,sports_and_recreation_venue,water_park,,Recreation
-sports_and_recreation,sports_and_recreation_venue,,,Recreation
-sports_and_recreation,sports_club_and_league,sports_club,,Recreation
-sports_and_recreation,sports_club_and_league,,,Recreation
-sports_and_recreation,trail,track,,Recreation
-sports_and_recreation,trail,,,Recreation
-sports_and_recreation,water_sport,water_sport,,Recreation
-sports_and_recreation,water_sport,,,Recreation
-sports_and_recreation,,,,Recreation
-community_and_government,civic_organization,,,Community Center
-community_and_government,government_office,,,Government Office
-community_and_government,public_facility,public_restroom,,Public Restroom
-community_and_government,public_facility,,,Public Restroom
-community_and_government,public_safety_service,fire_station,,Public Safety
-community_and_government,public_safety_service,police,,Public Safety
-community_and_government,public_safety_service,,,Public Safety
-community_and_government,social_or_community_service,post_office,,Post Office
-community_and_government,social_or_community_service,community_centre,,Community Center
-community_and_government,social_or_community_service,,,Community Center
-community_and_government,,,,Community Center
-cultural_and_historic,cultural_center,,,Community Center
-cultural_and_historic,memorial_site,cemetery,,Cemetery
-cultural_and_historic,place_of_worship,,,Place of Worship
-cultural_and_historic,religious_organization,,,Place of Worship
-cultural_and_historic,,,,Other Amenity
-education,educational_facility,,,School
-education,library,,,Library
-education,place_of_learning,adult_education_center,,School
-education,place_of_learning,college_university,,University
-education,place_of_learning,school,,School
-education,place_of_learning,specialty_school,,School
-education,place_of_learning,,,School
-education,,,,School
-lifestyle_services,animal_or_pet_service,pet_care_service,,Pet Store
-lifestyle_services,animal_or_pet_service,veterinary_care,,Veterinarian
-lifestyle_services,animal_or_pet_service,,,Pet Store
-lifestyle_services,beauty_service,,,Hair and Beauty
-lifestyle_services,food_service,,,Other Amenity
-lifestyle_services,personal_or_beauty_service,barber,,Hair and Beauty
-lifestyle_services,personal_or_beauty_service,beauty_salon,,Hair and Beauty
-lifestyle_services,personal_or_beauty_service,body_modification,,Hair and Beauty
-lifestyle_services,personal_or_beauty_service,hair_salon,,Hair and Beauty
-lifestyle_services,personal_or_beauty_service,nail_salon,,Hair and Beauty
-lifestyle_services,personal_or_beauty_service,,,Hair and Beauty
-lifestyle_services,wellness_service,health_and_wellness_club,,Fitness Center
-lifestyle_services,wellness_service,massage_therapy,,Massage Therapy
-lifestyle_services,wellness_service,spa,,Massage Therapy
-lifestyle_services,wellness_service,,,Massage Therapy
-lodging,bed_and_breakfast,,,Hotel
-lodging,cabin,,,Hotel
-lodging,campground,,,Campground
-lodging,cottage,,,Hotel
-lodging,hostel,,,Hotel
-lodging,hotel,motel,,Hotel
-lodging,hotel,,,Hotel
-lodging,inn,,,Hotel
-lodging,lodge,,,Hotel
-lodging,resort,,,Hotel
-lodging,rv_park,,,Campground
-lodging,,,,Hotel
-services_and_business,financial_service,atm,,ATM
-services_and_business,financial_service,bank_or_credit_union,,Bank
-services_and_business,financial_service,,,Other Financial
-services_and_business,home_service,contractor,,Home Service
-services_and_business,home_service,interior_design,,Home Service
-services_and_business,home_service,key_and_locksmith,,Home Service
-services_and_business,home_service,landscaping,,Home Service
-services_and_business,home_service,,,Home Service
-services_and_business,legal_service,,,Legal Service
-services_and_business,professional_service,,,Other Professional
-services_and_business,real_estate_service,,,Real Estate
-services_and_business,family_service,child_care_and_day_care,,Childcare
-services_and_business,family_service,funeral_service,,Other Professional
-services_and_business,family_service,adoption_service,,Other Professional
-services_and_business,family_service,family_service_center,,Other Professional
-services_and_business,family_service,nanny_service,,Other Professional
-services_and_business,family_service,mobility_equipment_service,,Other Shop
-services_and_business,family_service,genealogist,,Other Professional
-services_and_business,family_service,elder_care_planning,,Other Professional
-travel_and_transportation,fueling_station,ev_charging_station,,Charging Station
-travel_and_transportation,fueling_station,gas_station,,Gas Station
-travel_and_transportation,fueling_station,,,Gas Station
-travel_and_transportation,vehicle_service,automotive_service,,Car Repair
-travel_and_transportation,vehicle_service,car_wash,,Car Wash
-travel_and_transportation,vehicle_service,,,Car Repair
 health_care,,,counseling,Counseling
 health_care,,,occupational_therapy,Occupational Therapy
 health_care,,,speech_therapy,Speech Therapist
 health_care,,,maternity_center,Maternity Center
 health_care,,,midwifery,Maternity Center
+health_care,outpatient_care_facility,,,Clinic
+health_care,,abuse_and_addiction_treatment_center,,Mental Health
+health_care,,medical_cannabis,,Cannabis Dispensary
+health_care,,health_insurance_office,,Other Financial
+health_care,specialized_medical_facility,,,Other Healthcare
+health_care,medical_service,,,Other Healthcare
+health_care,,,,Other Healthcare
+lifestyle_services,,body_modification,,Tattoo and Piercing
+lifestyle_services,,shoe_repair,,Specialty Store
+lifestyle_services,,life_coach,,Other Professional
+lifestyle_services,personal_or_beauty_service,,,Hair and Beauty
+lifestyle_services,beauty_service,,,Hair and Beauty
+lifestyle_services,,health_and_wellness_club,,Fitness Center
+lifestyle_services,,weight_loss_center,,Other Healthcare
+lifestyle_services,,nutrition_service,,Other Healthcare
+lifestyle_services,,meditation_center,,Fitness Center
+lifestyle_services,wellness_service,,,Massage Therapy
+lifestyle_services,,veterinary_care,,Veterinarian
+lifestyle_services,,animal_adoption_or_rescue,,Animal Shelter
+lifestyle_services,,equine_service,,Recreation
+lifestyle_services,animal_or_pet_service,,,Pet Store
+lifestyle_services,food_service,,,Other Amenity
+lifestyle_services,,,,Hair and Beauty
+lodging,hotel,,,Hotel
+lodging,campground,,,Campground
+lodging,rv_park,,,Campground
+lodging,holiday_park,,,Campground
+lodging,private_lodging,,,Hotel
+lodging,resort,,,Hotel
+lodging,bed_and_breakfast,,,Hotel
+lodging,lodge,,,Hotel
+lodging,cabin,,,Hotel
+lodging,inn,,,Hotel
+lodging,cottage,,,Hotel
+lodging,hostel,,,Hotel
+lodging,service_apartment,,,Hotel
+lodging,retreat,,,Hotel
+lodging,,,,Hotel
+services_and_business,,atm,,ATM
+services_and_business,,bank_or_credit_union,,Bank
+services_and_business,financial_service,,,Other Financial
+services_and_business,,recycling_center,,Other Amenity
+services_and_business,home_service,,,Home Service
+services_and_business,,land_surveying,,Other Professional
+services_and_business,real_estate_service,,,Real Estate
+services_and_business,,cleaning_service,,Home Service
+services_and_business,professional_service,,,Other Professional
+services_and_business,legal_service,,,Legal Service
+services_and_business,,child_care_and_day_care,,Childcare
+services_and_business,,funeral_service,,Funeral Services
+services_and_business,,mobility_equipment_service,,Other Shop
+services_and_business,family_service,,,Other Professional
+services_and_business,,laundromat,,Laundromat
+services_and_business,,dry_cleaning,,Dry Cleaning
+services_and_business,laundry_service,,,Laundromat
+services_and_business,,post_office,,Post Office
+services_and_business,,shipping_center,,Post Office
+services_and_business,,mailbox_center,,Post Office
+services_and_business,shipping_or_delivery_service,,,Other Professional
+services_and_business,,package_locker,,EXCLUDE
+services_and_business,storage_facility,,,Self-Storage
+services_and_business,printing_service,,,Print and Copy Shop
+services_and_business,,,,Other Professional
+shopping,,grocery_store,,Supermarket
+shopping,,liquor_store,,Liquor Store
+shopping,,beer_wine_spirits_store,,Liquor Store
+shopping,,tobacco_shop,,Specialty Store
+shopping,,food_delivery_service,,Fast Food
+shopping,food_and_beverage_store,,,Specialty Store
+shopping,convenience_store,,,Convenience Store
+shopping,department_store,,,Clothing Store
+shopping,discount_store,,,Discount Store
+shopping,,shoe_store,,Shoe Store
+shopping,,jewelry_store,,Jewelry Store
+shopping,,eyewear_store,,Eye Care
+shopping,fashion_and_apparel_store,,,Clothing Store
+shopping,,farmers_market,,Farmers Market
+shopping,market,,,Market
+shopping,,antique_store,,Specialty Store
+shopping,,flea_market,,Market
+shopping,,junkyard,,Other Shop
+shopping,second_hand_store,,,Thrift Store
+shopping,shopping_mall,,,Shopping Center
+shopping,warehouse_club_store,,,Wholesale Store
+shopping,superstore,,,Supermarket
+shopping,kiosk,,,Convenience Store
+shopping,shopping_service,,,Other Shop
+shopping,,vehicle_parts_store,,Car Repair
+shopping,,,mobile_phone_store,Cell Phone Store
+shopping,,,mobile_phone_accessory_store,Cell Phone Store
+shopping,,,gift_shop,Specialty Store
+shopping,,flowers_and_gifts_store,,Florist
+shopping,,,hardware_store,Hardware
+shopping,,,building_supply_store,Hardware
+shopping,,,home_improvement_store,Hardware
+shopping,,,paint_store,Hardware
+shopping,,,flooring_store,Hardware
+shopping,,,carpet_store,Hardware
+shopping,,,tile_store,Hardware
+shopping,,,lighting_store,Hardware
+shopping,,,electrical_supply_store,Hardware
+shopping,,,kitchen_and_bath_store,Hardware
+shopping,,,window_treatment_store,Hardware
+shopping,,,furniture_store,Furniture Store
+shopping,,,mattress_store,Furniture Store
+shopping,,,home_goods_store,Furniture Store
+shopping,,,home_decor_store,Furniture Store
+shopping,,,outdoor_furniture_store,Furniture Store
+shopping,,,linen_store,Furniture Store
+shopping,,,nursery_and_gardening_store,Garden Store
+shopping,,,lawn_mower_store,Garden Store
+shopping,,,hot_tub_and_pool_store,Garden Store
+shopping,,,appliance_store,Specialty Store
+shopping,,,candle_store,Specialty Store
+shopping,,,christmas_tree_store,Specialty Store
+shopping,,hardware_home_and_garden_store,,Hardware
+shopping,,pharmacy_and_drug_store,,Pharmacy
+shopping,,,bike_store,Bike shop
+shopping,,sporting_goods_store,,Sports Outlet
+shopping,,,bookstore,Bookstore
+shopping,,,video_game_store,Specialty Store
+shopping,,,video_and_video_game_rental,Specialty Store
+shopping,,books_music_and_video_store,,Bookstore
+shopping,,animal_and_pet_store,,Pet Store
+shopping,,,cannabis_dispensary,Cannabis Dispensary
+shopping,specialty_store,,,Specialty Store
+shopping,vehicle_dealer,,,Car Dealer
+shopping,,,,Other Shop
+sports_and_recreation,,gym,,Fitness Center
+sports_and_recreation,,fitness_studio,,Fitness Center
+sports_and_recreation,,gymnastics_center,,Fitness Center
+sports_and_recreation,,fitness_trainer,,Fitness Center
+sports_and_recreation,,boxing_class,,Fitness Center
+sports_and_recreation,,cycling_class,,Fitness Center
+sports_and_recreation,,martial_arts_club,,Fitness Center
+sports_and_recreation,,dance_studio,,Performing Arts
+sports_and_recreation,,golf_course,,Golf Course
+sports_and_recreation,,swimming_pool,,Swimming Pool
+sports_and_recreation,,bowling_alley,,Bowling Alley
+sports_and_recreation,sport_or_fitness_facility,,,Recreation
+sports_and_recreation,,dog_park,,Dog Park
+sports_and_recreation,,playground,,Playground
+sports_and_recreation,,water_park,,Recreation
+sports_and_recreation,park,,,Park
+sports_and_recreation,sport_or_recreation_club,,,Recreation
+sports_and_recreation,recreational_trail_or_path,,,Park
+sports_and_recreation,recreational_equipment_rental,,,Sports Outlet
+sports_and_recreation,sport_league,,,Recreation
+sports_and_recreation,sport_team,,,Recreation
+sports_and_recreation,,,,Recreation
+travel_and_transportation,,gas_station,,Gas Station
+travel_and_transportation,,ev_charging_station,,Charging Station
+travel_and_transportation,fueling_station,,,Gas Station
+travel_and_transportation,,,car_wash,Car Wash
+travel_and_transportation,,,auto_detailing,Car Wash
+travel_and_transportation,,,tire_shop,Tire Store
+travel_and_transportation,vehicle_service,,,Car Repair
+travel_and_transportation,,,,Car Repair

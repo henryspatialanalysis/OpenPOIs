@@ -345,8 +345,20 @@
     </p>
     <p>
       <strong>Confidence scoring:</strong> Each conflated POI receives a
-      confidence score from 0 to 1, representing the estimated probability
-      that the POI currently exists.
+      confidence score from 0 to 1, representing the estimated probability that
+      the POI <em>exists and is currently open to the public</em>. A permanently
+      closed business still listed by a data source counts as not existing.
+    </p>
+    <p>
+      Since July 2026 this score is <strong>calibrated</strong>: it is not a raw
+      model output but a probability estimated from an independent validation
+      sample of POIs whose real-world status was established by research and
+      human review. Separate calibration curves are fitted for POIs found in
+      both sources, in OpenStreetMap only, and in Overture Maps only, because
+      those three groups turn out to behave very differently. One practical
+      consequence is that the achievable range is narrower than 0–100%: the
+      score reports the rate at which POIs in a given band were actually found
+      to be open, rather than a source's nominal certainty.
     </p>
     <p>The confidence score is visualized on the map with a color ramp:</p>
     <table class="conf-table">
@@ -365,7 +377,8 @@
           </td>
           <td>Low</td>
           <td>&lt; 30%</td>
-          <td>Typically included in a single data source with low confidence</td>
+          <td>Almost entirely Overture-only POIs that OpenStreetMap edit history
+            suggests have closed. 0.2% of POIs.</td>
         </tr>
         <tr>
           <td>
@@ -373,8 +386,8 @@
           </td>
           <td>Medium</td>
           <td>30% – 70%</td>
-          <td>Typically included in multiple data sources with low confidence, or a single data source with medium-high
-            confidence</td>
+          <td>Overwhelmingly Overture-only POIs, which verify as open roughly
+            half to two-thirds of the time. 24.6% of POIs.</td>
         </tr>
         <tr>
           <td>
@@ -382,8 +395,8 @@
           </td>
           <td>High</td>
           <td>70% – 90%</td>
-          <td>Typically included in multiple data sources with medium confidence, or a single data source with high
-            confidence</td>
+          <td>A mix: higher-confidence Overture-only POIs, and OpenStreetMap-only
+            POIs across their whole range. 68.5% of POIs.</td>
         </tr>
         <tr>
           <td>
@@ -391,10 +404,18 @@
           </td>
           <td>Very high</td>
           <td>&gt; 90%</td>
-          <td>Typically included in multiple data sources with high confidence</td>
+          <td>Exclusively POIs found in <em>both</em> sources, which is the
+            strongest evidence available. 6.7% of POIs.</td>
         </tr>
       </tbody>
     </table>
+    <p>
+      Because the calibration replaced several hand-set constants, these scores
+      are <strong>not comparable to OpenPOIs releases before 30 July 2026</strong>.
+      The published data keeps the previous value in a
+      <code>conf_mean_uncalibrated</code> column for anyone who needs to
+      reproduce the old behaviour.
+    </p>
 
     <h2>Data Access &amp; Licensing</h2>
     <p>

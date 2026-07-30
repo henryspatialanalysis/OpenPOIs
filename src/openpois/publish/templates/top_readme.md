@@ -2,7 +2,8 @@
 
 A unified, open dataset for points of interest across the United States. Built from [OpenStreetMap](https://www.openstreetmap.org) and
 [Overture Maps](https://overturemaps.org), with per-POI confidence scores
-produced by the OpenPOIs turnover model.
+calibrated against a verified validation sample so they read as probabilities
+that a place exists and is currently open.
 
 - 🌐 **Interactive map:** <https://openpois.org/>
 - 💻 **Source code:** <https://github.com/henryspatialanalysis/openpois>
@@ -36,17 +37,57 @@ Overture Maps places. Key columns:
 | Column | Description |
 |---|---|
 | `unified_id` | Stable ID for the conflated POI |
-| `source` | `osm`, `overture`, or `both` |
+| `source` | `matched` (in both sources), `osm`, or `overture` |
 | `osm_id`, `osm_type` | Source OSM feature (when present) |
 | `overture_id` | Source Overture ID (when present) |
 | `name`, `brand` | Preferred display names |
 | `shared_label` | Harmonised category across the two source taxonomies |
-| `conf_mean` | Model-estimated probability the POI currently exists (1 = exists, 0 = incorrect or stale) |
-| `conf_lower`, `conf_upper` | 90% uncertainty interval for confidence score |
+| `conf_mean` | **Calibrated probability that the POI exists and is currently open to the public** (see Confidence, below) |
+| `conf_lower`, `conf_upper` | 95% interval for the calibrated confidence |
+| `conf_mean_uncalibrated` | The pre-calibration model value, retained for comparison |
+| `calibration_flag` | Null for the ordinary case; otherwise why this row was handled specially (see Confidence) |
 | `match_score`, `match_distance_m` | Diagnostics for the OSM × Overture link |
+| `osm_conf_mean`, `overture_confidence` | The two raw per-source inputs to the calibration |
+| `bbox` | GeoParquet 1.1 covering struct, for spatial row-group pruning |
+| `geohash` | Within-partition sort key (precision 6) |
 | `geometry` | WKB point (EPSG:4326) |
 
 The `osm-parquet/` files contain the same OSM rows before conflation. This data retains the original OSM tags.
+
+## Confidence
+
+`conf_mean` on the conflated dataset is a **calibrated probability that the place
+exists and is open to the public**, not a raw model score. It is produced by
+mapping each POI's source score(s) through a curve estimated from an independent
+validation sample of POIs whose real-world status was established by research
+and human review. Curves are fitted separately for each detection pattern — in
+both sources, OpenStreetMap only, Overture only — because those populations
+behave very differently.
+
+Three consequences worth knowing before you filter on it:
+
+- **It is not comparable to previous releases before 2026-07-30.** Earlier
+  versions published an uncalibrated blend, and Overture-only rows carried a
+  flat downweight. `conf_mean_uncalibrated` holds the old-style value if you
+  need to reproduce prior behaviour.
+- **The achievable range is narrower than 0–1**, because the calibration
+  reports the existence rate actually observed in each score band rather than
+  the source's nominal score. Overture-only rows, for example, span roughly
+  0.54–0.84.
+- **`conf_mean` means something different in `osm-parquet/`.** There it is the
+  OpenStreetMap turnover-model posterior — the probability the feature is still
+  current given its edit history — and it is *not* calibrated against verified
+  ground truth. Do not compare the two columns numerically across the two
+  datasets.
+
+`calibration_flag` records the exceptions:
+
+| Flag | Meaning |
+|---|---|
+| *(null)* | Ordinary case: confidence read from the segment's calibration curve |
+| `shadow_cd` | Overture row demoted by OpenStreetMap-history change detection; keeps that value, no interval |
+| `missing_conf` | Overture supplied no confidence upstream; a placeholder was imputed before calibration |
+| `unnamed_extrapolated` | Unnamed feature, outside the validation sample; calibrated by extrapolation |
 
 ## Quickstart
 

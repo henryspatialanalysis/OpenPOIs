@@ -43,6 +43,143 @@ Reference for every external data source openpois ingests. For the workflow that
   - Geofabrik extracts are pre-cut to admin boundaries → no polygon post-filter needed. `american-oceania-latest.osm.pbf` ships a few non-target uninhabited US Pacific possessions (Wake, Midway, Howland, Baker, Jarvis, Palmyra, Kingman); they contain near-zero POIs and pass through as bonus coverage. **Note**: these POIs are *not* in the Census boundary polygon, so they pass through OSM but get dropped by Overture's `ST_Within` and won't appear in the conflated output. Any per-state rollup of the OSM-only snapshot will show them with an unrecognized `addr:state` (or no value) — expected, not a bug.
   - **Config key naming asymmetry**: `usvi_*` (lowercase abbrev) and `american_oceania_*` (underscored words). Easy to mistype. If a future extract is added, pick the convention that matches the closest existing key.
 
+### Exclusion: unnamed private / no-access POIs
+
+Added 2026-07-25. OSM POIs that are **unnamed** (no `name` tag) **and** tagged
+`access=private` or `access=no` are excluded from the published dataset. In the
+July 2026 snapshot this drops **477,287 POIs (8.7%)** — 471,483 unnamed
+`access=private` plus 5,804 unnamed `access=no` — leaving 5,015,126. The removed
+set is overwhelmingly `leisure=swimming_pool` residential / HOA pools (the
+`Swimming Pool` shared_label alone is ~470K of them, ~99% unnamed).
+
+Rationale: these are anonymous, non-public features that add noise without value.
+They are also irrelevant to the turnover model, which measures **name changes** —
+a POI with no name contributes no name-change signal — so excluding them leaves
+the fitted λ essentially unchanged and the model is **not** re-fit for this
+filter. `access=restricted` is intentionally **not** excluded: those rows are
+mostly named facilities (only ~10% unnamed).
+
+**Where it is applied.** As of 2026-07-26 the predicate lives in the snapshot
+build: `download.osm.excluded_access` (`['private', 'no']`) is passed to
+`download_osm_snapshot` and applied per chunk by `_drop_unnamed_private_rows`
+in [osm_snapshot.py](../../src/openpois/io/osm_snapshot.py), alongside the
+existing EXCLUDE-tag filter. Set it to `[]` to disable.
+
+**This takes effect from the 2026-08 OSM pull onward.** The 2026-07 snapshot
+was built before the change, so that run applied the filter after rating with
+[apply_access_exclusion.py](../../scripts/osm_snapshot/apply_access_exclusion.py)
+— which must be re-run after *every* `make rate`, since the rater regenerates
+the snapshot unfiltered. Once the snapshot arrives pre-filtered that script
+becomes a no-op (it will report 0 dropped); keep it until then and use its
+`--expect-kept` guard, which is what caught a pyarrow null-propagation bug that
+would otherwise have over-dropped 2.44M rows.
+
+`tests/test_access_exclusion.py` asserts the two implementations select
+identical rows, so a month's snapshot cannot silently differ from the one
+before it.
+
+The history/observations path deliberately keeps these rows: a nameless POI
+contributes no name-change signal, so it cannot affect the turnover fit.
+
+### Exclusion: unnamed POIs inside `landuse=residential`
+
+`access` only catches features whose mapper bothered to tag them. The 2026-07
+validation round (155 POIs, `openpois-validator` round `20260724`) found the
+OSM-only segment's unverifiable rate is still dominated by unnamed,
+imagery-traced features on private land — backyard pools, HOA gardens, unnamed
+pitches and playgrounds. None can be desk- or phone-verified.
+
+`landuse=residential` polygons are a **mapper-independent** proxy for private
+property. An unnamed POI whose representative point falls inside one, and whose
+primary tag is in `download.osm.residential_exclusion.scoped_tags`, is dropped.
+
+Three properties of the rule matter:
+
+- **Tag-scoped.** In the US `landuse=residential` is routinely drawn around a
+  whole subdivision or neighbourhood block, so an unscoped rule would also
+  remove unnamed convenience stores (14k), places of worship (24k), fuel
+  stations (23k) and schools (12k) that legitimately sit inside those blocks.
+- **Named features are always kept**, wherever they sit. A name is the single
+  strongest signal that somebody verified the feature on the ground.
+- **Scoping uses the *primary* tag** — the first non-null key in
+  `download.osm.filter_keys` order — so a POI is never scoped by an incidental
+  secondary tag. This is deliberately *not* identical to
+  `assign_osm_shared_label`, which skips a key whose value the crosswalk does
+  not map and lets a lower-priority key label the row. The difference only
+  bites when the top-priority key carries an unmapped value, and it resolves
+  towards *keeping* the row — the right error direction for a rule that
+  deletes data.
+
+A contact-field guard (spare anything with a website/phone/opening_hours/
+housenumber) was considered and rejected on the data: those tags are present on
+only ~0.1% of the scoped values — 778 of 612,854 `leisure=pitch` — so it would
+rescue almost nothing while complicating the predicate.
+
+**Measured, 2026-07 (`landuse_residential.parquet`, 1,172,498 usable polygons):**
+
+| target | before | after | dropped |
+|---|--:|--:|--:|
+| `osm_snapshot_rated.parquet` | 5,015,126 | 4,764,221 | 250,905 (5.00%) |
+| `osm_snapshot.parquet` | 5,492,413 | 4,935,585 | 556,828 (10.14%) |
+
+The base snapshot drops twice as many because it still contains the 477,287
+unnamed `access=private|no` rows that `apply_access_exclusion.py` strips *after*
+rating — 294,041 of the extra drops are swimming pools. The two exclusions
+independently converge on the same backyard pools, which is a useful check that
+the spatial rule is finding what it is meant to.
+
+By tag on the rated snapshot, with the share of that tag's unnamed population:
+`leisure=swimming_pool` 127,799 (**50.6%**), `pitch` 66,176 (10.8%),
+`playground` 30,911 (20.0%), `garden` 13,792 (9.9%), `amenity=fountain` 10,414
+(28.0%), `leisure=track` 1,073 (3.6%), everything else 740. Half of all unnamed
+pools sitting inside residential landuse against only 11% of pitches is exactly
+what the private-property hypothesis predicts.
+
+**False-exclusion check.** Cross-referenced against the 155-POI
+`openpois-validator` round `20260724` (100 have an OSM side). Of the 22 POIs
+actually *eligible* — unnamed and in scope — the rule removed 6, **all of them
+`unverifiable`, and neither of the 2 eligible `exists` POIs**. Directionally
+right, but note the small denominator: with only 2 eligible `exists` POIs this
+establishes no useful upper bound on the false-exclusion rate.
+
+**Do not use `conf_mean` to sanity-check this exclusion.** Dropped rows skew
+*high* (93,943 in the 0.8–1.0 band against 568 below 0.2), because the turnover
+model scores name-change stability and an unnamed POI has no name to change. The
+two signals measure different things.
+
+Values already carrying an `EXCLUDE` crosswalk row need no residential rule and
+are deliberately absent from `scoped_tags`: `amenity=bbq`, `amenity=shelter`,
+`leisure=firepit`, `leisure=hot_tub`, `leisure=slipway`,
+`leisure=fitness_station`, `tourism=picnic_site`, `tourism=camp_pitch`.
+
+**Where it is applied.** The polygon layer is built by a second osmium pass
+(`wr/landuse=residential`) over the raw Geofabrik extracts — the POI ingest
+filter value-scopes `landuse` to `cemetery,religious`, so residential never
+reaches it. `download.py` runs this immediately after the snapshot is
+assembled and **before** it unlinks the raw PBFs, then filters
+`osm_snapshot.parquet` in place, keeping `osm_snapshot.preresidential.parquet`.
+The layer is persisted as `landuse_residential.parquet` so retuning the rule is
+a config edit plus a re-run of
+[apply_residential_exclusion.py](../../scripts/osm_snapshot/apply_residential_exclusion.py),
+not another ~11 GB Geofabrik pull.
+
+**This takes effect from the 2026-08 OSM pull onward**, exactly as the access
+exclusion did. The 2026-07 snapshot was built before the wiring, so that run
+applied the filter retroactively to both `osm_snapshot.parquet` and
+`osm_snapshot_rated.parquet` — the snapshot too, because `make rate`
+regenerates the rated file from it and would otherwise resurrect the rows.
+
+Predicate and helpers live in
+[openpois/osm/residential.py](../../src/openpois/osm/residential.py); the layer
+builder is
+[build_residential_areas.py](../../scripts/osm_snapshot/build_residential_areas.py).
+`tests/test_residential_exclusion.py` pins the predicate and asserts every
+`scoped_tags` value still resolves to a published crosswalk row — without that,
+a taxonomy edit could leave the spatial rule with nothing to filter.
+
+As with `access`, the history/observations path keeps these rows: they carry no
+name-change signal and cannot affect the turnover fit.
+
 ## Overture Maps
 
 **Used by**: current-state Overture snapshot (`overture_snapshot.parquet`).
@@ -57,7 +194,32 @@ Reference for every external data source openpois ingests. For the workflow that
   - `brand` is a singular struct, **not** a `brands[]` array.
   - L0 category names: `food_and_drink`, `shopping`, `arts_and_entertainment`, `sports_and_recreation`, `health_care`.
   - Geometry is native DuckDB GEOMETRY — must `LOAD spatial;` and use `ST_X()` / `ST_Y()`.
-- **Upcoming migration (~June 2026)**: L0/L1 hierarchy → flat `basic_category`. Crosswalk CSV + `assign_overture_shared_label` will need updating.
+  - `brand` is a struct `{wikidata, names{primary, common, rules}}`. We extract both `brand.names.primary AS brand_name` and (since 2026-07-26) `brand.wikidata AS brand_wikidata`, the latter feeding identifier scoring. **Snapshots built before that date lack the column**; `conflate.py` appends it to the load list only when the file schema has it.
+- **Upcoming migration**: the deprecated `categories` field is slated for removal in the **September 2026** release, leaving `taxonomy` plus the flat `basic_category` (~280 labels, which Overture recommends for cross-taxonomy mapping and which we do not currently retain). The nested hierarchy itself is not going away; it now runs up to six levels, of which we store `l0..l3`.
+- **`taxonomy_allowlist` filters at L0/L1 only.** The download predicate never looks deeper, so an L1 *rename* under a partially-allowlisted L0 silently drops every row beneath it — the failure mode is invisible in the output because the rows simply never arrive. Wholesale-allowlisted L0s (`L1: null`) are immune. Widened 2026-07-27 to add `laundry_service`, `shipping_or_delivery_service`, `storage_facility`, `printing_service` and `geographic_entities/built_feature` (+395k POIs in bbox scope), which is what gives Laundromat, Dry Cleaning, Post Office, Self-Storage, Print and Copy Shop and Marina an Overture side at all.
+
+### Identifier field coverage (2026-07-22 release, US footprint)
+
+Measured on `20260722_tax3` for the match scorer — see
+[match-scoring.md](match-scoring.md):
+
+| field | Overture | OSM |
+|---|--:|--:|
+| website | 10,476,134 (83%) | 856,040 (17%) |
+| phone | 11,555,783 (92%) | 698,192 (14%) |
+| brand wikidata | 159,623 (1.27%) | 661,725 (13.2%) |
+
+Two things worth knowing. **Websites are not unique** — only 72% belong to a
+single POI, and 633,941 (6.2%) share one with 100+ others (`subway.com` covers
+10,834), so they identify a *brand*, not a location. And **branded chains
+deduplicate far harder than average**: the 159,623 rows carrying a wikidata id
+fall to 83,543 after Overture internal dedup, a ~48% reduction against ~5%
+overall, which says a lot about duplication in their Meta/Microsoft/Foursquare
+source merge.
+
+### The Feb/Mar 2026 taxonomy restructure
+
+Overture cut L0 from 22 to 13 and renamed 407 / reparented 482 / repathed 2,108 categories. The crosswalk was not updated at the time and rotted quietly: by July 2026, **111 of 247 rows (45%) were dead**, 26 shared_labels received zero Overture POIs, and 10.5% of rows fell through to L0-only catch-alls. The monthly `compare_taxonomy.py` check reported clean throughout, because the catch-alls label everything. §6 of that script now catches this — see [taxonomy-setup.md](taxonomy-setup.md). Authoritative taxonomy source: `OvertureMaps/docs` → `docs/guides/places/csv/2026-03-04-categories-hierarchies.csv`.
 
 ## Census boundary
 
