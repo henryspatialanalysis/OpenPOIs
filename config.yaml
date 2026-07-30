@@ -18,7 +18,12 @@ versions:
   # 20260729 is kept intact — the openpois-validator pilot round is pinned
   # to it.
   conflation: "20260730"
-  source_coop: "2026-06-27-v0"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
+  # Validation round whose condensed handoff drives the confidence
+  # calibration (see .claude/docs/confidence-calibration.md). Produced by
+  # openpois-validator's scripts/08_export_handoff.py; the curves are
+  # release-specific and do not transport across Overture releases.
+  calibration: "20260730"
+  source_coop: "2026-07-30-v0"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
   # Ghost POI dataset reconstructed from OSM history (one row per
   # detected previous-state event). Pinned to the same value as
   # ``osm_data`` since it is derived from the same history parquets,
@@ -422,6 +427,16 @@ directories:
     path: ~/data/openpois/ghost_osm
     files:
       ghosts: ghosts.parquet
+  # Fixed validation input for the confidence calibration, exported from
+  # openpois-validator. Lives in the repo tree but is gitignored: the labels
+  # are the validation moat. Versioned on ``versions.calibration``.
+  calibration:
+    versioned: true
+    path: ~/repos/openpois/data/calibration
+    files:
+      validation_rows: validation_rows.parquet
+      metadata: metadata.json
+      reference_curves: reference_curves
   testing:
     versioned: false
     path: ~/data/openpois/testing
@@ -540,6 +555,34 @@ conflation:
       enabled: true
       radius_m: 50
       name_similarity_threshold: 70
+  # Existence-confidence calibration (the v4 estimator; see
+  # .claude/docs/confidence-calibration.md and the 2026-07-30 v4 writeup).
+  # Fitted from the validation handoff pinned by ``versions.calibration``,
+  # then applied to every conflated POI after change detection.
+  calibration:
+    # Minimum gold labels for a refined (verdict x LLM-confidence) cell to
+    # keep its own rate; thinner cells merge into the parent verdict class.
+    min_cell_gold: 25
+    # Cross the LLM verdict with the LLM's own verdict confidence. Worth it
+    # on round 20260730: LLM-exists splits 449/450 correct at high confidence
+    # against 141/148 at medium.
+    refine_by_confidence: true
+    # How the matched segment's two source scores become one curve index:
+    #   pool    - fitted log-odds pool (3 params estimated from matched gold)
+    #   average - unweighted mean of the two scores (no params)
+    # Measured on round 20260730 by scripts/conflation/compare_matched_index.py
+    # (5-fold cross-fit, pool refit inside each fold): the average is worse on
+    # both proper scoring rules (Brier +0.0021, log score +0.0186, both CIs
+    # excluding zero) and loses ~43% of the discrimination (DSC 0.0043 vs
+    # 0.0074), stable across 6 fold/seed settings. It does buy a tighter band
+    # (median 0.109 vs 0.180) since there are no coefficients to refit per
+    # bootstrap replicate. Re-measure before switching.
+    matched_index_mode: pool
+    grid_points: 200
+    curve_output_bins: 40           # equal-mass value bins in the lookup
+    bootstrap_reps: 500
+    band_alpha: 0.05                # 95% pointwise band
+    rng_seed: 20260730
 
 # Settings for publishing snapshots to Source Cooperative
 # (https://source.coop/henryspatialanalysis/openpois). Source Coop is
@@ -590,8 +633,12 @@ publish:
       - osm_id
       - osm_type       # node|way|relation — drives popup OSM link path
       - shared_label
-      - conf_mean
+      - conf_mean      # calibrated P(exists and open) since 2026-07-30
       - name
       - brand
       - match_score
       - match_distance_m
+      # Calibration provenance, so a tile consumer can tell a curve-derived
+      # confidence from a change-detection-demoted or extrapolated one without
+      # fetching the parquet. Null for the ordinary on-curve case.
+      - calibration_flag
