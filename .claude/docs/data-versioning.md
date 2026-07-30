@@ -11,10 +11,14 @@ versions:
   snapshot_osm: "20260416"             # OSM current-state snapshot
   snapshot_overture: "20260417"        # Overture snapshot
   conflation: "20260417"               # conflated output
+  ghost_osm: "20260416"                # OSM-history ghost POIs for change detection
+  calibration: "20260730"              # validation round driving confidence calibration
   source_coop: "2026-04-17-v0"         # Source Cooperative upload folder (see below)
 ```
 
 Each key corresponds to a `directories.<key>` entry in `config.yaml` with `versioned: true`, except `source_coop`, which only names the remote folder.
+
+`calibration` is unusual in two ways: its `directories.calibration` root lives **inside the repo tree** (`~/repos/openpois/data/calibration`) rather than under `~/data/openpois`, and that tree is **gitignored** — the validation labels are the moat. The data is produced by openpois-validator's `scripts/08_export_handoff.py`, so bumping this key means re-exporting there first. Curves are release-specific: bump it whenever `snapshot_overture` or the turnover model moves, and refit.
 
 ## Path resolution
 
@@ -50,6 +54,9 @@ Version strings appear in these places outside `versions:` — grep before any c
 | [site/src/constants.js](../../site/src/constants.js) | `OSM_PMTILES_URL`, `CONFLATED_PMTILES_URL` (full `data.source.coop` URLs) |
 | [site/public/about.html](../../site/public/about.html) | Hardcoded Source Coop browse links in the data-access section |
 | `osm_data.apply_model.model_stub` (config.yaml) | Which model family [scripts/osm_snapshot/apply_model.py](../../scripts/osm_snapshot/apply_model.py) ingests |
+| [site/public/about.html](../../site/public/about.html) | Confidence-band table + calibration prose. The band descriptions quote **measured shares per band** and the "not comparable before 30 July 2026" date — recheck them whenever the calibration is refit, since the distribution shifts. |
+| [src/openpois/publish/templates/top_readme.md](../../src/openpois/publish/templates/top_readme.md) | Published schema table + Confidence section, including the release date after which scores are calibrated |
+| `~/repos/openpois-validator/config.yaml` | `versions.round` must match `versions.calibration` here, and its own `versions.conflation` pins the run the sample was drawn from |
 
 [skills/update-site](../skills/update-site/SKILL.md) covers the frontend side; [skills/conflate-snapshots](../skills/conflate-snapshots/SKILL.md) covers the publish + config side.
 

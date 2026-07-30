@@ -87,6 +87,55 @@ Confirm `conf_mean`, `conf_lower`, `conf_upper` columns are populated for every 
 - `match_diagnostics.parquet` for per-pair forensics when specific matches look wrong.
 - **Territory match rates**: expect **lower** OSM × Overture match rates in territories than in CONUS — smaller mapper communities on both sides mean more source-only POIs. A territory match rate that looks CONUS-like is suspicious (possibly accepting cross-territory candidates with overly loose thresholds, or the conflation polygon clip missed a region).
 
+## Confidence calibration
+
+```
+~/data/openpois/conflation/{version}/
+  conflated_cd.parquet          # pre-calibration (CD applied)
+  conflated.parquet             # canonical, calibrated
+  calibration/fit_report.md     # read this first
+  calibration/{segment}_curve.parquet + _metadata.json
+  calibration/biggest_movers.csv, shift_by_label.csv
+  viz/calibration_{curves,reliability,shift}.png
+```
+
+Read `fit_report.md` first — see the "Reading the fit report" section of
+[docs/confidence-calibration.md](../../docs/confidence-calibration.md) for what
+each table means. Then check the deployed output:
+
+- **Row count preserved exactly** against `conflated_cd.parquet`. Calibration
+  must never add or drop a row.
+- **Range and interval invariants** — these should all be zero:
+  ```python
+  import duckdb
+  print(duckdb.sql(f"""
+    SELECT COUNT(*) rows,
+      SUM(CASE WHEN conf_mean < 0 OR conf_mean > 1 THEN 1 ELSE 0 END) out_of_range,
+      SUM(CASE WHEN conf_mean IS NULL OR isnan(conf_mean) THEN 1 ELSE 0 END) null_conf,
+      SUM(CASE WHEN conf_lower > conf_mean + 1e-9 THEN 1 ELSE 0 END) lower_gt_mean,
+      SUM(CASE WHEN conf_upper < conf_mean - 1e-9 THEN 1 ELSE 0 END) upper_lt_mean
+    FROM read_parquet('{path}')"""))
+  ```
+- **Monotonicity of the deployed map**: within a segment, a higher input score
+  must never yield a lower calibrated value. Bin the index and check for
+  inversions; there should be none.
+- **Flag counts are plausible**: `shadow_cd` should equal the change-detection
+  row count exactly, `unnamed_extrapolated` the unnamed-OSM count, and
+  `missing_conf` the count of Overture rows at exactly 0.5.
+- **Shadow rows untouched**: every `shadow_matched` row must satisfy
+  `conf_mean = conf_mean_uncalibrated` with a null interval.
+- **Composite vs reference**: the fit report's Horvitz-Thompson reference curve
+  should sit inside the composite's band over most of the grid. A systematic gap
+  means the working model is wrong — investigate before publishing.
+- **Band redistribution is expected and large.** On 20260730 the `>90%` band
+  halved and `<30%` nearly emptied. Confirm the shift matches the fit report
+  rather than assuming a bug, but do sanity-check `shift_by_label.csv`: the
+  biggest movers should be explainable (stable OSM institutions down because the
+  OSM curve has a ceiling; Overture-only up because the flat ×0.7 is gone).
+- **Curves are release-specific.** If `snapshot_overture` or the turnover model
+  moved but `versions.calibration` did not, the curves are stale — re-export the
+  handoff from openpois-validator and refit.
+
 ## Site
 
 - Open the deployed site (or `npm run dev` locally after a constants.js bump).

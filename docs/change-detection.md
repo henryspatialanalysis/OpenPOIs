@@ -3,9 +3,18 @@
 OSM edit history is used to downweight Overture POIs whose location has seen a
 recent closure / rename / lifecycle event in OSM. This is a post-processing
 pass on the conflated dataset; the no-CD baseline is preserved as
-``conflated_baseline.parquet`` and the CD-applied result becomes the canonical
-``conflated.parquet`` that downstream partition / PMTiles / publish steps
-consume.
+``conflated_baseline.parquet`` and the CD-applied result is written to
+``conflated_cd.parquet``.
+
+.. note::
+
+   Since 2026-07-30, change detection is **no longer the last stage**. The
+   confidence-calibration step consumes ``conflated_cd.parquet`` and writes the
+   canonical ``conflated.parquet`` that partition / PMTiles / publish steps
+   read. Calibration must run *after* change detection, because the δ penalty
+   is multiplicative on ``conf_mean``: calibrating first would leave a
+   calibrated probability scaled by ~0.14. See
+   ``.claude/docs/confidence-calibration.md``.
 
 ## Pipeline
 
@@ -46,8 +55,12 @@ Four stages, each separately runnable and individually inspectable:
               new_conf = old_conf × δ_group
               audit columns appended
                               │
+                              ▼  conflated_cd.parquet
+─── 4. calibration (fit_calibration.py + apply_calibration.py) ────────
+   per-segment calibrated confidence
+                              │
                               ▼  conflated.parquet (canonical)
-─── 4. downstream (unchanged) ─────────────────────────────────────────
+─── 5. downstream ─────────────────────────────────────────────────────
    summarize.py · format_for_upload.py · prepare_pmtiles.py · publish
 ```
 
@@ -162,9 +175,16 @@ copied as raw Arrow, so geometry is byte-preserved with no shapely round-trip.
 
 `summarize.py`, `format_for_upload.py`, `prepare_pmtiles.py`, and
 `publish/upload_to_source_coop.py` all read `conflated.parquet` by config and
-require no changes. They now consume the CD-applied output by default. The
-no-CD archive (`conflated_baseline.parquet`) is left on disk for spot-checks
-and ablation.
+require no changes. Since 2026-07-30 that file is the **calibrated** output,
+not the CD output directly: change detection writes `conflated_cd.parquet` and
+the calibration stage produces the canonical file from it. Two archives are
+left on disk for spot-checks and ablation — `conflated_cd.parquet` (CD applied,
+uncalibrated) and `conflated_baseline.parquet` (neither).
+
+Shadow-penalized rows are deliberately **passed through the calibration
+uncalibrated**, keeping the value this stage wrote, because the segment curve is
+indexed on the un-penalized Overture score and applying it would silently undo
+the demotion. Those rows carry `calibration_flag = 'shadow_cd'`.
 
 ## Tunables
 
