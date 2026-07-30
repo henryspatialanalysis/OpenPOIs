@@ -152,9 +152,18 @@ def upload_bytes(
     return f"{DEFAULT_READ_HOST}/{key}"
 
 
-def public_url(key: str) -> str:
-    """Compose the public read URL for a given object key."""
-    return f"{DEFAULT_READ_HOST}/{key.lstrip('/')}"
+def public_url(key: str, account: str = DEFAULT_BUCKET) -> str:
+    """Compose the public read URL for a given object key.
+
+    Public reads are addressed ``{host}/{account}/{key}``. The account has to be
+    prepended explicitly because it is the *bucket* on the write side, so it is
+    absent from the keys this module uploads.
+    """
+    key = key.lstrip("/")
+    account = account.strip("/")
+    if account and not key.startswith(f"{account}/"):
+        key = f"{account}/{key}"
+    return f"{DEFAULT_READ_HOST}/{key}"
 
 
 def list_keys(client, bucket: str, prefix: str) -> list[str]:
