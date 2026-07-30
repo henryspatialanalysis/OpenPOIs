@@ -58,6 +58,22 @@ Version strings appear in these places outside `versions:` — grep before any c
 | [src/openpois/publish/templates/top_readme.md](../../src/openpois/publish/templates/top_readme.md) | Published schema table + Confidence section, including the release date after which scores are calibrated |
 | `~/repos/openpois-validator/config.yaml` | `versions.round` must match `versions.calibration` here, and its own `versions.conflation` pins the run the sample was drawn from |
 
+### Source Cooperative access paths
+
+`versions.source_coop` names the remote folder; the *addressing* around it is
+asymmetric and easy to get wrong.
+
+| Direction | Endpoint | Bucket | Key |
+|---|---|---|---|
+| **Write** (publish) | `https://data.source.coop` | `henryspatialanalysis` (the account) | `openpois/<version>/...` |
+| **Read** (public, anonymous) | default AWS S3 | `us-west-2.opendata.source.coop` | `henryspatialanalysis/openpois/<version>/...` |
+
+Writes moved to the proxy when Source Coop adopted OIDC/STS; the direct-S3 write
+path now returns `InvalidAccessKeyId` regardless of credential validity. Reads
+were unaffected, so the published README's quickstart examples still use the flat
+bucket and should stay that way. Credentials come from `source-coop login` +
+`source-coop creds`, not from `.env.json` (still supported as a fallback).
+
 [skills/update-site](../skills/update-site/SKILL.md) covers the frontend side; [skills/conflate-snapshots](../skills/conflate-snapshots/SKILL.md) covers the publish + config side.
 
 ## Geographic-scope changes (hand-update on bump)

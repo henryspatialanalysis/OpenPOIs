@@ -151,10 +151,16 @@ produce identical output.
 openpois.io.source_coop
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-Upload a locally partitioned dataset to Source Cooperative's S3-compatible
-storage. Walks the Hive partition directory, uploads each Parquet file under
-a versioned prefix, and reports the public URL on completion. Credentials
-come from a JSON file at the repo root (``publish.credentials_file``).
+Upload a locally partitioned dataset to Source Cooperative and mirror it to
+``latest/``. Walks the Hive partition directory, uploads each Parquet file under
+a versioned prefix, server-side copies the version into ``latest/``, and reports
+the public URL on completion.
+
+Writes go through Source Cooperative's data proxy, where the S3 bucket is the
+**account** and the repository is the first key segment. Both a custom
+``endpoint_url`` and that addressing are required: talking to AWS S3 directly, or
+using the older flat bucket name, fails authentication. Anonymous public reads are
+unaffected and still resolve against the legacy flat bucket.
 
 .. automodule:: openpois.io.source_coop
    :members:
@@ -164,9 +170,10 @@ come from a JSON file at the repo root (``publish.credentials_file``).
 openpois.io.credentials
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-Load Source Cooperative AWS-compatible credentials from a JSON file. Tokens
-are short-lived (~1 hour); the loader logs a clear error pointing at the
-credentials regeneration URL when the file is stale or missing.
+Load Source Cooperative's short-lived S3 credentials. Prefers the
+``source-coop`` CLI, which mints them from a cached browser login and is
+self-refreshing while that login is valid; falls back to a static JSON block at
+the repo root (``publish.credentials_file``). Tokens last about an hour.
 
 .. automodule:: openpois.io.credentials
    :members:

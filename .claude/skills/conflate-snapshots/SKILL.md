@@ -13,15 +13,37 @@ upload for web consumption.
 - Rated OSM snapshot (`osm_snapshot_rated.parquet`) at `versions.snapshot_osm` — produced by [skills/full-data-pull](../full-data-pull/SKILL.md) step 3.
 - Overture snapshot (`overture_snapshot.parquet`) at `versions.snapshot_overture`.
 - OSM history parquets (`osm_versions.parquet`, `osm_changes.parquet`) at `versions.osm_data` — **regenerated each month** by [skills/full-data-pull](../full-data-pull/SKILL.md) step 2 (via `scripts/osm_data/download_history.py`). The full re-fit pipeline at [skills/model-history-pipeline](../model-history-pipeline/SKILL.md) is only invoked when re-fitting λ. Required by the change-detection step in stage 4.
-- **Fresh Source Cooperative temp credentials** in `.env.json` at the repo root. Tokens expire in ~1 hour.
+- **A live Source Cooperative login.** Credentials come from the `source-coop` CLI, not from a file. Tokens last ~1 hour.
 
-> ⚠️ **Credential refresh check.** Source Cooperative uses short-lived AWS
-> credentials (`aws_access_key_id` starting with `ASIA…`). **Before** running
-> step 7, ask the user to regenerate them at
-> <https://source.coop/repositories/henryspatialanalysis/openpois/manage>
-> and overwrite `.env.json` at the repo root. The upload script will warn if
-> the file looks stale, but it cannot tell whether the token itself has
-> expired until it actually fails.
+> ⚠️ **Authenticate before step 7.** Source Cooperative moved to OIDC/STS: the
+> `source-coop` CLI mints short-lived credentials after a browser login, and
+> `openpois.io.credentials` reads them directly via `source-coop creds`. The
+> CLI is auth-only — it has no upload or sync command, so our own upload script
+> still does the transfer.
+>
+> ```bash
+> # once per machine
+> curl --proto '=https' --tlsv1.2 -LsSf https://github.com/source-cooperative/source-coop-cli/releases/latest/download/source-coop-cli-installer.sh | sh
+>
+> # once per session (opens a browser; ~1 hour of validity)
+> source-coop login
+> source-coop creds >/dev/null && echo "authenticated"
+> ```
+>
+> The CLI cannot open a browser under WSL, so it prints a URL instead — hand
+> that to the user to open. Mirrored networking (`.wslconfig`
+> `networkingMode=mirrored`) lets the Windows browser reach the local callback
+> port. `source-coop login` cannot be run for the user; it needs their
+> interaction.
+>
+> **Budget the token against the payload.** A full release is ~7 GB, so a
+> ~1-hour token needs roughly 2 MB/s sustained. Check the expiry that
+> `source-coop creds` reports before starting, and re-`login` if it is close.
+> If it does expire mid-transfer, `latest/` is untouched (it mirrors last) and
+> the `--skip-*` flags resume at dataset granularity.
+>
+> `.env.json` remains a fallback for a static credential block, but it is not
+> the normal path any more and Source Coop no longer issues keys that way.
 
 ## Steps
 
@@ -124,7 +146,8 @@ upload for web consumption.
 
 7. **Publish to Source Cooperative** — uploads OSM + conflated parquet,
    both PMTiles, and a freshly-rendered per-version `README.md` under
-   `<repo>/<versions.source_coop>/`. Confirm the credential check above first.
+   `<repo>/<versions.source_coop>/`, then mirrors the whole version to
+   `latest/`. Confirm the authentication check above first.
    ```bash
    # Preview everything that would be uploaded:
    python scripts/publish/upload_to_source_coop.py --dry-run
@@ -137,7 +160,16 @@ upload for web consumption.
    python scripts/publish/upload_to_source_coop.py --update-top-level
    ```
    `--skip-osm-parquet`, `--skip-conflated-parquet`, and `--skip-pmtiles`
-   allow partial reuploads (e.g. after regenerating PMTiles alone).
+   allow partial reuploads (e.g. after regenerating PMTiles alone), and
+   `--skip-latest-mirror` holds `latest/` on the previous release.
+
+   **Writes go through the data proxy, reads do not.** Uploads use
+   `endpoint_url = https://data.source.coop` with the **account as the bucket**
+   (`henryspatialanalysis`) and the repository as the first key segment
+   (`openpois/<version>/…`). Anonymous public *reads* still work against the
+   legacy flat bucket `us-west-2.opendata.source.coop` with
+   `henryspatialanalysis/openpois/…` keys, which is what the published README's
+   quickstart examples use — so do not "fix" those to match the write path.
 
 ## Verification
 

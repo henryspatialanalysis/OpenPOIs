@@ -144,6 +144,30 @@ each table means. Then check the deployed output:
 - Popups non-empty; taxonomy legend rendered; PMTiles overlay visible at zoom 14+.
 - **Post-territory-expansion runs**: pan to all 4 new territories — Guam (~+144°E) and American Samoa (~-170°W) are the longitudes most likely to expose tile-wrap or PMTiles edge bugs that haven't been exercised before. Verify points render at all 4 territories. Geocoder check: `"Hagåtña"`, `"Charlotte Amalie"`, `"Saipan"`, `"Pago Pago"` should resolve in the search bar (Stadia `boundary.country` now includes `PR,VI,GU,MP,AS`).
 
+## Published release (Source Cooperative)
+
+Verify by reading the *public* path, which is the legacy flat bucket and not the
+proxy the upload wrote through:
+
+```python
+import pyarrow.dataset as ds, pyarrow.fs as pafs
+fs = pafs.S3FileSystem(anonymous = True, region = "us-west-2")
+BASE = "us-west-2.opendata.source.coop/henryspatialanalysis/openpois"
+d = ds.dataset(f"{BASE}/<version>/conflated-parquet/", filesystem = fs,
+               format = "parquet", partitioning = "hive")
+print(d.count_rows(), len(d.schema.names))
+```
+
+- **Row count and column count** must match the local partitioned tree.
+- **Schema is a superset of the previous release** — diff `d.schema.names`
+  against the prior version's, so third-party queries keep working. Additions
+  are fine; a disappearance is a regression.
+- **`latest/` matches the new version**, since it is mirrored last and is what
+  the site and all README quickstarts default to. Compare its row count to the
+  dated folder.
+- A `NoSuchBucket` here means you used the *write* addressing by mistake; see
+  the access-path table in [docs/data-versioning.md](../../docs/data-versioning.md).
+
 ## Recording issues
 
 Anything anomalous goes into [.claude/TODO.md](../../TODO.md) under **In progress** so follow-ups don't drop.
