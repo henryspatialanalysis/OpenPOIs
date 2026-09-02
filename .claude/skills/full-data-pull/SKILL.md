@@ -38,6 +38,19 @@ Downloads the snapshot sources (50 US states + DC + 5 inhabited territories: PR,
    ```
    Each loader pulls 4 extracts in sequence: `us`, `pr`, `usvi`, `american_oceania`. Per-source details, auth, and schema quirks are in [docs/data-sources.md](../../docs/data-sources.md).
 
+   **After the Overture download, run the monthly confidence-drift gate** (quick, ~2 min):
+   ```bash
+   python scripts/overture/compare_confidence.py   # prior month auto-detected
+   ```
+   It compares confidence on matched GERS ids vs the prior local snapshot and prints the
+   decision metrics. The pass/breach rule and what each outcome means for the
+   calibration stage live in
+   [docs/confidence-calibration.md](../../docs/confidence-calibration.md) ("Curves do
+   not transport across releases"). Also run
+   `python scripts/overture/compare_taxonomy.py --strict` **before** bumping config /
+   downloading — it is the schema + crosswalk-drift pre-flight (see
+   [docs/taxonomy-setup.md](../../docs/taxonomy-setup.md)).
+
    **Gotcha — interrupted snapshot runs**: all 4 extracts share `~/data/openpois/snapshots/osm/<v>/parse_chunks/`. If a run dies between extracts, leftover chunks from extract N may be silently mistaken for extract N+1's parsed output on resume (the parser short-circuits on existing chunks). Before resuming an interrupted snapshot run, nuke the work dir:
    ```bash
    rm -rf ~/data/openpois/snapshots/osm/{version}/parse_chunks/

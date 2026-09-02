@@ -87,11 +87,22 @@ upload for web consumption.
 
    **Calibration must follow change detection, never precede it** — CD multiplies
    `conf_mean` by δ (≈0.14), so calibrating first would leave a calibrated probability
-   scaled by δ. Before the calibration stage runs, refresh the validation handoff and
-   pin it:
+   scaled by δ.
+
+   **Whether to fit at all is governed by the monthly confidence-drift gate**
+   (`scripts/overture/compare_confidence.py`, run during the data pull; decision rule in
+   [docs/confidence-calibration.md](../../docs/confidence-calibration.md)). On a
+   **pass** (the normal monthly case), do **not** run `fit_calibration` — reuse the most
+   recent fitted curves verbatim:
+   ```bash
+   # copy curves + metadata from the prior conflation version, with a provenance note
+   python scripts/conflation/apply_calibration.py --input-suffix cd --output-suffix "" \
+       --curves-dir ~/data/openpois/conflation/<prior version>/calibration
+   ```
+   On a **breach**, refresh the validation handoff, pin it, and refit:
    ```bash
    cd ~/repos/openpois-validator && python scripts/08_export_handoff.py
-   # then set versions.calibration in config.yaml to that round
+   # then set versions.calibration in config.yaml to that round, and run make calibrate
    ```
    The handoff lands in the gitignored `data/calibration/<round>/`. If it is missing,
    `fit_calibration.py` fails fast rather than shipping uncalibrated data.

@@ -141,7 +141,22 @@ Se/Sp are reported as diagnostics only.
   class-mix term on a coarse category grouping is the obvious next-round improvement.
 - **Curves do not transport across releases.** Overture's confidence methodology drifts
   and the OSM turnover model refits monthly. `versions.calibration` pins the validation
-  round; re-export and refit when either upstream moves.
+  round. Whether an Overture release bump forces a **new validation round** is decided
+  by the monthly drift check, `scripts/overture/compare_confidence.py` (matched-GERS-id
+  prior-vs-current comparison, in-schema POIs only). **Decision rule (adopted
+  2026-09-02):**
+  - **Pass** — on matched ids, overall RMSE ≤ 0.10 **and** |mean bias| ≤ 0.03, **and**
+    at most 10% of POIs move by |Δ| > 0.1: do **not** re-run `fit_calibration`. Reuse
+    the most recent fitted curves verbatim via
+    `apply_calibration.py --curves-dir <prior conflation>/calibration` (copy the curve
+    parquets + metadata into the new version's `calibration/` dir with a provenance
+    note so the version stays self-contained).
+  - **Breach** — any criterion fails: the labels' `overture_score` x-axis can no longer
+    be trusted. Re-export a new round from openpois-validator, bump
+    `versions.calibration`, and refit before publishing.
+  (Reference point: the 2026-08-19.0 release scored RMSE 0.036, bias +0.005,
+  share|Δ|>0.1 = 2.0% — a comfortable pass. A turnover-model refit still forces a new
+  round regardless, since it moves `osm_conf_mean`.)
 
 ## Files
 
