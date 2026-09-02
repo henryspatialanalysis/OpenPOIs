@@ -1,34 +1,31 @@
 # Versioned directories (used with config.get_dir_path())
 versions:
-  osm_data: "20260724"
+  osm_data: "20260902"
   model_output: "20260727_by_shared_label"
-  snapshot_osm: "20260724"
-  # Same Overture release (2026-07-22.0), re-pulled 2026-07-27 under the
-  # widened ``taxonomy_allowlist``. Kept in a separate directory so the
-  # 20260724 conflation's exact input stays reproducible.
-  # tax3 = same release + allowlist as tax2, re-pulled to add the
-  # brand_wikidata column for identifier scoring.
-  snapshot_overture: "20260722_tax3"
-  # 20260727 = taxonomy overhaul only (old scoring). 20260728 adds the
-  # type-affinity metric, real identifier scoring, and the per-pair
-  # conditional weights; kept separate so the two are comparable.
-  # 20260730 adds the two private-property / non-POI exclusions: the
-  # residential-landuse spatial rule (250,905 unnamed POIs) and the
-  # wildcard -> inclusion-set taxonomy change (61,764 unlabeled rows).
-  # 20260729 is kept intact — the openpois-validator pilot round is pinned
-  # to it.
-  conflation: "20260730"
+  snapshot_osm: "20260902"
+  # 2026-08-19.0 release. The July 20260722* dirs stay on disk as the
+  # method-paper basis and the prior-month baseline for
+  # scripts/overture/compare_confidence.py (tax2/tax3 = same release,
+  # widened-allowlist re-pulls; tax3 adds brand_wikidata).
+  snapshot_overture: "20260819"
+  # 20260730 (kept, July release) added the two private-property / non-POI
+  # exclusions: the residential-landuse spatial rule (250,905 unnamed POIs)
+  # and the wildcard -> inclusion-set taxonomy change (61,764 unlabeled
+  # rows). 20260902 is the first run with min_shadow_match_score 0.70 and
+  # the August Overture taxonomy fixes (beauty_service rename,
+  # food_delivery_service move).
+  conflation: "20260902"
   # Validation round whose condensed handoff drives the confidence
   # calibration (see .claude/docs/confidence-calibration.md). Produced by
   # openpois-validator's scripts/08_export_handoff.py; the curves are
   # release-specific and do not transport across Overture releases.
   calibration: "20260730"
-  source_coop: "2026-07-30-v0"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
+  source_coop: "2026-09-02-v0"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
   # Ghost POI dataset reconstructed from OSM history (one row per
   # detected previous-state event). Pinned to the same value as
   # ``osm_data`` since it is derived from the same history parquets,
   # and regenerated together with the monthly snapshot refresh.
-  ghost_osm: "20260724"
+  ghost_osm: "20260902"
 
 # Settings for downloading data
 download:
@@ -46,7 +43,7 @@ download:
       coastline_buffer_m: 100
   osm:
     start_date: 2016-01-01
-    end_date: 2026-07-22
+    end_date: 2026-08-19
     # Snapshot extracts. Geofabrik publishes a dedicated PBF for PR and USVI
     # under north-america/us/, but the western-Pacific inhabited territories
     # (Guam, Northern Mariana Islands, American Samoa) have no per-territory
@@ -136,7 +133,7 @@ download:
       'website','wikidata','wikipedia'
     ]
   overture:
-    release_date: "2026-07-22.0"  # pin for determinism; null = auto-detect latest
+    release_date: "2026-08-19.0"  # pin for determinism; null = auto-detect latest
     s3_bucket: "overturemaps-us-west-2"
     s3_region: "us-west-2"
     # DuckDB resource caps for the per-part S3 scans and the final polygon
@@ -528,7 +525,8 @@ conflation:
     name_change_similarity_threshold: 50
     # Fallback delta for ghosts whose shared_label isn't in the fitted
     # model's per-group params. Equals sigmoid(logit_delta_0) for the
-    # current 20260724_by_shared_label fit (logit_delta_0 = -1.809).
+    # current 20260727_by_shared_label fit (logit_delta_0 = -1.807;
+    # recomputed 2026-09-01, unchanged at this precision).
     default_delta: 0.141
     # Hard gate on Overture-name vs ghost-prior-name token_set_ratio
     # (0-100), applied *before* the composite-score-based shadow
@@ -603,8 +601,8 @@ publish:
   # Values surfaced in the per-version README. Set each round until the
   # pipeline captures them automatically — see .claude/TODO.md.
   version_metadata:
-    osm_snapshot_date: "2026-07-24"   # YYYY-MM-DD Geofabrik download date
-    overture_release: "2026-07-22.0"  # Overture Maps release ID, https://docs.overturemaps.org/release-calendar/
+    osm_snapshot_date: "2026-09-01"   # YYYY-MM-DD Geofabrik download date
+    overture_release: "2026-08-19.0"  # Overture Maps release ID, https://docs.overturemaps.org/release-calendar/
     model_commit: null                # null → use current git HEAD; set a short SHA to pin
   # PMTiles generation — multi-zoom archive z10–z14 for both OSM and conflated.
   # Site's View.minZoom is 10 (full-metro view). z10–z14 are served directly

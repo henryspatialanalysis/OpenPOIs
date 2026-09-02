@@ -1,5 +1,56 @@
 # Changelog
 
+## 2026-09-02-v0
+
+### Snapshot inputs
+
+| Source                 | Value                                       |
+| ---------------------- | ------------------------------------------- |
+| OSM snapshot date      | 2026-09-01                                  |
+| Overture release       | `2026-08-19.0` (pinned)                     |
+| OSM snapshot rows      | 4,508,280                                   |
+| Overture snapshot rows | 13,785,024                                  |
+| Boundary footprint     | US + all territories (PR, USVI, GU, MP, AS) |
+
+### Conflated output
+
+| Metric                       | This run    | Prior        | Δ                       |
+| ---------------------------- | ----------- | ------------ | ----------------------- |
+| Total rows                   | 15,586,580  | 14,613,331   | +973,249 (+6.66%)       |
+| Matched OSM × Overture       | 1,817,729   | 1,787,072    | +30,657 (+1.72%)        |
+| OSM-only                     | 2,685,038   | 2,678,337    | +6,701 (+0.25%)         |
+| Overture-only                | 11,083,813  | 10,147,922   | +935,891 (+9.22%)       |
+| Shadow-matched (CD penalty)  | 31,411      | 30,340       | +1,071                  |
+| Shared labels                | 102         | 102          | —                       |
+
+Growth is driven by the upstream Overture release (+9.3% rows month-over-month,
+of which 864,165 were removed again by internal dedup). The OSM snapshot is
+−5.4% vs July: this is the first pull with the value-scoped ingest filter
+applied at PBF-filter time, and the removed rows are entirely non-destination
+object values (e.g. `tourism=information`, `tourism=picnic_site`) that the July
+taxonomy overhaul had already unlabelled.
+
+### Methods changes vs. prior release
+
+- **Confidence calibration reused, not refit.** A new monthly drift gate
+  (`scripts/overture/compare_confidence.py`) compares Overture confidence on
+  matched GERS ids across releases; 2026-08-19.0 passed with wide margin
+  (RMSE 0.036, mean bias +0.005, 2.0% of POIs moving |Δ| > 0.1), so the July
+  validation round's fitted curves were applied verbatim to this release.
+  **`conf_mean` is therefore directly comparable to 2026-07-30-v0.** The
+  decision rule is documented in the repo
+  (`.claude/docs/confidence-calibration.md`).
+- **Shadow-match threshold now 0.70.** `min_shadow_match_score` was raised
+  0.50 → 0.70 after the July run and takes effect here (first release built
+  with it).
+- **Crosswalk updates for Overture's August taxonomy.** The
+  `beauty_service` → `personal_or_beauty_service` rename and the
+  `food_delivery_service` move under `lifestyle_services` are remapped to their
+  prior shared labels; the `place_of_worship` restructure is absorbed by the
+  existing cascade. No shared labels added or removed.
+- **Type-affinity table rebuilt** against the 2026-08-19.0 category hierarchy
+  (k = 100, identifier-confirmed pairs from the July conflation).
+
 ## 2026-07-30-v0
 
 ### Snapshot inputs
