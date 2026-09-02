@@ -8,12 +8,6 @@ Short running list of in-progress / upcoming work. Edit freely; trim older compl
 
 ## Upcoming
 
-- [ ] **Fix verify-pipeline-run's shadow-row invariant wording.** Added 2026-09-02.
-  The skill says shadow rows carry a "null interval"; in reality every `shadow_cd`
-  row has non-null `conf_lower > conf_mean` (CD demotes the mean and leaves the
-  interval as written — identical pattern in 20260730 and 20260902, zero non-shadow
-  violations). The invariant to check is `conf_lower > conf_mean` **only** on
-  shadow rows, not null intervals.
 - [ ] **Conflation merge-phase memory headroom.** Added 2026-09-02. The 20260902 run
   peaked at 21.9 GB RSS (pre-merge reload of both frames) against the 24 GB WSL cap,
   driven by Overture release growth (13.8M rows, +9.3% m/m). One or two more months

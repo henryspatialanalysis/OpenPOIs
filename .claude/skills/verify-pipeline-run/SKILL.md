@@ -123,7 +123,11 @@ each table means. Then check the deployed output:
   row count exactly, `unnamed_extrapolated` the unnamed-OSM count, and
   `missing_conf` the count of Overture rows at exactly 0.5.
 - **Shadow rows untouched**: every `shadow_matched` row must satisfy
-  `conf_mean = conf_mean_uncalibrated` with a null interval.
+  `conf_mean = conf_mean_uncalibrated`, and shadow rows are the **only** rows
+  where `conf_lower > conf_mean` — CD demotes the mean and leaves the interval
+  as written, so this inversion on exactly the `shadow_cd` rows (and zero
+  others) is the expected signature, not a defect (verified identical on
+  20260730 and 20260902).
 - **Composite vs reference**: the fit report's Horvitz-Thompson reference curve
   should sit inside the composite's band over most of the grid. A systematic gap
   means the working model is wrong — investigate before publishing.

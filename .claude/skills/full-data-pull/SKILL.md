@@ -71,28 +71,14 @@ Downloads the snapshot sources (50 US states + DC + 5 inhabited territories: PR,
    the random_effects model. The rater refuses to run against a fit trained on a
    POI subsample; see [skills/model-history-pipeline](../model-history-pipeline/SKILL.md).
 
-   > **Snapshots built before 2026-07-26 only:** the unnamed private/no-access
-   > exclusion is not baked into those snapshots, so re-apply it after *every*
-   > rating pass — `make rate` regenerates the file unfiltered:
-   > ```bash
-   > python scripts/osm_snapshot/apply_access_exclusion.py --expect-kept <N>
-   > ```
-   > From the 2026-08 pull onward the snapshot arrives pre-filtered via
-   > `download.osm.excluded_access` and this reports 0 dropped; once observed,
-   > drop the step. See the "Exclusion" section of
-   > [docs/data-sources.md](../../docs/data-sources.md).
-
-   > **Snapshots built before 2026-07-27 only:** the same applies to the
-   > residential-landuse exclusion. Build the layer, then apply it to *both*
-   > files — the snapshot too, or the next `make rate` resurrects the rows:
-   > ```bash
-   > python -u scripts/osm_snapshot/build_residential_areas.py
-   > python -u scripts/osm_snapshot/apply_residential_exclusion.py --report-only
-   > python -u scripts/osm_snapshot/apply_residential_exclusion.py --target snapshot
-   > python -u scripts/osm_snapshot/apply_residential_exclusion.py --target rated_snapshot
-   > ```
-   > From the 2026-08 pull onward `download.py` does this inline and both
-   > report 0 dropped.
+   > **Both non-POI exclusions run inline at snapshot build** — confirmed on the
+   > 2026-09 pull (the first under the new flow), so the old post-hoc scripts
+   > (`apply_access_exclusion.py`, `apply_residential_exclusion.py`) are needed
+   > only for snapshots built before 2026-07-26/27. Note the access exclusion is
+   > **silent** (no log line); verify it with a count instead — unnamed
+   > `access=private|no` rows in the snapshot must be 0. The residential
+   > exclusion logs `Residential exclusion: N rows kept`. See the "Exclusion"
+   > section of [docs/data-sources.md](../../docs/data-sources.md).
 
 4. **Optional schema snapshot** — produces small CSV snippets for spec review:
    ```bash
@@ -105,23 +91,28 @@ Hand off to [skills/verify-pipeline-run](../verify-pipeline-run/SKILL.md). Basel
 - OSM: ~7.78M POIs
 - Overture: ~13.05M POIs (jumped from ~7.23M after widening `download.overture.taxonomy_allowlist` to include `services_and_business` + `lifestyle_services` sub-branches)
 
-**Current baselines (2026-07 refresh).** The OSM snapshot now passes through two
-exclusions, so compare at the matching stage rather than to a single number:
+**Current baselines (2026-09 refresh).** Both exclusions now run at snapshot
+build, so the snapshot and rated files carry the same count:
 
 | stage | rows |
 |---|--:|
-| raw parse | 5,492,413 |
-| after unnamed `access=private\|no` | 5,015,126 (−8.7%) |
-| after residential landuse, *rated* file | 4,764,221 (−5.0%) |
-| after residential landuse, *base snapshot* | 4,935,585 (−10.1% of raw) |
+| parse + inline access exclusion | 4,763,499 |
+| after inline residential landuse (final = rated) | 4,508,280 (−5.4%) |
 
-The base-snapshot and rated figures differ because the 2026-07 run applied the
-access exclusion only after rating; from the 2026-08 pull both exclusions run at
-snapshot build and the single expected number is **~4.72M** (raw, minus both).
+The September count is **−5.4% vs July's 4,764,221** for a one-time reason: it
+was the first pull with the value-scoped ingest filter applied at PBF-filter
+time, which removed non-destination object values (`tourism=information` −77k,
+`tourism=picnic_site` −22k, and kin) that July still ingested and only
+unlabelled later. From October onward expect small month-over-month *growth*
+from ~4.51M; a >5% swing at the same stage is again a flag. The history
+parquets took the same one-time narrowing (`osm_versions` 21.2M → 15.1M rows),
+but **labeled ghosts were stable** (596,255 → 602,432) — compare labeled
+ghosts, not raw history rows.
 
-Overture 12,606,804 under the widened `taxonomy_allowlist`. The Overture
-extraction gained `brand_wikidata` on 2026-07-26 — a snapshot without it still
-conflates, but identifier scoring loses the Wikidata clause.
+Overture 20260819: 13,785,024 (+9.3% on July's 12,606,804; conflation-time
+internal dedup removed 864,165 of those). The Overture extraction gained
+`brand_wikidata` on 2026-07-26 — a snapshot without it still conflates, but
+identifier scoring loses the Wikidata clause.
 
 Conflated output for reference: `20260730` = 14,613,331 rows (matched 1,787,072 /
 OSM-only 2,678,337 / Overture-only 10,147,922).

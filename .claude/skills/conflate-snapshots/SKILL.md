@@ -73,8 +73,9 @@ upload for web consumption.
    4. `fit_calibration.py` + `apply_calibration.py` + `plot_calibration.py` — fit the per-segment existence-confidence curves from the validation handoff and map every POI through them; writes the canonical `conflated.parquet`.
 
    ```bash
-   make conflate            # full CONUS, ~22M POIs, peak RSS ~10 GB (matching)
-                            #                    + ~5 GB (CD step) projected
+   make conflate            # full CONUS; peak RSS measured 21.9 GB on 20260902
+                            # (pre-merge reload of both frames; 13.8M Overture
+                            # rows) against the 24 GB WSL cap — see TODO.md
    make conflate TEST=1     # Seattle bbox dry run
 
    # Sub-targets for partial re-runs:
@@ -144,8 +145,9 @@ upload for web consumption.
    ```
    Outputs `conflated_partitioned/` (and OSM-only `osm_snapshot_partitioned/`).
 
-6.5. **Build PMTiles** — single-zoom (z14) archives consumed directly by the
-     site via `ol-pmtiles`. Intermediate FlatGeobufs are cleaned up on success.
+6.5. **Build PMTiles** — multi-zoom (z10–z14, `drop-densest-as-needed`; see
+     `publish.pmtiles` in config.yaml) archives consumed directly by the site
+     via `ol-pmtiles`. Intermediate FlatGeobufs are cleaned up on success.
      ```bash
      python -u scripts/osm_snapshot/prepare_pmtiles.py \
        2>&1 | tee ~/data/openpois/logs/pmtiles_osm_<version>.log

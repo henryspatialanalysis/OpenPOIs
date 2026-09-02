@@ -137,7 +137,8 @@ does three things:
    [src/openpois/conflation/match.py](../src/openpois/conflation/match.py)
    with `distance_weight=0`, `name_weight=0.5`, `type_weight=0.3`,
    `identifier_weight=0.2`. Type score is binary on exact `shared_label`
-   equality. Greedy one-to-one above `min_shadow_match_score = 0.50`.
+   equality. Greedy one-to-one above `min_shadow_match_score = 0.70`
+   (raised from 0.50 after the 20260730 run; first exercised on 20260902).
    Subset/superset name pairs are dropped as obvious same-entity matches.
 
 2. **R1 current-OSM-survivor filter** — for each surviving shadow match,
@@ -193,9 +194,9 @@ Under `conflation.change_detection` in [config.yaml](../config.yaml):
 | Knob | Default | Effect |
 |---|---|---|
 | `enabled` | `false` | Reserved; the production gate is the matcher itself, not this flag. |
-| `min_shadow_match_score` | `0.50` | Composite score threshold for the shadow matcher. |
+| `min_shadow_match_score` | `0.70` | Composite score threshold for the shadow matcher (0.50 through the 20260730 run). |
 | `name_change_similarity_threshold` | `50` | Below this `token_set_ratio`, a name change becomes a `substantial_rename` ghost. |
-| `default_delta` | `0.141` | Fallback δ for `shared_label` values absent from the fitted model. Equals `sigmoid(logit_delta_0)` for the current fit (`logit_delta_0 = -1.809`, 20260724 random_effects). |
+| `default_delta` | `0.141` | Fallback δ for `shared_label` values absent from the fitted model. Equals `sigmoid(logit_delta_0)` for the current fit (`logit_delta_0 = -1.807`, 20260727 random_effects; unchanged at this precision from the 20260724 fit). |
 | `min_prior_name_match_score` | `0` | Hard gate on Overture-vs-prior-name `token_set_ratio` before any composite scoring. **Leave at 0** — values ≥ 70 produce high precision but miss real closures where Overture has updated to a different current business name at a churned address. |
 | `suppress_if_current_survivor.enabled` | `true` | R1 filter on/off. |
 | `suppress_if_current_survivor.radius_m` | `50` | R1 search radius (meters). |
