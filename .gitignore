@@ -138,3 +138,5 @@ dmypy.json
 # confidence calibration; see .claude/docs/confidence-calibration.md). Kept out
 # of version control deliberately -- the labels are the validation moat.
 data/
+# Editor-local configuration
+.vscode/
