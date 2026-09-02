@@ -10,14 +10,14 @@ import {
 // Source Cooperative URLs — PMTiles archives read via ol-pmtiles. Bump the
 // version folder each refresh to match `versions.source_coop` in config.yaml.
 export const OSM_PMTILES_URL =
-  'https://data.source.coop/henryspatialanalysis/openpois/2026-07-30-v0/osm-pmtiles/osm.pmtiles'
+  'https://data.source.coop/henryspatialanalysis/openpois/2026-09-02-v0/osm-pmtiles/osm.pmtiles'
 
 export const CONFLATED_PMTILES_URL =
-  'https://data.source.coop/henryspatialanalysis/openpois/2026-07-30-v0/conflated-pmtiles/conflated.pmtiles'
+  'https://data.source.coop/henryspatialanalysis/openpois/2026-09-02-v0/conflated-pmtiles/conflated.pmtiles'
 
 // Overture PMTiles (latest release — update URL on each Overture monthly release)
 export const OVERTURE_PMTILES_URL =
-  'https://tiles.overturemaps.org/2026-07-22.0/places.pmtiles'
+  'https://tiles.overturemaps.org/2026-08-19.0/places.pmtiles'
 
 // Confidence color ramp (conf_mean 0-1, 1 = stable)
 export const COLORS = {
