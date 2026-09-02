@@ -8,6 +8,17 @@ Short running list of in-progress / upcoming work. Edit freely; trim older compl
 
 ## Upcoming
 
+- [ ] **Fix verify-pipeline-run's shadow-row invariant wording.** Added 2026-09-02.
+  The skill says shadow rows carry a "null interval"; in reality every `shadow_cd`
+  row has non-null `conf_lower > conf_mean` (CD demotes the mean and leaves the
+  interval as written — identical pattern in 20260730 and 20260902, zero non-shadow
+  violations). The invariant to check is `conf_lower > conf_mean` **only** on
+  shadow rows, not null intervals.
+- [ ] **Conflation merge-phase memory headroom.** Added 2026-09-02. The 20260902 run
+  peaked at 21.9 GB RSS (pre-merge reload of both frames) against the 24 GB WSL cap,
+  driven by Overture release growth (13.8M rows, +9.3% m/m). One or two more months
+  of growth risks the documented VM-crash mode. Chunk or column-scope the merge
+  reload in `conflate.py` before the November run.
 - [ ] **Decide whether `.env.json` credential support should be retired.** Added 2026-07-30. Source Coop now issues credentials only through the `source-coop` CLI (OIDC/STS), so the static-file path in `openpois.io.credentials` is a fallback that can no longer be populated from the dashboard. It still works if someone pastes a valid block, and keeping it costs little, but leaving two paths invites the confusion that cost time on 2026-07-30: a stale `.env.json` plus the old direct-S3 addressing produced `InvalidAccessKeyId`, which reads like a bad key rather than a wrong access path. If it is kept, the loader should at least say which source it used (it now does) and the config comment should note the file is legacy.
 - [ ] **`publish.credentials_file` is now only referenced by the fallback path.** Added 2026-07-30. Harmless, but worth a look next time the publish config is touched: `upload_to_source_coop.py` still resolves and passes it even though the CLI normally wins.
 
