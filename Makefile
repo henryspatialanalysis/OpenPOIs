@@ -52,7 +52,7 @@ site_preview:
 # -----------------------------------------------------------------------------
 # Conflation pipeline (canonical entry point for all national runs)
 #
-# `make conflate` runs the three steps that produce the published
+# `make conflate` runs the five steps that produce the published
 # conflated.parquet:
 #
 #   1. build_ghosts.py            - reconstruct "ghost" POI dataset
@@ -63,11 +63,16 @@ site_preview:
 #                                    written to conflated_baseline.parquet
 #                                    so the pre-CD result is archived.
 #   3. apply_change_detection.py   - penalize Overture POIs that shadow-
-#                                    match a ghost; emits the canonical
-#                                    conflated.parquet that downstream
-#                                    summarize / format_for_upload /
-#                                    prepare_pmtiles / publish steps
-#                                    consume.
+#                                    match a same-entity ghost; writes
+#                                    conflated_cd.parquet.
+#   4. calibrate                   - fit + apply the existence-confidence
+#                                    curves; writes the canonical
+#                                    conflated.parquet.
+#   5. apply_manual_overrides.py   - hand-curated exclude/include pins
+#                                    (Close triage CSV), rewritten in
+#                                    place over conflated.parquet. Runs
+#                                    LAST so a forced conf_mean is never
+#                                    re-scaled by calibration.
 #
 # Each sub-step tees a per-run log under ~/data/openpois/logs/.
 #
@@ -75,8 +80,9 @@ site_preview:
 #     make conflate            # full CONUS
 #     make conflate TEST=1     # Seattle bbox dry run
 #
-# Sub-targets (build_ghosts / conflate_baseline / apply_cd) are exposed
-# for partial re-runs when one stage is being iterated on.
+# Sub-targets (build_ghosts / conflate_baseline / apply_cd / calibrate /
+# apply_manual_overrides) are exposed for partial re-runs when one stage
+# is being iterated on.
 
 TEST ?=
 TEST_FLAG := $(if $(TEST),--test,)
@@ -84,7 +90,7 @@ LOG_DIR := $(HOME)/data/openpois/logs
 LOG_TS := $(shell date +%Y%m%d_%H%M%S)
 
 .PHONY: rate conflate build_ghosts conflate_baseline apply_cd \
-	fit_calibration apply_calibration calibrate
+	fit_calibration apply_calibration calibrate apply_manual_overrides
 
 # Rate the OSM snapshot with the production random_effects model (per-POI cell
 # reconstruction). Uses apply_model.model_stub from config; pass MODEL_VERSION=
@@ -133,14 +139,24 @@ calibrate: fit_calibration apply_calibration
 	@$(CONDA_PYTHON) -u scripts/conflation/plot_calibration.py \
 		2>&1 | tee $(LOG_DIR)/plot_calibration_$(LOG_TS).log
 
-conflate: build_ghosts conflate_baseline apply_cd calibrate
+# Manual exclude/include pins from the Close triage CSV. Must run AFTER
+# calibrate: it rewrites conflated.parquet in place and a forced conf_mean
+# of 0 / 1 must not be re-scaled by the curves. A missing CSV is a no-op.
+apply_manual_overrides:
+	@mkdir -p $(LOG_DIR)
+	@$(CONDA_PYTHON) -u scripts/conflation/apply_manual_overrides.py \
+		$(TEST_FLAG) \
+		2>&1 | tee $(LOG_DIR)/apply_manual_overrides_$(LOG_TS).log
+
+conflate: build_ghosts conflate_baseline apply_cd calibrate apply_manual_overrides
 	@echo
 	@echo "Conflation pipeline complete."
 	@echo "  Canonical output: ~/data/openpois/conflation/<version>/conflated.parquet"
+	@echo "  (calibrated + manual overrides applied in place)"
 	@echo "  (pre-calibration: conflated_cd.parquet)"
 	@echo "  (no-CD archive:   conflated_baseline.parquet)"
 	@echo "  Curves + fit report: conflation/<version>/calibration/"
-	@echo "  Logs under: $(LOG_DIR)/{build_ghosts,conflate_baseline,apply_cd,fit_calibration,apply_calibration}_$(LOG_TS).log"
+	@echo "  Logs under: $(LOG_DIR)/{build_ghosts,conflate_baseline,apply_cd,fit_calibration,apply_calibration,apply_manual_overrides}_$(LOG_TS).log"
 
 # Convenience target to print all of the available targets in this file
 # From https://stackoverflow.com/questions/4219255
