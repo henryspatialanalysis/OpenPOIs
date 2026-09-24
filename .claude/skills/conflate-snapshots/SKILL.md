@@ -66,11 +66,12 @@ upload for web consumption.
 
 3. **Sync taxonomy if crosswalks changed** — run the [sync-taxonomy](../sync-taxonomy/SKILL.md) skill. It regenerates `site/public/taxonomy.html` and `site/src/taxonomy.generated.js`, and detects drift in the hand-maintained display labels.
 
-4. **Run the conflation pipeline.** The canonical entry point is `make conflate`, which orchestrates four stages so every national run gets both the OSM-history change-detection penalty and the confidence calibration automatically (see [docs/change-detection.md](../../../docs/change-detection.md) and [docs/confidence-calibration.md](../../docs/confidence-calibration.md)):
+4. **Run the conflation pipeline.** The canonical entry point is `make conflate`, which orchestrates five stages so every national run gets the OSM-history change-detection penalty, the confidence calibration and the manual overrides automatically (see [docs/change-detection.md](../../../docs/change-detection.md) and [docs/confidence-calibration.md](../../docs/confidence-calibration.md)):
    1. `build_ghosts.py` — reconstruct ghost POIs from OSM history (`ghosts.parquet` under `versions.ghost_osm`).
    2. `conflate.py --output-suffix=baseline` — OSM × Overture matching, writes `conflated_baseline.parquet` (no-CD archive).
-   3. `apply_change_detection.py` — shadow-match unmatched Overture against the ghosts and apply the per-`shared_label` δ penalty; writes `conflated_cd.parquet`.
+   3. `apply_change_detection.py` — shadow-match unmatched Overture against **same-entity** ghosts (name gate 70 on normalised names, rename-direction guard, 150 m full-snapshot survivor filter, ghosts ≤ 3 years old) and apply the per-`shared_label` δ penalty; writes `conflated_cd.parquet`. Any matcher change must clear the ≥ 70% precision release gate in docs/change-detection.md before publishing.
    4. `fit_calibration.py` + `apply_calibration.py` + `plot_calibration.py` — fit the per-segment existence-confidence curves from the validation handoff and map every POI through them; writes the canonical `conflated.parquet`.
+   5. `apply_manual_overrides.py` — apply the Close triage CSV's `exclude` / `include` pins (`directories.manual_overrides`, versioned) in place over `conflated.parquet`. Runs **last** so a forced 0 / 1 is never re-scaled; a missing CSV is a logged no-op.
 
    ```bash
    make conflate            # full CONUS; peak RSS measured 21.9 GB on 20260902
@@ -84,11 +85,15 @@ upload for web consumption.
    make apply_cd            # CD pass only (reads baseline, writes conflated_cd.parquet)
    make calibrate           # fit + apply + plot (reads conflated_cd, writes conflated.parquet)
    make fit_calibration     # curves only — safe to iterate, touches no POI data
+   make apply_manual_overrides  # manual pins, in place over conflated.parquet (always last)
    ```
 
    **Calibration must follow change detection, never precede it** — CD multiplies
    `conf_mean` by δ (≈0.14), so calibrating first would leave a calibrated probability
-   scaled by δ.
+   scaled by δ. **Manual overrides must follow calibration**: a standalone
+   `make calibrate` (or the `apply_calibration.py` reuse command below) rewrites
+   `conflated.parquet` and silently drops the pins, so re-run
+   `make apply_manual_overrides` afterwards.
 
    **Whether to fit at all is governed by the monthly confidence-drift gate**
    (`scripts/overture/compare_confidence.py`, run during the data pull; decision rule in
@@ -109,7 +114,7 @@ upload for web consumption.
    `fit_calibration.py` fails fast rather than shipping uncalibrated data.
 
    Outputs:
-   - `conflated.parquet` — canonical output that downstream steps consume (CD + calibration applied). `conf_mean`/`conf_lower`/`conf_upper` are calibrated P(exists and open); `conf_mean_uncalibrated` archives the post-CD value; `calibration_flag` records edge rules.
+   - `conflated.parquet` — canonical output that downstream steps consume (CD + calibration + manual overrides applied). `conf_mean`/`conf_lower`/`conf_upper` are calibrated P(exists and open); `conf_mean_uncalibrated` archives the post-CD value; `calibration_flag` records edge rules (`shadow_cd`, `missing_conf`, `unnamed_extrapolated`, `manual_exclude`, `manual_include`).
    - `conflated_cd.parquet` — post-CD, pre-calibration.
    - `conflated_baseline.parquet` — neither CD nor calibration; kept on disk for spot-checks.
    - `calibration/` — fitted curves, per-segment metadata, and `fit_report.md`.

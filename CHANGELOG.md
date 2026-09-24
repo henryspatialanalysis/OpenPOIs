@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+### Methods changes
+
+- **Change detection demotes only same-entity ghosts.** The shadow matcher
+  now requires the ghost's prior name / brand to match the Overture name /
+  brand (`min_prior_name_match_score` 0 → 70 on normalised names: accents,
+  case, punctuation, legal suffixes and a shared trailing category token
+  removed; token subset / superset pairs pass). This reverses the May-2026
+  "decision rule A" choice and deletes the rule that *dropped*
+  subset/superset pairs as obvious same-entity matches. Motivation: a 57-row
+  web-verified sample of 2026-09-02-v0 `shadow_cd` rows measured the loose
+  matcher at 31% precision (different-name demotions 76% spurious, same-name
+  62% spurious). Guards shipped with it: unnamed ghosts never demote; a
+  `substantial_rename` ghost is skipped when Overture already carries the
+  new name; the current-OSM-survivor filter searches the full filtered
+  snapshot (nodes, ways, relations) within 150 m (was rated POIs within
+  50 m); ghosts older than 3 years are dropped at run time; named
+  `lifecycle_prefix_added` / `primary_tag_deleted` ghosts are now emitted.
+  Expect far fewer shadow-matched rows than the 31,411 in 2026-09-02-v0.
+  **Release gate:** ≥ 70% precision (listing actually closed / moved) on a
+  hand- or LLM-vetted sample of ≥ 100 demoted POIs from `make conflate
+  TEST=1` is required before this ships; the measured number goes here.
+  _Measured precision: pending._
+- **Manual confidence overrides, applied after calibration.** New last
+  stage of `make conflate` (`apply_manual_overrides.py`) reads a
+  hand-curated CSV (`unified_id, overture_id, action, reason, date,
+  report_id`) appended by the Close triage lane and forces `exclude` rows
+  to `conf_mean = conf_lower = conf_upper = 0` (`calibration_flag =
+  'manual_exclude'`) and `include` rows to 1 (`'manual_include'`). Rows are
+  kept, so schema and counts are unchanged; the two new flag values join
+  `shadow_cd`, `missing_conf` and `unnamed_extrapolated`.
+
 ## 2026-09-02-v0
 
 ### Snapshot inputs
