@@ -3,9 +3,12 @@
 Build the ghost-OSM POI dataset from OSM history.
 
 A ghost is a previous state of an OSM node that we believe no longer
-reflects ground truth (primary tag deleted, lifecycle prefix added, or
-substantial rename). The output Parquet feeds the change-detection
-pass in ``scripts/conflation/conflate.py``.
+reflects ground truth (hard delete, primary tag deleted, lifecycle prefix
+added, or substantial rename). Each row also carries ``new_name`` (the
+name after the event) for the shadow matcher's rename-direction guard.
+The output Parquet feeds ``scripts/conflation/apply_change_detection.py``,
+which is where run-time filters such as ``max_ghost_age_years`` apply —
+this build is a pure history product.
 
 Config keys used (config.yaml):
     versions.osm_data, versions.ghost_osm        — pinned together

@@ -26,6 +26,10 @@ versions:
   # ``osm_data`` since it is derived from the same history parquets,
   # and regenerated together with the monthly snapshot refresh.
   ghost_osm: "20260902"
+  # Hand-curated exclude/include pins applied after calibration (see
+  # conflation.manual_overrides). Rows are appended by the Close triage
+  # lane; bump the version when the file is re-baselined, not per row.
+  manual_overrides: "20260924"
 
 # Settings for downloading data
 download:
@@ -424,6 +428,15 @@ directories:
     path: ~/data/openpois/ghost_osm
     files:
       ghosts: ghosts.parquet
+  # Manual confidence overrides (columns: unified_id, overture_id, action,
+  # reason, date, report_id). Read by scripts/conflation/
+  # apply_manual_overrides.py, the last stage of `make conflate`. A
+  # missing file is a no-op.
+  manual_overrides:
+    versioned: true
+    path: ~/data/openpois/manual_overrides
+    files:
+      overrides: manual_overrides.csv
   # Fixed validation input for the confidence calibration, exported from
   # openpois-validator. Lives in the repo tree but is gitignored: the labels
   # are the validation moat. Versioned on ``versions.calibration``.
@@ -528,31 +541,60 @@ conflation:
     # current 20260727_by_shared_label fit (logit_delta_0 = -1.807;
     # recomputed 2026-09-01, unchanged at this precision).
     default_delta: 0.141
-    # Hard gate on Overture-name vs ghost-prior-name token_set_ratio
-    # (0-100), applied *before* the composite-score-based shadow
-    # matcher. The default 0 keeps the loose matcher: any spatial +
-    # type + composite match above ``min_shadow_match_score`` will
-    # fire, even when Overture's name doesn't lexically match the
-    # OSM ghost. This is intentional. A higher value would only
-    # fire when Overture is showing the *same name* OSM closed,
-    # which we explored in May 2026 (decision rule A) and rejected
-    # because it loses the bulk of real closures where Overture has
-    # already updated to a different current name at a churned
-    # address (Sleep Train → Roosevelt Square etc.). Knob retained
-    # for future data-quality-only modes; leave at 0 for production
-    # change detection.
-    min_prior_name_match_score: 0
+    # Same-entity name gate: the token_set_ratio (0-100) a ghost's prior
+    # name / brand must reach against the Overture name / brand — both
+    # sides normalised (accents, case, punctuation, legal suffixes, a
+    # trailing category token) — before a shadow match can fire; token
+    # subset / superset pairs pass too. Both names are always required,
+    # so unnamed ghosts never demote anything.
+    #
+    # 70 deliberately REVERSES the May-2026 "decision rule A" choice,
+    # which kept this at 0 so that a differently named current business
+    # at a churned address (Sleep Train -> Roosevelt Square) would still
+    # be demoted. The September-2026 web-verified sample of 57 shadow_cd
+    # rows measured 31% precision for that loose matcher (different-name
+    # demotions 76% spurious: the listing was still open), so the rule
+    # is now precision over recall: demote only when OSM closed the
+    # *same* business Overture still shows. Do not lower without re-
+    # running the >= 70% precision release gate in docs/change-detection.md.
+    min_prior_name_match_score: 70
+    # Ghosts whose event_timestamp is older than this are dropped when
+    # apply_change_detection.py loads ghosts.parquet (the build itself
+    # stays a pure history product). Pre-2021 deletions were 90% spurious
+    # as closure evidence in the September-2026 sample. 0 keeps all.
+    max_ghost_age_years: 3
     suppress_if_current_survivor:
-      # Belt-and-suspenders post-filter: drop the penalty if a
-      # *current* OSM POI within radius_m has name token_set_ratio
-      # >= threshold against the Overture name. Catches cases where
-      # the POI is still in OSM under different geometry (e.g.,
-      # node remapped to a building way) and the primary matcher
-      # missed it. Kept enabled because it's cheap and orthogonal
-      # to min_prior_name_match_score.
+      # Post-filter: drop the penalty if a *current* OSM element within
+      # radius_m has name token_set_ratio >= threshold against the
+      # Overture name (both normalised). Catches the POI that survives in
+      # OSM under different geometry — a node merged into a building
+      # way, a duplicate cleanup, a respelling — which the primary
+      # matcher missed. Widened 50 -> 150 m on 2026-09-24: the sample's
+      # misses (Blue Harbor Bank, Clark University Campus Store, Girl
+      # Scouts of Nassau County, Mendocino Masonic Hall) were named ways
+      # 50-150 m from the Overture point.
       enabled: true
-      radius_m: 50
+      radius_m: 150
       name_similarity_threshold: 70
+      # Candidate set is the FULL filtered osm_snapshot.parquet (nodes,
+      # ways and relations by centroid; directories.snapshot_osm.snapshot)
+      # rather than only the rated POIs, so building ways count as
+      # survivors. false falls back to the rated snapshot.
+      use_full_snapshot: true
+  # Hand-curated confidence pins, applied by apply_manual_overrides.py as
+  # the LAST stage of `make conflate` (after calibration, so a forced
+  # conf_mean is never re-scaled). CSV columns: unified_id, overture_id,
+  # action (exclude | include), reason, date, report_id. `exclude` forces
+  # conf_mean/lower/upper = 0 with calibration_flag 'manual_exclude';
+  # `include` forces them to 1 with 'manual_include'. This is the fix path
+  # for Overture-only closures / wrong POIs at any threshold; rows are
+  # appended by the Close triage lane with the report id.
+  manual_overrides:
+    enabled: true
+    # Explicit CSV path. null resolves the versioned default,
+    # directories.manual_overrides/<versions.manual_overrides>/
+    # manual_overrides.csv. A missing file is a no-op (logged).
+    path: null
   # Existence-confidence calibration (the v4 estimator; see
   # .claude/docs/confidence-calibration.md and the 2026-07-30 v4 writeup).
   # Fitted from the validation handoff pinned by ``versions.calibration``,

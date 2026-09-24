@@ -4,8 +4,12 @@ Apply the change-detection penalty to a baseline conflated dataset.
 
 Reads:
   - the baseline ``conflated.parquet`` (no change detection)
-  - ``ghosts.parquet`` (from ``scripts/conflation/build_ghosts.py``)
+  - ``ghosts.parquet`` (from ``scripts/conflation/build_ghosts.py``),
+    dropping ghosts older than ``max_ghost_age_years`` at load time
   - ``fitted_params.csv`` for the active ``model_output`` version
+  - the full filtered ``osm_snapshot.parquet`` (survivor filter, when
+    ``suppress_if_current_survivor.use_full_snapshot`` is true) or the
+    rated snapshot otherwise
 
 Writes a new conflated parquet (suffix ``_cd`` by default) whose
 unmatched-Overture rows have had ``conf_mean`` re-weighted by
@@ -77,11 +81,20 @@ def main() -> None:
         type = float,
         default = None,
         help = (
-            "Override config's min_prior_name_match_score. Higher "
-            "values require a stricter Overture-name vs ghost-prior-"
-            "name token_set_ratio match before a penalty fires. "
-            "Default config value implements decision rule A "
-            "(name-match required)."
+            "Override config's min_prior_name_match_score: the "
+            "token_set_ratio a ghost's prior name/brand must reach "
+            "against the Overture name/brand (after normalisation) "
+            "before a penalty can fire. Both names are always required; "
+            "0 accepts any ratio. Config default 70 (same-entity rule)."
+        ),
+    )
+    parser.add_argument(
+        "--max-ghost-age-years",
+        type = float,
+        default = None,
+        help = (
+            "Override config's max_ghost_age_years (ghosts older than "
+            "this are dropped before matching; 0 keeps all)."
         ),
     )
     parser.add_argument(
@@ -125,6 +138,13 @@ def main() -> None:
         survivor_filter["enabled"] = False
         print("Current-OSM-survivor filter disabled for this run.")
 
+    max_ghost_age_years = cd_cfg.get("max_ghost_age_years")
+    max_ghost_age_years = (
+        None if max_ghost_age_years is None else float(max_ghost_age_years)
+    )
+    if args.max_ghost_age_years is not None:
+        max_ghost_age_years = float(args.max_ghost_age_years)
+
     max_radius_m = float(config.get("conflation", "max_radius_m"))
     default_radius_m = float(
         config.get("conflation", "default_radius_m")
@@ -142,11 +162,15 @@ def main() -> None:
     )
     drop_unlabeled = True if drop_unlabeled is None else bool(drop_unlabeled)
 
-    # R1 needs the rated snapshot; no other auxiliary inputs are
-    # needed by the simplified pipeline.
+    # The survivor filter (R1) reads the full filtered snapshot — nodes,
+    # ways and relations by centroid — so a POI that survives in OSM as a
+    # building way still suppresses the penalty. The rated snapshot is
+    # the fallback when use_full_snapshot is false.
     rated_snapshot_path = config.get_file_path(
         "snapshot_osm", "rated_snapshot",
     )
+    full_snapshot_path = config.get_file_path("snapshot_osm", "snapshot")
+    use_full_snapshot = bool(survivor_filter.get("use_full_snapshot", False))
 
     test_bbox = (
         config.get("conflation", "test_bbox") if args.test else None
@@ -156,12 +180,20 @@ def main() -> None:
     print(f"Ghosts:   {ghosts_path}")
     print(f"Fitted params: {fitted_params_path}")
     print(f"Output:   {output_path}")
-    print(f"Rated snapshot (survivor filter): {rated_snapshot_path}")
+    print(
+        "Survivor-filter snapshot: "
+        + (
+            f"{full_snapshot_path} (full)" if use_full_snapshot
+            else f"{rated_snapshot_path} (rated)"
+        )
+        + f", radius_m={survivor_filter.get('radius_m', 150)}"
+    )
     print(
         f"min_match_score={min_match_score} "
         f"max_radius_m={max_radius_m} "
         f"default_delta={default_delta} "
-        f"min_prior_name_match_score={min_prior_name_match_score}"
+        f"min_prior_name_match_score={min_prior_name_match_score} "
+        f"max_ghost_age_years={max_ghost_age_years}"
     )
     if args.test:
         print(f"Test bbox: {test_bbox}")
@@ -182,9 +214,11 @@ def main() -> None:
         default_delta = default_delta,
         test_bbox = test_bbox,
         rated_snapshot_path = rated_snapshot_path,
+        full_snapshot_path = full_snapshot_path,
         survivor_filter = survivor_filter,
         min_prior_name_match_score = min_prior_name_match_score,
         drop_unlabeled = drop_unlabeled,
+        max_ghost_age_years = max_ghost_age_years,
     )
     elapsed = time.time() - t0
 
