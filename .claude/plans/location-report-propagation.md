@@ -2,7 +2,14 @@
 
 Master plan: `~/.claude/plans/i-ve-just-switched-into-twinkly-lamport.md`
 (approved by Nat 2026-09-24; Appendix = the 57-POI verification sample).
-Branch `feature/ghost-closure-evidence`.
+Branch `feature/ghost-closure-evidence`. **Status 2026-09-25:** code complete
+and pushed; the Close side is live (location reports launched 2026-09-24), but
+this branch waits on the Step 6 precision gate (≥ 70% of demoted Seattle POIs
+verified closed or moved; wtm.api `.claude/plans/location-reports-rollout.md`)
+before the next release. The first Close audit also surfaced two conflation
+follow-ups in `.claude/TODO.md`: Walmart big-box duplicates (not reproducing
+in 2026-09-02-v0) and, on the wtm.ingest side, audited OSM additions with no
+OpenPOIs row (wtm.ingest unresolved_todos §27).
 
 ## Why
 
