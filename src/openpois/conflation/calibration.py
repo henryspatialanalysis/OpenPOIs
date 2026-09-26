@@ -14,11 +14,14 @@ of anything. The curves were themselves fit on the post-CD frame.
 Per-segment curve index:
 
 ===============  ==========================================================
-``matched``      the **fitted log-odds pool** of ``osm_conf_mean`` and
-                 ``overture_confidence`` (coefficients from the segment's
-                 curve metadata). No fixed 0.7 downweight and no 0.588/0.412
-                 blend: the pooled value is a combined
-                 P(exists | OSM score, Overture score).
+``matched``      a fitted combination of ``osm_conf_mean`` and
+                 ``overture_confidence`` chosen by the curve metadata's
+                 ``index_mode``: the monotone bilinear ``interaction``
+                 index (production since October 2026), the constrained
+                 log-odds pool (curves fit before then), the average, an
+                 additive index (parameters under ``index``), or -- in
+                 ``surface`` mode -- no index at all but a 2-D cell lookup.
+                 No fixed 0.7 downweight and no 0.588/0.412 blend.
 ``osm``          ``osm_conf_mean`` (the OSM turnover posterior mean)
 ``overture``     ``overture_confidence`` (post-imputation; exactly 0.5 marks
                  the upstream missing-confidence imputation)
@@ -53,7 +56,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from openpois.conflation.calibration_fit import (POOLED_SEGMENTS,
-                                                 average_score, pool_score)
+                                                 apply_step_lookup,
+                                                 apply_surface, average_score,
+                                                 index_score)
 
 SEGMENTS = ("matched", "osm", "overture")
 MISSING_CONF_SENTINEL = 0.5
@@ -98,23 +103,16 @@ def apply_curve(scores, lookup: pd.DataFrame) -> pd.DataFrame:
 
     Ported from ``openpois_validator.calibrate.artifacts.apply_curve`` so the
     consumer does not depend on the private package. Scores below the first
-    bin clamp to it, and NaN scores yield NaN.
+    bin clamp to it, and NaN scores yield NaN. The implementation lives in
+    :func:`calibration_fit.apply_step_lookup` so fit-time cross-validation
+    scores exactly this map.
     """
-    scores = np.asarray(scores, dtype = float)
-    edges = lookup["score_lo"].to_numpy()
-    idx = np.clip(np.searchsorted(edges, scores, side = "right") - 1, 0,
-                  len(lookup) - 1)
-    out = pd.DataFrame(
-        {
-            "conf_mean": lookup["conf_mean"].to_numpy()[idx],
-            "conf_lower": lookup["conf_lower"].to_numpy()[idx],
-            "conf_upper": lookup["conf_upper"].to_numpy()[idx],
-        }
-    )
-    missing = ~np.isfinite(scores)
-    if missing.any():
-        out.loc[missing, :] = np.nan
-    return out
+    return apply_step_lookup(scores, lookup)
+
+
+def is_surface_lookup(lookup: pd.DataFrame) -> bool:
+    """Whether a curve table is a 2-D ``surface`` lookup."""
+    return "osm_lo" in lookup.columns and "ov_lo" in lookup.columns
 
 
 def curve_index(source: np.ndarray, osm_conf_mean: np.ndarray,
@@ -123,26 +121,30 @@ def curve_index(source: np.ndarray, osm_conf_mean: np.ndarray,
                 index_mode: str = "pool") -> np.ndarray:
     """Per-segment curve index score.
 
-    Matched rows combine both source scores -- by the fitted log-odds pool
-    (``index_mode = "pool"``) or their unweighted mean
-    (``index_mode = "average"``); single-source segments use their native
-    score. Both ``pool_params`` and ``index_mode`` come from the matched curve's
-    metadata, so the deploy step cannot drift from how the curve was fit.
+    Matched rows combine both source scores: their unweighted mean
+    (``index_mode = "average"``) or any fitted index form through the shared
+    :func:`calibration_fit.index_score` (``pool_params`` carries the params;
+    a ``form`` key selects pool / additive / interaction, and pre-2026-09
+    curves without one are pools). Single-source segments use their native
+    score. Both arguments come from the matched curve's metadata, so the
+    deploy step cannot drift from how the curve was fit. ``surface`` mode has
+    no index; its matched rows are NaN here and are scored by
+    :func:`calibration_fit.apply_surface` instead.
     """
     scores = np.full(len(source), np.nan, dtype = float)
     matched = source == "matched"
-    if matched.any():
+    if matched.any() and index_mode != "surface":
         if index_mode == "average":
             scores[matched] = average_score(
                 osm_conf_mean[matched], overture_confidence[matched]
             )
         elif pool_params is None:
             raise ValueError(
-                "Matched rows need pool coefficients from the matched curve "
-                "metadata (key 'pool'), or index_mode = 'average'"
+                "Matched rows need index parameters from the matched curve "
+                "metadata (key 'index' or 'pool'), or index_mode = 'average'"
             )
         else:
-            scores[matched] = pool_score(
+            scores[matched] = index_score(
                 osm_conf_mean[matched], overture_confidence[matched],
                 pool_params,
             )
@@ -171,10 +173,23 @@ def calibration_flags(source: np.ndarray, overture_confidence: np.ndarray,
 
 
 def pool_params_from_metadata(metadata: dict) -> dict:
-    """Pool coefficients for the pooled segments, keyed by segment."""
+    """Index parameters for the pooled segments, keyed by segment.
+
+    Reads ``index`` (any form, 2026-09 on) and falls back to ``pool`` for
+    curves written before the index was generalized.
+    """
+    out = {}
+    for segment in POOLED_SEGMENTS:
+        entry = metadata.get(segment) or {}
+        out[segment] = entry.get("index") or entry.get("pool")
+    return out
+
+
+def score_decimals_from_metadata(metadata: dict) -> dict:
+    """Rounding each segment's curve was fit with (``None`` = unrounded)."""
     return {
-        segment: (metadata.get(segment) or {}).get("pool")
-        for segment in POOLED_SEGMENTS
+        segment: (metadata.get(segment) or {}).get("score_decimals")
+        for segment in SEGMENTS
     }
 
 
@@ -191,18 +206,33 @@ def index_modes_from_metadata(metadata: dict) -> dict:
 
 def calibrate_frame(frame: pd.DataFrame, curves: dict,
                     pool_params: dict = None,
-                    index_modes: dict = None) -> pd.DataFrame:
+                    index_modes: dict = None,
+                    score_decimals: dict = None) -> pd.DataFrame:
     """Calibrated triple + flag for one in-memory batch of conflated rows.
 
     Returns a frame with ``conf_mean``, ``conf_lower``, ``conf_upper``,
     ``conf_mean_uncalibrated`` and ``calibration_flag``, aligned to ``frame``.
     Shadow-matched rows keep their incoming values and a NaN interval.
+
+    ``score_decimals`` (from the curve metadata) rounds each segment's source
+    scores exactly as the fit did; curves fit before rounding existed carry no
+    value and are applied to unrounded scores, so their bin edges keep
+    meaning what they meant when they were fit.
     """
     source = frame["source"].to_numpy()
     osm_conf = pd.to_numeric(frame["osm_conf_mean"], errors = "coerce"
                              ).to_numpy(dtype = float)
     ov_conf = pd.to_numeric(frame["overture_confidence"], errors = "coerce"
                             ).to_numpy(dtype = float)
+    flag_ov_conf = ov_conf
+    for segment, decimals in (score_decimals or {}).items():
+        if decimals is None:
+            continue
+        in_segment = source == segment
+        osm_conf = np.where(in_segment, np.round(osm_conf, int(decimals)),
+                            osm_conf)
+        ov_conf = np.where(in_segment, np.round(ov_conf, int(decimals)),
+                           ov_conf)
     incoming = pd.to_numeric(frame["conf_mean"], errors = "coerce"
                              ).to_numpy(dtype = float)
     shadow = (
@@ -216,7 +246,7 @@ def calibrate_frame(frame: pd.DataFrame, curves: dict,
         pool_params = (pool_params or {}).get("matched"),
         index_mode = (index_modes or {}).get("matched", "pool"),
     )
-    flags = calibration_flags(source, ov_conf, shadow_matched = shadow,
+    flags = calibration_flags(source, flag_ov_conf, shadow_matched = shadow,
                               name = names)
 
     conf_mean = np.full(len(frame), np.nan, dtype = float)
@@ -231,7 +261,11 @@ def calibrate_frame(frame: pd.DataFrame, curves: dict,
             in_segment = in_segment & ~shadow
         if not in_segment.any():
             continue
-        triple = apply_curve(scores[in_segment], lookup)
+        if is_surface_lookup(lookup):
+            triple = apply_surface(osm_conf[in_segment], ov_conf[in_segment],
+                                   lookup)
+        else:
+            triple = apply_curve(scores[in_segment], lookup)
         conf_mean[in_segment] = triple["conf_mean"].to_numpy()
         conf_lower[in_segment] = triple["conf_lower"].to_numpy()
         conf_upper[in_segment] = triple["conf_upper"].to_numpy()
@@ -263,6 +297,7 @@ def calibrate_frame(frame: pd.DataFrame, curves: dict,
 
 def apply_calibration(input_path: Path, output_path: Path, curves: dict,
                       pool_params: dict = None, index_modes: dict = None,
+                      score_decimals: dict = None,
                       chunk_rows: int = 2_000_000,
                       verbose: bool = True) -> dict:
     """Stream ``input_path`` to ``output_path``, calibrating confidence.
@@ -301,7 +336,8 @@ def apply_calibration(input_path: Path, output_path: Path, curves: dict,
             frame = table.select(needed + optional).to_pandas()
             calibrated = calibrate_frame(frame, curves,
                                          pool_params = pool_params,
-                                         index_modes = index_modes)
+                                         index_modes = index_modes,
+                                         score_decimals = score_decimals)
 
             for column in ("conf_mean", "conf_lower", "conf_upper"):
                 idx = table.schema.get_field_index(column)

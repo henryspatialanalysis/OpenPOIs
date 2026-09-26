@@ -93,6 +93,7 @@ def main() -> None:
     metadata = calibration.read_curve_metadata(curves_dir)
     pool_params = calibration.pool_params_from_metadata(metadata)
     index_modes = calibration.index_modes_from_metadata(metadata)
+    score_decimals = calibration.score_decimals_from_metadata(metadata)
 
     print(f"Calibration curves: {curves_dir}")
     for segment, lookup in sorted(curves.items()):
@@ -100,17 +101,19 @@ def main() -> None:
         print(f"  {segment}: {len(lookup)} bins, "
               f"index = {meta.get('score_definition', 'unknown')}")
     for segment, pool in sorted((pool_params or {}).items()):
-        if pool:
+        if pool and pool.get("form", "pool") == "pool":
             print(f"    {segment} pool: intercept {pool['intercept']:.4f}, "
                   f"osm {pool['coef_osm']:.4f}, "
                   f"overture {pool['coef_overture']:.4f} "
                   f"({pool['method']})")
+        elif pool:
+            print(f"    {segment} index: {pool['form']} ({pool['method']})")
     print(f"Input:  {input_path}")
     print(f"Output: {output_path}")
 
     calibration.apply_calibration(
         input_path, output_path, curves, pool_params = pool_params,
-        index_modes = index_modes,
+        index_modes = index_modes, score_decimals = score_decimals,
     )
     print(f"Done in {time.time() - started:.1f}s")
 
