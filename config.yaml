@@ -607,17 +607,28 @@ conflation:
     # on round 20260730: LLM-exists splits 449/450 correct at high confidence
     # against 141/148 at medium.
     refine_by_confidence: true
-    # How the matched segment's two source scores become one curve index:
-    #   pool    - fitted log-odds pool (3 params estimated from matched gold)
-    #   average - unweighted mean of the two scores (no params)
-    # Measured on round 20260730 by scripts/conflation/compare_matched_index.py
-    # (5-fold cross-fit, pool refit inside each fold): the average is worse on
-    # both proper scoring rules (Brier +0.0021, log score +0.0186, both CIs
-    # excluding zero) and loses ~43% of the discrimination (DSC 0.0043 vs
-    # 0.0074), stable across 6 fold/seed settings. It does buy a tighter band
-    # (median 0.109 vs 0.180) since there are no coefficients to refit per
-    # bootstrap replicate. Re-measure before switching.
-    matched_index_mode: pool
+    # How the matched segment combines its two source scores (see
+    # .claude/docs/confidence-calibration.md, "The matched segment"):
+    #   interaction - monotone bilinear logistic index in rescaled logits,
+    #                 a0 + a1 x + a2 y + a3 x y with Gupta constraints (4 params)
+    #   pool        - constrained log-odds pool (3 params; production to 2026-09)
+    #   additive | surface | average - compared and not adopted
+    # Chosen 2026-09-26 from the five-mode comparison on round 20260730
+    # (~/data/library/writeups/2026-09-26-openpois-matched-segment-modes.md):
+    # it captures the substitutive "either source suffices" structure the pool
+    # cannot represent, nests the pool (a3 = 0), and was never measurably worse
+    # than the pool on either proper score across 24 cross-fit runs.
+    matched_index_mode: interaction
+    # How the 1-D pipeline's bootstrap band reaches the published bins:
+    #   bin             - each replicate's map averaged over the production POIs
+    #                     in each published bin (adopted 2026-09-26)
+    #   anchored_kernel - pre-2026-09 method; re-smoothed each replicate, which
+    #                     shrank and off-centred the band (simulated coverage of
+    #                     a nominal 95% band: 0.76 matched, 0.87 osm, 0.46
+    #                     overture; 0.89 / 0.91 / 0.66 with "bin").
+    band_aggregation: bin
+    # Lower bound on every slope/edge-derivative of a fitted matched index.
+    pool_min_coef: 0.001
     grid_points: 200
     curve_output_bins: 40           # equal-mass value bins in the lookup
     bootstrap_reps: 500
