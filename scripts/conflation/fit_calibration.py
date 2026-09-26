@@ -16,7 +16,6 @@ Config keys used:
   - directories.calibration.files.{validation_rows, metadata}
   - directories.conflation.files.conflated
   - conflation.calibration.* (fit knobs)
-  - conflation.overture_confidence_weight (matched-segment score collapse)
 
 Prerequisites:
   - openpois-validator: scripts/08_export_handoff.py has run for the round
@@ -29,6 +28,12 @@ Output file(s):
 
 Usage:
     python scripts/conflation/fit_calibration.py [--input-suffix cd] [--test]
+        [--out-dir DIR [--allow-deployed]] [--matched-index-mode MODE]
+
+``--out-dir`` writes the curves and report elsewhere (evaluation runs); it
+refuses the deployed ``conflation/<version>/calibration`` directory unless
+``--allow-deployed`` is passed. The default (no ``--out-dir``) is the
+production path and writes there, as ``make fit_calibration`` expects.
 """
 from __future__ import annotations
 
@@ -102,8 +107,32 @@ def population_by_segment(conflated_path: Path,
     }
 
 
+def monotonicity_tables(validation_rows: pd.DataFrame,
+                        fit_config: calibration_fit.FitConfig) -> dict:
+    """Per-axis atom-aware monotonicity tables for every segment."""
+    usable = validation_rows[
+        validation_rows["llm_verdict"].isin(calibration_fit.VERDICTS)
+        & validation_rows["stratum"].isin(calibration_fit.SEGMENTS)
+    ]
+    axes = {"matched": (("osm_score", 10), ("overture_score", 5)),
+            "osm": (("osm_score", 10),),
+            "overture": (("overture_score", 10),)}
+    out = {}
+    for segment, specs in axes.items():
+        rows = usable[usable["segment"] == segment].reset_index(drop = True)
+        if len(rows) < 50:
+            continue
+        for column, n_bins in specs:
+            edges = calibration_fit.atom_aware_edges(rows[column], n_bins)
+            out[(segment, column)] = calibration_fit.axis_monotonicity_table(
+                rows, column, edges, fit_config, segment = segment,
+            )
+    return out
+
+
 def write_fit_report(out_dir: Path, results: dict, handoff_metadata: dict,
-                     fit_config: calibration_fit.FitConfig) -> Path:
+                     fit_config: calibration_fit.FitConfig,
+                     monotonicity: dict = None) -> Path:
     """Human-readable fit diagnostics beside the curve artifacts."""
     lines = [
         "# Confidence calibration fit report",
@@ -116,6 +145,8 @@ def write_fit_report(out_dir: Path, results: dict, handoff_metadata: dict,
         "",
         "## Per-segment fit",
         "",
+        "Median band width is the published band's, over the lookup bins.",
+        "",
         "| segment | phase-1 rows | gold | Kish ESS | median band width |",
         "|---|---|---|---|---|",
     ]
@@ -125,14 +156,85 @@ def write_fit_report(out_dir: Path, results: dict, handoff_metadata: dict,
             f"{result['kish_ess']:.1f} | {result['band_width_median']:.3f} |"
         )
 
+    for segment, result in sorted(results.items()):
+        index = result.get("index") or {}
+        form = index.get("form")
+        if form == "additive":
+            lines += [
+                "", f"## Fitted additive index ({segment} segment)", "",
+                f"`a + h_osm(s_osm) + h_ov(s_ov)`, each h nondecreasing; "
+                f"intercept {index['intercept']:.4f}; PAV blocks "
+                f"{index['n_blocks_osm']} (OSM) / {index['n_blocks_overture']} "
+                f"(Overture); {index['n_clipped']} gold rows on the ±logit "
+                f"clip; {index['n_outer_iterations']} local-scoring "
+                f"iterations, converged = {index['converged']}.",
+            ]
+        elif form == "interaction":
+            lines += [
+                "", f"## Fitted interaction index ({segment} segment)", "",
+                "`a0 + a1 x + a2 y + a3 x y` on logits rescaled to [0, 1] over "
+                "the clip range. a3 < 0 is substitutive (either source "
+                "suffices).", "",
+                "| a0 | a1 | a2 | a3 | active constraints |",
+                "|---|---|---|---|---|",
+                f"| {index['a0']:.4f} | {index['a1']:.4f} | {index['a2']:.4f} "
+                f"| {index['a3']:.4f} | "
+                f"{', '.join(index['constraints_active']) or 'none'} |",
+            ]
+        surface = result.get("surface")
+        if surface is not None:
+            shape = surface["shape"]
+            lines += [
+                "", f"## Doubly-monotone surface ({segment} segment)", "",
+                f"{shape[0]} OSM × {shape[1]} Overture cells; published band: "
+                f"{surface['band_method']}; Wald mixture over "
+                f"{surface['bands']['wald']['n_patterns']} distinct binding "
+                f"sets; {surface['n_bootstrap_dropped']} bootstrap replicates "
+                f"dropped. Rows OSM low → high, columns Overture low → high.",
+                "",
+                f"- OSM edges: {np.round(surface['edges']['osm'], 4).tolist()}",
+                f"- Overture edges: "
+                f"{np.round(surface['edges']['overture'], 6).tolist()}",
+                "",
+            ]
+            for title, matrix, fmt in (
+                ("Projected estimate", surface["theta"], "{:.3f}"),
+                ("Unconstrained estimate", surface["unconstrained"], "{:.3f}"),
+                ("HT reference (projected)", surface["reference_surface"],
+                 "{:.3f}"),
+                ("Gold per cell", surface["gold_counts"], "{:.0f}"),
+                ("Percentile band width",
+                 surface["bands"]["percentile"]["upper"]
+                 - surface["bands"]["percentile"]["lower"], "{:.3f}"),
+                ("Wald-mixture band width",
+                 surface["bands"]["wald"]["upper"]
+                 - surface["bands"]["wald"]["lower"], "{:.3f}"),
+            ):
+                lines += [f"**{title}**", "",
+                          "| OSM bin | " + " | ".join(
+                              f"ov{j + 1}" for j in range(shape[1])) + " |",
+                          "|---" * (shape[1] + 1) + "|"]
+                for i in range(shape[0]):
+                    lines.append(f"| osm{i + 1} | " + " | ".join(
+                        fmt.format(v) for v in np.asarray(matrix)[i]) + " |")
+                lines.append("")
+            lines.append(
+                f"The bottom cell (osm1, ov1; {surface['corner_cell_flag']['gold']}"
+                f" gold) has no cell below it in the product order, so its "
+                f"band cannot borrow strength downward (Liao, Meyer & Xu 2024 "
+                f"p. 5)."
+            )
+
     pooled = {s: r for s, r in results.items() if r.get("pool")}
     if pooled:
         lines += [
             "", "## Fitted source pool (matched segment)", "",
-            "Log-odds pool of the two source scores with fitted weights, "
-            "replacing the 0.588/0.412 blend and the flat 0.7 downweight. A "
-            "coefficient above 1 sharpens that source's evidence; below 1 "
-            "damps it for dependence with the other source.", "",
+            "Log-odds pool of the two source scores with fitted weights "
+            "(slopes constrained >= pool_min_coef), replacing the "
+            "0.588/0.412 blend and the flat 0.7 downweight. A coefficient "
+            "below 1 mixes damping for dependence with the other source and "
+            "that raw score's own miscalibration; the two are not "
+            "separable here.", "",
             "| segment | intercept | coef OSM | coef Overture | gold | method |",
             "|---|---|---|---|---|---|",
         ]
@@ -147,6 +249,22 @@ def write_fit_report(out_dir: Path, results: dict, handoff_metadata: dict,
     lines += ["", "## Composite vs Horvitz-Thompson reference", ""]
     for segment, result in sorted(results.items()):
         reference = result["reference_curve"]
+        if reference is None:
+            surface = result["surface"]
+            ref = surface["reference_surface"]
+            band = surface["bands"][surface["band_method"]]
+            if not np.isfinite(ref).all():
+                lines.append(f"- {segment}: no HT reference surface (a cell "
+                             f"has no gold)")
+                continue
+            gap = np.abs(surface["theta"] - ref)
+            inside = (ref >= band["lower"]) & (ref <= band["upper"])
+            lines.append(
+                f"- {segment} (surface): mean |composite - HT| = "
+                f"{gap.mean():.4f}, max {gap.max():.4f}; HT inside the band "
+                f"in {100.0 * inside.mean():.1f}% of cells"
+            )
+            continue
         finite = np.isfinite(reference)
         if not finite.any():
             lines.append(f"- {segment}: no reference curve (too little gold)")
@@ -211,6 +329,32 @@ def write_fit_report(out_dir: Path, results: dict, handoff_metadata: dict,
             f"{debiased:.5f} | {np.sqrt(debiased):.4f} |"
         )
 
+    if monotonicity:
+        lines += [
+            "", "## Monotonicity by axis (standing per-round check)", "",
+            "Atom-aware bins (each Overture atom its own bin). DE = the "
+            "difference estimator with the working model; HT = gold-only "
+            "Hajek; SEs from a 200-replicate two-phase bootstrap. drop z = "
+            "(DE here - DE in the next bin) / bootstrap SE of that "
+            "difference; a positive z is a reversal. Oliva-Aviles, Meyer & "
+            "Opsomer (2019)'s CIC is the formal test; it has little power "
+            "with this many small bins.", "",
+        ]
+        for (segment, axis), table in monotonicity.items():
+            lines += [f"**{segment}, {axis}**", "",
+                      "| bin | range | phase-1 | gold | DE (se) | HT (se) | "
+                      "drop z |", "|---|---|---|---|---|---|---|"]
+            for row in table.itertuples():
+                z = "-" if not np.isfinite(row.drop_z) else f"{row.drop_z:+.2f}"
+                lines.append(
+                    f"| {row.bin + 1} | {row.lo:.6f}–{row.hi:.6f} | "
+                    f"{row.n_phase1} | {row.n_gold} | {row.de:.3f} "
+                    f"({row.de_se:.3f}) | {row.ht:.3f} ({row.ht_se:.3f}) | "
+                    f"{z} |"
+                )
+            worst = np.nanmax(table["drop_z"].to_numpy(dtype = float))
+            lines += ["", f"Largest reversal z: {worst:+.2f}.", ""]
+
     lines += ["", "## Fit configuration", "",
               f"- min_cell_gold: {fit_config.min_cell_gold}",
               f"- refine_by_confidence: {fit_config.refine_by_confidence}",
@@ -218,7 +362,13 @@ def write_fit_report(out_dir: Path, results: dict, handoff_metadata: dict,
               f"- output_bins: {fit_config.output_bins}",
               f"- bootstrap_reps: {fit_config.bootstrap_reps}",
               f"- band_alpha: {fit_config.band_alpha}",
-              f"- rng_seed: {fit_config.rng_seed}", ""]
+              f"- rng_seed: {fit_config.rng_seed}",
+              f"- matched_index_mode: {fit_config.matched_index_mode}",
+              f"- band_aggregation: {fit_config.band_aggregation}",
+              f"- pool_min_coef: {fit_config.pool_min_coef}",
+              f"- surface bins requested: {fit_config.surface_osm_bins} × "
+              f"{fit_config.surface_ov_bins}",
+              f"- score rounding: {calibration_fit.SCORE_DECIMALS} dp", ""]
 
     report_path = out_dir / "fit_report.md"
     report_path.write_text("\n".join(lines), encoding = "utf-8")
@@ -235,6 +385,24 @@ def main() -> None:
     parser.add_argument(
         "--test", action = "store_true",
         help = "Read/write the *_test.parquet variants.",
+    )
+    parser.add_argument(
+        "--out-dir", default = None,
+        help = ("Write curves and report here instead of the deployed "
+                "conflation/<version>/calibration directory."),
+    )
+    parser.add_argument(
+        "--allow-deployed", action = "store_true",
+        help = "Permit --out-dir to be the deployed calibration directory.",
+    )
+    parser.add_argument(
+        "--matched-index-mode", default = None,
+        choices = list(calibration_fit.INDEX_MODES),
+        help = "Override conflation.calibration.matched_index_mode.",
+    )
+    parser.add_argument(
+        "--skip-monotonicity", action = "store_true",
+        help = "Skip the per-axis monotonicity tables in the report.",
     )
     args = parser.parse_args()
     started = time.time()
@@ -272,15 +440,32 @@ def main() -> None:
         band_alpha = float(knobs["band_alpha"]),
         rng_seed = int(knobs["rng_seed"]),
         refine_by_confidence = bool(knobs["refine_by_confidence"]),
-        matched_index_mode = str(knobs.get("matched_index_mode", "pool")),
+        band_aggregation = str(knobs.get(
+            "band_aggregation", calibration_fit.FitConfig.band_aggregation
+        )),
+        pool_min_coef = float(knobs.get(
+            "pool_min_coef", calibration_fit.FitConfig.pool_min_coef
+        )),
+        matched_index_mode = str(
+            args.matched_index_mode
+            or knobs.get("matched_index_mode",
+                         calibration_fit.FitConfig.matched_index_mode)
+        ),
     )
+    deployed_dir = config.get_dir_path("conflation") / "calibration"
+    out_dir = Path(args.out_dir).expanduser() if args.out_dir else deployed_dir
+    if (args.out_dir and out_dir.resolve() == deployed_dir.resolve()
+            and not args.allow_deployed):
+        raise SystemExit(
+            f"--out-dir {out_dir} is the deployed calibration directory; "
+            f"pass --allow-deployed to write there"
+        )
 
     print("Fitting segment curves...")
     results = calibration_fit.fit_all_segments(
         validation_rows, fit_config, populations = population
     )
 
-    out_dir = config.get_dir_path("conflation") / "calibration"
     out_dir.mkdir(parents = True, exist_ok = True)
     for segment, result in sorted(results.items()):
         metadata = calibration_fit.curve_metadata(
@@ -292,8 +477,12 @@ def main() -> None:
               f"{result['band_width_median']:.3f} -> "
               f"{segment}_curve.parquet")
 
+    monotonicity = (
+        {} if args.skip_monotonicity
+        else monotonicity_tables(validation_rows, fit_config)
+    )
     report_path = write_fit_report(out_dir, results, handoff_metadata,
-                                   fit_config)
+                                   fit_config, monotonicity = monotonicity)
     print(f"Fit report: {report_path}")
     print(f"Done in {time.time() - started:.1f}s")
 

@@ -69,10 +69,10 @@ SEGMENTS = [
 ]
 GRID_COLOR = "#DDDDDD"
 
-# The matched curve is indexed on the fitted pool of both source scores, not on
-# a single provider score, so its x-axis needs its own name.
+# The matched curve is indexed on a fitted combination of both source scores
+# (the interaction index in production), not on a single provider score.
 X_LABELS = {
-    "matched": "Pooled source index",
+    "matched": "Combined source index",
     "osm": "OSM turnover posterior",
     "overture": "Overture confidence",
 }
@@ -96,9 +96,22 @@ def _chrome(ax, xlabel = None, ylabel = None, title = None) -> None:
 
 def curve_index_for_rows(rows: pd.DataFrame, segment: str,
                          metadata: dict) -> np.ndarray:
-    """Validation rows' curve-index score, using the fitted pool if any."""
-    pool = (metadata.get(segment) or {}).get("pool")
-    return calibration_fit.segment_scores(rows, segment, pool)
+    """Validation rows' curve-index score under the segment's fitted index.
+
+    The index form and parameters come from the curve metadata (``index``,
+    falling back to ``pool`` for pre-2026-09 curves), so every index mode plots
+    on its own index. A ``surface`` curve has no 1-D index; its rows get the
+    working-model pool index for the reliability panel.
+    """
+    meta = metadata.get(segment) or {}
+    rows = calibration_fit.round_scores(rows)
+    mode = meta.get("index_mode") or "pool"
+    params = meta.get("index") or meta.get("pool")
+    if mode == "surface":
+        mode, params = "pool", meta.get("working_index")
+    if segment not in calibration_fit.POOLED_SEGMENTS or mode == "native":
+        return calibration_fit.segment_scores(rows, segment)
+    return calibration_fit.segment_scores(rows, segment, params, mode)
 
 
 def plot_curves(curves: dict, metadata: dict, population: dict,
