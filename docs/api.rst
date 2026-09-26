@@ -42,9 +42,12 @@ validation sample. Implements a model-assisted difference estimator on the
 validation's two-phase design: a low-dimensional working model for
 P(exists | verdict class, score) predicts every phase-1 row, and the
 design-weighted residuals of the human-labeled subsample correct it. The matched
-segment's two source scores are combined by a fitted log-odds pool rather than a
-fixed blend. Uncertainty comes from a verdict-class-stratified two-phase
-bootstrap.
+segment's two source scores are combined by a monotone bilinear interaction index
+(fitted on the rescaled logits under constraints that keep it nondecreasing in
+both scores) rather than a fixed blend; the log-odds pool, an additive isotonic
+index and a doubly-monotone cell surface remain available for comparison.
+Uncertainty comes from a verdict-class-stratified two-phase bootstrap whose band is
+computed directly on the published bins.
 
 .. automodule:: openpois.conflation.calibration_fit
    :members:

@@ -4,6 +4,26 @@
 
 ### Methods changes
 
+- **Matched POIs are calibrated through a monotone interaction index.** The
+  matched segment's two source scores (`osm_conf_mean`, `overture_confidence`)
+  now enter a bilinear index on their rescaled logits, `a0 + a1 x + a2 y +
+  a3 x y`, constrained to be nondecreasing in both scores. It replaces the
+  log-odds pool, which it nests (`a3 = 0`), and lets OSM's evidence count for
+  more when Overture is uncertain: the substitution the validation data show.
+  Chosen from a five-way comparison on round 20260730 (pool, average, additive
+  isotonic, interaction, cell surface); see the 2026-09-26 writeup
+  "A monotone interaction index for combining two source confidences". The
+  published value of about 0.4% of matched POIs moves by more than 0.05.
+- **Confidence bands are computed on the published bins.** The bootstrap band
+  no longer re-smooths each replicate, which made the published 95% bands too
+  narrow (simulated coverage 0.76 matched, 0.87 OSM-only, 0.46
+  Overture-only). With the new aggregation coverage is 0.89 / 0.91 / 0.66,
+  and bands are about 10% wider; they remain somewhat narrower than a true
+  95% interval, most for Overture-only POIs.
+- **Calibration lookups bin edge values the way deploy serves them.** A score
+  sitting exactly on a bin edge is now averaged into the bin that serves it.
+  About a third of Overture-only POIs sit on an edge, so the Overture-only
+  curve shifts slightly at the October refit.
 - **Change detection demotes only same-entity ghosts.** The shadow matcher
   now requires the ghost's prior name / brand to match the Overture name /
   brand (`min_prior_name_match_score` 0 → 70 on normalised names: accents,

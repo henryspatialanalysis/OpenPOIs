@@ -136,6 +136,11 @@ each table means. Then check the deployed output:
   rather than assuming a bug, but do sanity-check `shift_by_label.csv`: the
   biggest movers should be explainable (stable OSM institutions down because the
   OSM curve has a ceiling; Overture-only up because the flat ×0.7 is gone).
+- **The matched curve is the interaction index.** `matched_metadata.json` should show
+  `index_mode: interaction`, an `index` block with `form: interaction`, `score_decimals:
+  6` and `fit_config.band_aggregation: bin`. A metadata file with only a `pool` block
+  means stale pre-October curves were reused; refit (method-change override in
+  docs/confidence-calibration.md).
 - **Curves are release-specific.** If `snapshot_overture` or the turnover model
   moved but `versions.calibration` did not, the curves are stale — re-export the
   handoff from openpois-validator and refit.

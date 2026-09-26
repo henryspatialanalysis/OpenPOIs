@@ -105,6 +105,13 @@ upload for web consumption.
    python scripts/conflation/apply_calibration.py --input-suffix cd --output-suffix "" \
        --curves-dir ~/data/openpois/conflation/<prior version>/calibration
    ```
+   **Method-change override:** if the calibration *method* changed since the curves
+   being reused were fit (`conflation.calibration.matched_index_mode`,
+   `band_aggregation`, or estimator code), refit with `make calibrate` against the
+   current `versions.calibration` even on a pass. **The October 2026 run is such a
+   release** (pool → interaction, anchored_kernel → bin band); later passes reuse the
+   October curves as usual.
+
    On a **breach**, refresh the validation handoff, pin it, and refit:
    ```bash
    cd ~/repos/openpois-validator && python scripts/08_export_handoff.py
