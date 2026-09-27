@@ -72,6 +72,30 @@ download:
     usvi_history_pbf_url: "https://osm-internal.download.geofabrik.de/north-america/us/us-virgin-islands-internal.osh.pbf"
     american_oceania_history_pbf_url: "https://osm-internal.download.geofabrik.de/australia-oceania/american-oceania-internal.osh.pbf"
     history_cookie_file: "~/data/openpois/.creds/geofabrik_cookies.txt"
+    # How scripts/osm_data/download_history.py builds versions.osm_data:
+    #   full        - download the full-history PBFs above (~23 GB) and parse.
+    #                 Required for any turnover-model refit.
+    #   incremental - roll incremental_history.base_version forward with
+    #                 Geofabrik's public daily diffs (~0.4 GB/month). Output is
+    #                 ghost-grade only: same-day edits are collapsed and there is
+    #                 no user/changeset, so format_tabular / osm_turnover refuse
+    #                 it. Diffs are kept ~131 days, so a base older than that
+    #                 needs a full run. See .claude/plans/incremental-ghost-history.md.
+    history_mode: "full"
+    incremental_history:
+      # osm_data version to roll forward (the previous month's run).
+      base_version: "20260902"
+      # Warn once this many incremental runs are chained without a full build.
+      max_chain_months: 12
+      # Keep the downloaded .osc.gz files under osm_data/<v>/diffs/.
+      keep_diffs: false
+      # Public replication feeds, keyed like the history extracts. The US
+      # mainland feed must come first.
+      replication_urls:
+        us: "https://download.geofabrik.de/north-america/us-updates/"
+        pr: "https://download.geofabrik.de/north-america/us/puerto-rico-updates/"
+        usvi: "https://download.geofabrik.de/north-america/us/us-virgin-islands-updates/"
+        american_oceania: "https://download.geofabrik.de/australia-oceania/american-oceania-updates/"
     overwrite_download: true
     overwrite_filter: true
     overwrite_parse: true
@@ -347,6 +371,9 @@ directories:
       # scripts/models/make_holdout_folds.py and reused by every OOS run so
       # all model specifications are scored on identical folds.
       holdout_folds: holdout_folds.parquet
+      # Provenance of this history run (full vs incremental, replication
+      # sequences reached); see openpois.io.osm_history_incremental.
+      coverage: history_coverage.json
   model_output:
     versioned: true
     path: ~/data/openpois/osm_turnover_model

@@ -89,8 +89,18 @@ TEST_FLAG := $(if $(TEST),--test,)
 LOG_DIR := $(HOME)/data/openpois/logs
 LOG_TS := $(shell date +%Y%m%d_%H%M%S)
 
-.PHONY: rate conflate build_ghosts conflate_baseline apply_cd \
+.PHONY: download_history rate conflate build_ghosts conflate_baseline apply_cd \
 	fit_calibration apply_calibration calibrate apply_manual_overrides
+
+# Build versions.osm_data: the full-history download (history_mode: full) or a
+# roll-forward of download.osm.incremental_history.base_version with Geofabrik's
+# daily diffs (history_mode: incremental). PLAN=1 prints the diff sequences an
+# incremental run would fetch and exits.
+download_history:
+	@mkdir -p $(LOG_DIR)
+	@$(CONDA_PYTHON) -u scripts/osm_data/download_history.py \
+		$(if $(PLAN),--plan-only,) \
+		2>&1 | tee $(LOG_DIR)/osm_history_$(LOG_TS).log
 
 # Rate the OSM snapshot with the production random_effects model (per-POI cell
 # reconstruction). Uses apply_model.model_stub from config; pass MODEL_VERSION=
