@@ -4,6 +4,20 @@
 
 ### Methods changes
 
+- **Monthly ghost history rolls forward from daily diffs.** When the turnover
+  model is not refit, `download.osm.history_mode: incremental` (now the
+  default) builds `osm_data` by rolling last month's history parquets forward
+  with Geofabrik's public daily diffs, about 0.4 GB a month instead of the
+  23.4 GB full-history extract. Ghost building is unchanged. Two differences
+  from a full build: same-day edits collapse into one version, and deletions
+  are stamped with the diff's cut time (median 13 h, at most 24 h after the
+  real deletion). Backtest (roll `osm_data/20260724` forward 2026-07-13 →
+  2026-08-18, then compare with the full `20260902` build on shared nodes):
+  named, labeled ghosts 99.06% recall and 99.25% precision (gate ≥ 97%).
+  Renames are the weakest type (98.0% / 95.5%) because bursts of same-day
+  renames collapse. The rolled history matched the September snapshot's node
+  state better than the full build did (99.99% vs 99.91% timestamp match).
+  Rolled history is not used for refits.
 - **Matched POIs are calibrated through a monotone interaction index.** The
   matched segment's two source scores (`osm_conf_mean`, `overture_confidence`)
   now enter a bilinear index on their rescaled logits, `a0 + a1 x + a2 y +
