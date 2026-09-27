@@ -12,6 +12,7 @@ End-to-end: Geofabrik full-history PBFs → observations table → fitted λ →
 - Geofabrik OAuth cookies at `download.osm.history_cookie_file` (Netscape format). Any OSM account works; export via browser login or `oauth_cookie_client.py`. See [docs/data-sources.md](../../docs/data-sources.md#osm-history-geofabrik-full-history-pbfs).
 - conda env `openpois` active; `osmium` is in the env's `bin/` (not PATH).
 - `versions.osm_data` in `config.yaml` set to the target `YYYYMMDD` (bump if this is a new run).
+- **`download.osm.history_mode: full`.** A refit needs the full-history download: the monthly default (`incremental`) rolls history forward from daily diffs, which collapse same-day edits and drop user/changeset. `format_tabular.py` and `osm_turnover.py` refuse an incremental `osm_data`. After the refit, set `download.osm.incremental_history.base_version` to this run's `osm_data` version and switch back to `incremental`, so the following months roll forward from the fresh full build.
 
 ## Steps
 

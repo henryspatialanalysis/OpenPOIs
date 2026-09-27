@@ -43,6 +43,20 @@ print("Longitude extent:", osm.geometry.x.min(), "→", osm.geometry.x.max())
 
 Then for the conflated output, also check `shared_label` distribution per territory — if one territory is >50% dominated by a single `shared_label`, suspect either a conflation bug or you accidentally pulled independent Samoa (the country, separate `samoa-latest.osm.pbf` extract — *not* American Samoa).
 
+## OSM history (ghost input)
+
+```bash
+make check_history   # scripts/osm_data/check_history_vs_snapshot.py
+```
+
+For each snapshot node last edited before the history's `coverage_end`, the
+history's last version must have the same timestamp and name. **PASS at ≥ 99.5%
+timestamp match.** Baseline: the full `20260902` build vs its snapshot scored
+99.905% (1,721,435 nodes; 1,640 missing from history; names 100%). A drop on an
+incremental run means missed diffs or a bad fold, so rebuild with
+`history_mode: full`. Also read `osm_data/<v>/history_coverage.json`: `mode`,
+`coverage_end` and `chain_length` (warns at 12).
+
 ## Model output
 
 ```
