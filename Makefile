@@ -89,7 +89,7 @@ TEST_FLAG := $(if $(TEST),--test,)
 LOG_DIR := $(HOME)/data/openpois/logs
 LOG_TS := $(shell date +%Y%m%d_%H%M%S)
 
-.PHONY: download_history rate conflate build_ghosts conflate_baseline apply_cd \
+.PHONY: download_history check_history rate conflate build_ghosts conflate_baseline apply_cd \
 	fit_calibration apply_calibration calibrate apply_manual_overrides
 
 # Build versions.osm_data: the full-history download (history_mode: full) or a
@@ -101,6 +101,12 @@ download_history:
 	@$(CONDA_PYTHON) -u scripts/osm_data/download_history.py \
 		$(if $(PLAN),--plan-only,) \
 		2>&1 | tee $(LOG_DIR)/osm_history_$(LOG_TS).log
+
+# QA: the history's last state of each snapshot node must match the snapshot.
+check_history:
+	@mkdir -p $(LOG_DIR)
+	@$(CONDA_PYTHON) -u scripts/osm_data/check_history_vs_snapshot.py \
+		2>&1 | tee $(LOG_DIR)/check_history_$(LOG_TS).log
 
 # Rate the OSM snapshot with the production random_effects model (per-POI cell
 # reconstruction). Uses apply_model.model_stub from config; pass MODEL_VERSION=
