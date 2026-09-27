@@ -25,6 +25,52 @@ Reference for every external data source openpois ingests. For the workflow that
 - **Entry**: [src/openpois/io/osm_history_pbf.py](../../src/openpois/io/osm_history_pbf.py) (`download_osm_history`).
 - **Config**: `download.osm.start_date`, `end_date`, `filter_keys`, `extract_keys`.
 
+## OSM history, incremental (Geofabrik daily diffs)
+
+**Used by**: monthly ghost rebuilds when the turnover model is not refit
+(`download.osm.history_mode: incremental`). Rolls the previous month's
+`osm_versions` / `osm_changes` (`download.osm.incremental_history.base_version`)
+forward to `end_date` instead of re-downloading the ~23 GB full history. Plan and
+backtest: [plans/incremental-ghost-history.md](../plans/incremental-ghost-history.md).
+
+- **Feeds** (public, no auth), keyed like the history extracts under
+  `download.osm.incremental_history.replication_urls`:
+  `download.geofabrik.de/north-america/us-updates/`,
+  `.../north-america/us/puerto-rico-updates/`,
+  `.../north-america/us/us-virgin-islands-updates/`,
+  `.../australia-oceania/american-oceania-updates/`. Each has `state.txt` plus
+  `AAA/BBB/CCC.osc.gz` + `.state.txt`, one file per day cut ~20:20 UTC; each feed
+  has its own sequence numbers. US files are ~11–13 MB.
+- **Retention ~131 days** (2026-09-26: oldest US file 2026-05-19). A base older
+  than that fails with `DiffsUnavailableError`; switch that month to `full`.
+- **Diffs are derived extract-to-extract, not planet osmChange.** An object appears
+  at most once per file, so same-day edits collapse into the day's final version.
+- **Deletes carry the last *live* version and timestamp** (timestamps back to 2008
+  on 2026-09 deletes), plus the prior location and tags. The roll-forward writes
+  the deletion as version `last + 1`, stamped with the file's state time (up to
+  ~24 h after the real deletion). Never read a delete's own timestamp as the
+  deletion time: the 3-year ghost age filter would drop real closures.
+- **No `user` / `uid` / `changeset`** on the public server; those columns are null
+  for rolled rows.
+- **Ghost grade only.** Same-day collapse and missing edit metadata make rolled
+  history unfit for a λ refit; `format_tabular.py` and `osm_turnover.py` refuse it
+  (`--allow-incremental-history` overrides). A refit month runs `history_mode: full`.
+- **Provenance**: every `osm_data/<v>/` carries `history_coverage.json`
+  (`mode`, `coverage_end`, per-feed `last_sequence`, `chain_length`,
+  `filter_exprs`). The next incremental run continues from `last_sequence + 1`.
+  For older directories without the file, coverage is inferred from the newest
+  version timestamp. **Do not trust `config.end_date` for this:** `osm_data/20260724`
+  was built with `end_date: 2026-07-22` but its data ends 2026-07-12 23:59.
+- **Guards**: a widened ingest filter (new crosswalk values) fails the run, since
+  newly scoped elements would have no earlier history. A chain of
+  `max_chain_months` (12) incremental runs logs a warning.
+- **Tooling note**: `pyosmium-get-changes` / `ReplicationServer.collect_diffs`
+  return partial data silently on a mid-run error, so the module downloads each
+  file with `download_resilient` and checks sequence continuity.
+- **Entry**: [src/openpois/io/osm_history_incremental.py](../../src/openpois/io/osm_history_incremental.py)
+  (`roll_osm_history`); driver `scripts/osm_data/download_history.py`
+  (`make download_history`, `PLAN=1` for a dry sequence plan).
+
 ## OSM snapshot (Geofabrik standard PBFs)
 
 **Used by**: current-state snapshot (`osm_snapshot.parquet`).

@@ -18,6 +18,8 @@ versions:
 
 Each key corresponds to a `directories.<key>` entry in `config.yaml` with `versioned: true`, except `source_coop`, which only names the remote folder.
 
+`osm_data` directories record how they were built in `history_coverage.json`: `mode` (`full` or `incremental`), `coverage_end`, the per-feed replication `last_sequence`, `chain_length` and the ingest `filter_exprs`. An incremental run reads another `osm_data` version as its base, named by `download.osm.incremental_history.base_version` (not a `versions:` key) and resolved with `get_dir_path("osm_data", custom_version = ...)`. Each month, set it to the previous month's `osm_data` version.
+
 `calibration` is unusual in two ways: its `directories.calibration` root lives **inside the repo tree** (`~/repos/openpois/data/calibration`) rather than under `~/data/openpois`, and that tree is **gitignored** — the validation labels are the moat. The data is produced by openpois-validator's `scripts/08_export_handoff.py`, so bumping this key means re-exporting there first. Curves are release-specific: bump it whenever `snapshot_overture` or the turnover model moves, and refit.
 
 ## Path resolution

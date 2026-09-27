@@ -133,6 +133,16 @@ age-filtered here; `apply_change_detection.py` drops those older than
 `max_ghost_age_years` at load time so `ghosts.parquet` stays a pure
 history product.
 
+**History source.** The history parquets come from one of two builds, chosen by
+`download.osm.history_mode`. `full` downloads the ~23 GB full-history extract;
+it is required for turnover-model refits. `incremental` (the monthly default)
+rolls the previous run forward with Geofabrik's public daily diffs, about
+0.4 GB/month. Ghost building is identical in both; the incremental build
+collapses same-day edits and stamps deletions with the diff's state time (up to
+~24 h late), which is immaterial next to the 3-year age filter. Details:
+`.claude/docs/data-sources.md` ("OSM history, incremental") and
+[openpois/io/osm_history_incremental.py](../src/openpois/io/osm_history_incremental.py).
+
 Critical upstream fix: the OSM history ingestion in
 [src/openpois/io/osm_history_pbf.py](../src/openpois/io/osm_history_pbf.py)
 uses a two-pass filter (`osmium tags-filter` → ID list → `osmium getid
