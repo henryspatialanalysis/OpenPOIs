@@ -81,7 +81,7 @@ download:
     #                 no user/changeset, so format_tabular / osm_turnover refuse
     #                 it. Diffs are kept ~131 days, so a base older than that
     #                 needs a full run. See .claude/plans/incremental-ghost-history.md.
-    history_mode: "full"
+    history_mode: "incremental"
     incremental_history:
       # osm_data version to roll forward (the previous month's run).
       base_version: "20260902"
