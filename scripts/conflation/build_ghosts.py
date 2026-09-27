@@ -28,6 +28,7 @@ import time
 from config_versioned import Config
 
 from openpois.conflation.ghost_osm import build_ghosts
+from openpois.io.osm_history_incremental import read_coverage
 
 
 def main() -> None:
@@ -48,6 +49,16 @@ def main() -> None:
     print(f"Versions path: {versions_path}")
     print(f"Changes path:  {changes_path}")
     print(f"Output path:   {output_path}")
+    coverage = read_coverage(versions_path.parent)
+    print(
+        f"History:       {coverage.mode} build covering edits before "
+        f"{coverage.coverage_end.isoformat()}"
+        + (
+            f" (rolled from {coverage.base_version}, chain length "
+            f"{coverage.chain_length})"
+            if coverage.mode == "incremental" else ""
+        )
+    )
     print(f"POI keys:      {filter_keys}")
     print(f"Name similarity threshold: {name_threshold}")
 
