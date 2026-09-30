@@ -25,6 +25,13 @@ up to ``--parallel`` at a time, then assembles. Workers write
 ``cv/<arm tag>/fold<k>.parquet`` and are skipped when it already exists, so a
 killed run resumes.
 
+A second pass of one arm under other flags gets its own ``--tag-suffix``
+(fold files ``cv/armC<suffix>/``, results ``cv_results<suffix>.*``).
+``--compare-tags`` assembles earlier passes' folds beside it, so the paired
+bootstrap compares the variant with them (the fixed-rate mixture test model,
+design doc §3.5c: ``--arms C --tag-suffix _mixture --label-noise
+fixed_mixture --compare-tags armC,armB``).
+
 Usage::
 
     python -u scripts/conflation/cv_bayes_calibration.py --arms A,B,C \\
@@ -389,6 +396,11 @@ def main() -> None:
     parser.add_argument("--threads-per-worker", type = int, default = 3)
     parser.add_argument("--out-dir", default = None)
     parser.add_argument("--tag-suffix", default = "")
+    parser.add_argument("--compare-tags", default = "",
+                        help = ("Comma list of CV tags from earlier passes (e.g. "
+                                "'armC,armB') to assemble beside this pass's "
+                                "arms; their folds must exist. The first armC* "
+                                "tag of this pass is compared with each."))
     parser.add_argument("--bootstrap-reps", type = int, default = 2000)
     parser.add_argument("--worker", action = "store_true")
     parser.add_argument("--fold", type = int, default = None)
@@ -407,6 +419,8 @@ def main() -> None:
     out_dir = common.eval_dir(config, metadata, args.out_dir)
     arms = [a.strip() for a in args.arms.split(",") if a.strip()]
     tags = [arm_tag(a, args.tag_suffix) for a in arms]
+    compare = [t.strip() for t in args.compare_tags.split(",")
+               if t.strip() and t.strip() not in tags]
     folds, current_idx, current, classes = current_round_folds(
         rows, metadata, fit_config, args.folds)
     arm_flags = {}
@@ -437,11 +451,12 @@ def main() -> None:
                 skip = False
                 continue
             if token in ("--arms", "--parallel", "--threads-per-worker",
-                         "--bootstrap-reps", "--arm-flags"):
+                         "--bootstrap-reps", "--arm-flags", "--compare-tags"):
                 skip = True
                 continue
             if token.startswith(("--arms=", "--parallel=", "--threads-per-worker=",
-                                 "--bootstrap-reps=", "--arm-flags=")) \
+                                 "--bootstrap-reps=", "--arm-flags=",
+                                 "--compare-tags=")) \
                     or token == "--assemble-only":
                 continue
             if token.startswith("--arm=") or token == "--arm":
@@ -484,6 +499,10 @@ def main() -> None:
         if failures:
             raise SystemExit(f"Fold fits failed: {failures}")
 
+    for tag in compare:
+        if not any((out_dir / "cv" / tag).glob("fold*.parquet")):
+            raise SystemExit(f"--compare-tags: no CV folds for {tag} in {out_dir}")
+    tags = tags + compare
     results = assemble(out_dir, tags, args.bootstrap_reps, fit_config.rng_seed + 4100)
     results["git"] = common.git_state()
     suffix = args.tag_suffix

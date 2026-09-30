@@ -42,10 +42,14 @@ doc decisions 12 and 17):
     fractional label: q log p + (1 - q) log(1 - p), where q = P(exists |
     segment, verdict) is the design-weighted gold concordance rate
     (``silver_label_rates``), passed in as data (``label_noise = "fixed"``). The
-    estimated-noise variants ``symmetric`` (one agreement parameter, as first
-    run), ``asymmetric`` (Se, Sp) and ``none`` (labels exact) are kept as
-    sensitivities. Under arm C's likelihood, estimated noise is identified only
-    through the selection-induced gap between gold and non-gold rows.
+    test model ``fixed_mixture`` (design doc §3.5c, option M) instead sums the
+    unknown truth out of the verdict, log[p Se + (1 - p)(1 - Sp)] for "exists",
+    with the forward rates Se, Sp per segment passed in as data
+    (``forward_silver_rates``). The estimated-noise variants ``symmetric`` (one
+    agreement parameter, as first run), ``asymmetric`` (Se, Sp) and ``none``
+    (labels exact) are kept as sensitivities. Under arm C's likelihood,
+    estimated noise is identified only through the selection-induced gap
+    between gold and non-gold rows.
 ``A`` (rejected in Phase 1)
     The joint measurement model. The LLM verdict v is modelled given the truth
     (the forward direction of Dawid & Skene, 1979), with class probabilities
@@ -138,6 +142,8 @@ MERGE_MAP = {"exists:low": "exists:medium", "gone:low": "gone:medium",
 CLASS_SCHEMES = ("refined9", "merged6", "verdict3")
 KNOT_PROBS = np.linspace(0.1, 0.9, 9)
 ARMS = ("A", "B", "C")
+# Arm C silver-label layers (``ModelSpec.label_noise``).
+LABEL_NOISE = ("fixed", "fixed_mixture", "symmetric", "asymmetric", "none")
 # NUTS tree-depth ceiling (BlackJAX default max_num_doublings).
 MAX_DOUBLINGS = 10
 # Log-slopes are capped before exponentiation. e^25 is ~7e10 per unit score,
@@ -221,7 +227,10 @@ class ModelSpec:
     # Arm C label noise (design doc §3.5b; execution log, decision 21):
     # "fixed" (default) passes the silver-label accuracy in as data: the
     # design-weighted gold rate of existence among LLM-exists and among LLM-gone
-    # rows, per segment (``silver_label_rates``); "symmetric" (one estimated
+    # rows, per segment (``silver_label_rates``); "fixed_mixture" (the October
+    # test model, design doc §3.5c and decision 24) is the (M15c) mixture with
+    # the forward rates Se and Sp per segment passed in as data
+    # (``forward_silver_rates``), not sampled; "symmetric" (one estimated
     # beta_label, M15c as first run), "asymmetric" (estimated Se and Sp,
     # sensitivity S2C) and "none" (silver labels exact, S3C-a) are kept as
     # sensitivities. Estimated noise is not identified from arm C's likelihood
@@ -234,9 +243,8 @@ class ModelSpec:
             raise ValueError(f"arm must be one of {ARMS}, got {self.arm!r}")
         if self.degree not in (1, 2, 3):
             raise ValueError("degree must be 1, 2 or 3")
-        if self.label_noise not in ("fixed", "symmetric", "asymmetric", "none"):
-            raise ValueError(
-                "label_noise must be fixed, symmetric, asymmetric or none")
+        if self.label_noise not in LABEL_NOISE:
+            raise ValueError(f"label_noise must be one of {LABEL_NOISE}")
         if self.class_scheme is not None and self.class_scheme not in CLASS_SCHEMES:
             raise ValueError(f"class_scheme must be one of {CLASS_SCHEMES}")
 
@@ -587,6 +595,9 @@ class PreparedData:
     geometry: dict
     # Arm C "fixed" noise: the silver-label rates used (``silver_label_rates``).
     silver_rates: dict = None
+    # Arm C "fixed_mixture" noise: the forward rates used
+    # (``forward_silver_rates``).
+    forward_rates: dict = None
 
     def to_jax(self) -> dict:
         return jax.tree_util.tree_map(jnp.asarray, self.segments)
@@ -647,6 +658,79 @@ def silver_label_rates(frames, fit_config: cf.FitConfig = None,
     Returns ``{segment: {"exists": q_e, "gone": q_g, "n_exists": n,
     "n_gone": n, "ess_exists": .., "ess_gone": ..}}``.
     """
+    pooled = _weighted_gold(frames, fit_config, gold_masks)
+    out = {}
+    for segment in SEGMENT_ORDER:
+        entry = {}
+        for verdict in ("exists", "gone"):
+            sel = ((pooled["segment"] == segment) & (pooled["verdict"] == verdict)
+                   & (pooled["w"] > 0)).to_numpy()
+            w = pooled.loc[sel, "w"].to_numpy()
+            y = pooled.loc[sel, "y"].to_numpy()
+            if len(w) == 0:
+                raise ValueError(f"No gold {verdict} verdicts in {segment}")
+            smoothed, rate, ess = _jeffreys_rate(w, y)
+            entry[verdict] = smoothed
+            entry[f"n_{verdict}"] = int(len(w))
+            entry[f"ess_{verdict}"] = ess
+            entry[f"raw_{verdict}"] = rate
+        out[segment] = entry
+    return out
+
+
+def forward_silver_rates(frames, fit_config: cf.FitConfig = None,
+                         gold_masks = None) -> dict:
+    """Forward rates (Se, Sp) of the definitive LLM verdicts, per segment.
+
+    Se = P(verdict exists | y = 1, verdict definitive) and Sp = P(verdict gone
+    | y = 0, verdict definitive), the design-weighted (Hajek) shares among gold
+    rows with a definitive verdict. They are the data of the fixed-rate mixture
+    (``label_noise = "fixed_mixture"``, design doc §3.5c) and the verdict rates
+    of the coverage study's in_family world.
+
+    The weights, pooling and ``gold_masks`` are exactly those of
+    ``silver_label_rates``: 1 / pi over the production refined classes per
+    round, every round's gold pooled, and only the training gold in
+    cross-validation. Each rate is Jeffreys-smoothed on the Kish effective
+    sample size of its denominator, (r n_eff + 0.5) / (n_eff + 1). Without it
+    Se = 1.000 on Overture and matched (round 20260730) would make a "gone"
+    verdict certain proof of closure.
+
+    Returns ``{segment: {"se": .., "sp": .., "raw_se": .., "raw_sp": ..,
+    "n_se": n, "n_sp": n, "ess_se": .., "ess_sp": ..}}``, where ``n_se`` counts
+    the gold rows that exist (the denominator of Se) and ``n_sp`` those that
+    do not.
+    """
+    pooled = _weighted_gold(frames, fit_config, gold_masks)
+    out = {}
+    for segment in SEGMENT_ORDER:
+        entry = {}
+        base = ((pooled["segment"] == segment)
+                & pooled["verdict"].isin(["exists", "gone"])
+                & (pooled["w"] > 0)).to_numpy()
+        for name, truth, verdict in (("se", 1.0, "exists"), ("sp", 0.0, "gone")):
+            sel = base & (pooled["y"] == truth).to_numpy()
+            w = pooled.loc[sel, "w"].to_numpy()
+            hit = (pooled.loc[sel, "verdict"] == verdict).to_numpy(dtype = float)
+            if len(w) == 0:
+                raise ValueError(f"No definitive gold rows with y = {truth:.0f} "
+                                 f"in {segment}")
+            smoothed, rate, ess = _jeffreys_rate(w, hit)
+            entry[name] = smoothed
+            entry[f"n_{name}"] = int(len(w))
+            entry[f"ess_{name}"] = ess
+            entry[f"raw_{name}"] = rate
+        out[segment] = entry
+    return out
+
+
+def _weighted_gold(frames, fit_config: cf.FitConfig = None,
+                   gold_masks = None) -> pd.DataFrame:
+    """Segment, verdict, y and design weight 1 / pi of every row, pooled.
+
+    Shared by ``silver_label_rates`` and ``forward_silver_rates``. Rows outside
+    the (masked) gold get weight 0 and y NaN.
+    """
     fit_config = fit_config or cf.FitConfig()
     if isinstance(frames, pd.DataFrame):
         frames = [frames]
@@ -672,31 +756,25 @@ def silver_label_rates(frames, fit_config: cf.FitConfig = None,
             "y": np.where(gold, frame["y"].to_numpy(dtype = float), np.nan),
             "w": weights,
         }))
-    pooled = pd.concat(pieces, ignore_index = True)
-    out = {}
-    for segment in SEGMENT_ORDER:
-        entry = {}
-        for verdict in ("exists", "gone"):
-            sel = ((pooled["segment"] == segment) & (pooled["verdict"] == verdict)
-                   & (pooled["w"] > 0)).to_numpy()
-            w = pooled.loc[sel, "w"].to_numpy()
-            y = pooled.loc[sel, "y"].to_numpy()
-            if len(w) == 0:
-                raise ValueError(f"No gold {verdict} verdicts in {segment}")
-            rate = float(np.sum(w * y) / np.sum(w))
-            ess = float(np.sum(w) ** 2 / np.sum(w ** 2))
-            entry[verdict] = (rate * ess + 0.5) / (ess + 1.0)
-            entry[f"n_{verdict}"] = int(len(w))
-            entry[f"ess_{verdict}"] = ess
-            entry[f"raw_{verdict}"] = rate
-        out[segment] = entry
-    return out
+    return pd.concat(pieces, ignore_index = True)
+
+
+def _jeffreys_rate(w: np.ndarray, x: np.ndarray) -> tuple:
+    """(smoothed, raw, Kish ESS) of the weighted share of x = 1.
+
+    The Hajek share r is smoothed on the Kish effective sample size:
+    (r n_eff + 0.5) / (n_eff + 1).
+    """
+    rate = float(np.sum(w * x) / np.sum(w))
+    ess = float(np.sum(w) ** 2 / np.sum(w ** 2))
+    return (rate * ess + 0.5) / (ess + 1.0), rate, ess
 
 
 def prepare_data(rows: pd.DataFrame, spec: ModelSpec, knots: dict = None,
                  held_out: np.ndarray = None,
                  fit_config: cf.FitConfig = None,
-                 silver_rates: dict = None) -> PreparedData:
+                 silver_rates: dict = None,
+                 forward_rates: dict = None) -> PreparedData:
     """Build per-segment arrays for one fit.
 
     ``held_out`` marks gold rows held out of this fit: they stay phase-1 rows
@@ -708,7 +786,8 @@ def prepare_data(rows: pd.DataFrame, spec: ModelSpec, knots: dict = None,
     ``silver_rates`` (arm C, ``label_noise = "fixed"``) overrides the silver-label
     rates; by default they come from this fit's own training gold
     (``silver_label_rates``). Pass pooled multi-round rates here to fold other
-    rounds' gold in.
+    rounds' gold in. ``forward_rates`` does the same for the (Se, Sp) of
+    ``label_noise = "fixed_mixture"`` (``forward_silver_rates``).
     """
     fit_config = fit_config or cf.FitConfig()
     rows = rows.reset_index(drop = True)
@@ -725,6 +804,9 @@ def prepare_data(rows: pd.DataFrame, spec: ModelSpec, knots: dict = None,
     prod_classes = production_classes(rows, fit_config)
     if spec.arm == "C" and spec.label_noise == "fixed" and silver_rates is None:
         silver_rates = silver_label_rates(rows, fit_config, gold_masks = [gold])
+    mixture = spec.arm == "C" and spec.label_noise == "fixed_mixture"
+    if mixture and forward_rates is None:
+        forward_rates = forward_silver_rates(rows, fit_config, gold_masks = [gold])
 
     segments = {}
     for segment in SEGMENT_ORDER:
@@ -768,6 +850,10 @@ def prepare_data(rows: pd.DataFrame, spec: ModelSpec, knots: dict = None,
             entry["silver_q"] = np.where(
                 entry["silver_label"] == 1, rates["exists"],
                 np.where(entry["silver_label"] == 0, rates["gone"], 0.0))
+        # Fixed mixture: the segment's forward rates, as 0-d arrays.
+        if mixture:
+            entry["silver_se"] = np.asarray(forward_rates[segment]["se"], dtype = float)
+            entry["silver_sp"] = np.asarray(forward_rates[segment]["sp"], dtype = float)
         if spec.arm == "C":
             # Only held-out rows may lack a label: a non-gold unverifiable row
             # that is not held out would be dropped on its verdict, which is
@@ -787,7 +873,8 @@ def prepare_data(rows: pd.DataFrame, spec: ModelSpec, knots: dict = None,
     medians["matched_y"] = float(np.median(matched["overture_score"]))
     return PreparedData(spec = spec, knots = knots, segments = segments,
                         geometry = _geometry(knots, spec, medians),
-                        silver_rates = silver_rates)
+                        silver_rates = silver_rates,
+                        forward_rates = forward_rates if mixture else None)
 
 
 # ---------------------------------------------------------------------------
@@ -977,12 +1064,19 @@ def measurement_log_probs(params: dict, spec: ModelSpec, g: int, cls, r):
     )[..., 0]
 
 
-def silver_log_rates(params: dict, spec: ModelSpec) -> tuple:
+def silver_log_rates(params: dict, spec: ModelSpec, seg: dict = None) -> tuple:
     """(log Se, log(1 - Se), log Sp, log(1 - Sp)) of the arm C label noise.
 
     Symmetric noise uses Se = Sp = beta_label; "none" makes silver labels exact
     (log 1 = 0 and log 0 approximated by -1e3 so the logaddexp stays finite).
+    "fixed_mixture" reads the segment's forward rates from its data ``seg``
+    (``silver_se``, ``silver_sp``); they are data, so no gradient flows to
+    them, and a rate of exactly 0 or 1 gets the same -1e3 floor.
     """
+    if spec.label_noise == "fixed_mixture":
+        se, sp = seg["silver_se"], seg["silver_sp"]
+        return tuple(jnp.maximum(v, -1e3) for v in (
+            jnp.log(se), jnp.log1p(-se), jnp.log(sp), jnp.log1p(-sp)))
     if spec.label_noise == "symmetric":
         x = params["logit_beta_label"]
         log_b, log_1mb = jax.nn.log_sigmoid(x), jax.nn.log_sigmoid(-x)
@@ -1027,7 +1121,9 @@ def pointwise_log_likelihood(params: dict, data: dict, geometry: dict,
                                q * lp1 + (1.0 - q) * lp0, 0.0)
             out[segment] = jnp.where(gold > 0.5, bernoulli, silver)
         else:
-            log_se, log_1mse, log_sp, log_1msp = silver_log_rates(params, spec)
+            # Estimated noise, or the fixed-rate mixture (design doc §3.5c,
+            # option M) with Se and Sp as data.
+            log_se, log_1mse, log_sp, log_1msp = silver_log_rates(params, spec, seg)
             label = seg["silver_label"]
             # P(label | s) = sum_y P(y | s) P(label | y)   (M15c)
             says_exists = jnp.logaddexp(lp1 + log_se, lp0 + log_1msp)

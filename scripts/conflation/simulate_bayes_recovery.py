@@ -16,9 +16,10 @@ The truth curves are arm C's full-data posterior-mean curves throughout.
     rate u_{g,y} estimated from gold; otherwise the LLM says "exists" with
     probability Se_g if y = 1 and 1 - Sp_g if y = 0. With the fixed-rate arm C
     (the default since decision 21), Se_g and Sp_g are the design-weighted
-    forward rates P(verdict | truth, not unverifiable) from gold
-    (``forward_silver_rates``); for fits made with an estimated symmetric
-    beta_label, Se = Sp = its posterior mean.
+    forward rates P(verdict | truth, not unverifiable) from gold, unsmoothed
+    (the ``raw_se`` and ``raw_sp`` of ``calibration_bayes.forward_silver_rates``);
+    for fits made with an estimated symmetric beta_label, Se = Sp = its
+    posterior mean.
 ``realistic``
     Verdicts drawn from arm A's fitted measurement layer (9 refined classes,
     asymmetric, score-dependent): arm C's symmetric noise is misspecified.
@@ -35,6 +36,13 @@ Arm C is fit on every round; arm B (design-weighted, gold only) on the
 misspecified rounds as the design-based benchmark. Coverage is reported by
 segment and by region (interior slope, flat, edge), because over- and
 under-coverage can cancel in a pooled figure (§6.11).
+
+``--label-noise`` sets the fitted arm C's silver layer (the truth stays the
+``armC`` fit). A variant run takes a ``--tag-suffix``, which names its files
+``<scenario>_rNN_armC<suffix>`` and its rows ``arm = "C<suffix>"`` in the
+summary, beside arm C's. The fixed-rate mixture's in_family study (design doc
+§3.5c) is ``--rounds 20 --misspecified-rounds 0 --label-noise fixed_mixture
+--tag-suffix _mixture``.
 
 Usage::
 
@@ -90,26 +98,6 @@ def unverifiable_rates(rows: pd.DataFrame, weights: np.ndarray) -> dict:
         unv = (rows.loc[mask, "llm_verdict"] == "unverifiable").to_numpy()
         out[segment] = {yv: float(np.sum(w * unv * (y == yv)) / np.sum(w * (y == yv)))
                         for yv in (0, 1)}
-    return out
-
-
-def forward_silver_rates(rows: pd.DataFrame, weights: np.ndarray) -> dict:
-    """Design-weighted (Se, Sp) of the definitive LLM verdicts, per segment.
-
-    Se = P(verdict exists | y = 1, verdict definitive) and Sp = P(verdict gone |
-    y = 0, verdict definitive), from gold rows weighted by 1 / pi.
-    """
-    out = {}
-    for segment in cb.SEGMENT_ORDER:
-        mask = ((rows["segment"] == segment)
-                & rows["llm_verdict"].isin(["exists", "gone"])).to_numpy().copy()
-        mask &= weights > 0
-        y = rows.loc[mask, "y"].to_numpy(dtype = float)
-        w = weights[mask]
-        exists = (rows.loc[mask, "llm_verdict"] == "exists").to_numpy()
-        se = float(np.sum(w * exists * (y == 1)) / np.sum(w * (y == 1)))
-        sp = float(np.sum(w * ~exists * (y == 0)) / np.sum(w * (y == 0)))
-        out[segment] = (se, sp)
     return out
 
 
@@ -291,8 +279,9 @@ def run_worker(args) -> None:
     out_dir = common.eval_dir(config, metadata, args.out_dir)
     # Simulate on the table the truth fit was made on (all its pooled rounds).
     rows = common.fit_rows(config, out_dir, "armC")
+    arm_label = f"{args.arm}{args.tag_suffix}"
     target = (out_dir / "coverage"
-              / f"{args.scenario}_r{args.round:02d}_arm{args.arm}.parquet")
+              / f"{args.scenario}_r{args.round:02d}_arm{arm_label}.parquet")
     if target.exists():
         log(f"{target.name} exists, skipping")
         return
@@ -304,7 +293,10 @@ def run_worker(args) -> None:
         beta = float(1 / (1 + np.exp(-float(truth_c["logit_beta_label"]))))
         se_sp = {s: (beta, beta) for s in cb.SEGMENT_ORDER}
     else:
-        se_sp = forward_silver_rates(rows, common.design_weights(rows, fit_config))
+        # The generator uses the raw design-weighted rates, as in Phase 1; the
+        # Jeffreys-smoothed ones are what a fixed-mixture fit is given.
+        forward = cb.forward_silver_rates(rows, fit_config)
+        se_sp = {s: (r["raw_se"], r["raw_sp"]) for s, r in forward.items()}
     weights = common.design_weights(rows, fit_config)
     points = evaluation_points(rows)
     true_m = truth_curves(truth_c, prep_c, points, args.scenario)
@@ -314,7 +306,7 @@ def run_worker(args) -> None:
     sim = simulate(rows, prep_c, truth_c, prep_a, truth_a, args.scenario, rng,
                    realized_inclusion(rows), unverifiable_rates(rows, weights),
                    se_sp, confidence_mix(rows))
-    spec = cb.ModelSpec(arm = args.arm)
+    spec = cb.ModelSpec(arm = args.arm, label_noise = args.label_noise)
     prepared = cb.prepare_data(sim, spec, knots = prep_c.knots,
                                fit_config = fit_config)
     started = time.time()
@@ -331,7 +323,7 @@ def run_worker(args) -> None:
                                                     segment, osm = osm,
                                                     overture = ov))
         parts.append(pd.DataFrame({
-            "scenario": args.scenario, "round": args.round, "arm": args.arm,
+            "scenario": args.scenario, "round": args.round, "arm": arm_label,
             "segment": segment, "point": np.arange(len(summary)),
             "truth": true_m[segment], "mean": summary["mean"],
             "lower": summary["lower"], "upper": summary["upper"],
@@ -392,6 +384,10 @@ def main() -> None:
     parser.add_argument("--scenario", default = "in_family")
     parser.add_argument("--round", type = int, default = 0)
     parser.add_argument("--summarize-only", action = "store_true")
+    parser.add_argument("--tag-suffix", default = "",
+                        help = ("Suffix on a variant run's coverage files and "
+                                "arm label, e.g. _mixture with --label-noise "
+                                "fixed_mixture."))
     args = parser.parse_args()
     if args.worker:
         run_worker(args)
@@ -404,13 +400,16 @@ def main() -> None:
         for scenario in ("realistic", "category", "step"):
             for r in range(args.misspecified_rounds):
                 jobs += [(scenario, r, "C"), (scenario, r, "B")]
+        suffix = args.tag_suffix
         jobs = [j for j in jobs if not (
-            out_dir / "coverage" / f"{j[0]}_r{j[1]:02d}_arm{j[2]}.parquet").exists()]
+            out_dir / "coverage"
+            / f"{j[0]}_r{j[1]:02d}_arm{j[2]}{suffix}.parquet").exists()]
         log(f"{len(jobs)} coverage fits to run, {args.parallel} at a time")
         env = dict(os.environ)
         env["OMP_NUM_THREADS"] = str(args.threads_per_worker)
         passthrough = ["--warmup", str(args.warmup), "--samples", str(args.samples),
-                       "--chains", str(args.chains), "--seed", str(args.seed)]
+                       "--chains", str(args.chains), "--seed", str(args.seed),
+                       "--label-noise", args.label_noise, "--tag-suffix", suffix]
         if args.out_dir:
             passthrough += ["--out-dir", args.out_dir]
         if args.target_accept:
@@ -421,7 +420,7 @@ def main() -> None:
         while jobs or running:
             while jobs and len(running) < args.parallel:
                 scenario, rnd, arm = jobs.pop(0)
-                name = f"coverage_{scenario}_r{rnd:02d}_arm{arm}"
+                name = f"coverage_{scenario}_r{rnd:02d}_arm{arm}{suffix}"
                 handle = open(out_dir / "logs" / f"{name}.log", "w")
                 proc = subprocess.Popen(
                     [sys.executable, "-u", __file__, "--worker", "--scenario",

@@ -106,7 +106,8 @@ def gold_rate_table(out_dir: Path, tags: tuple) -> list:
         spec = eval(summary["spec"], {"ModelSpec": cb.ModelSpec,
                                       "PriorConfig": cb.PriorConfig})
         prepared = cb.prepare_data(rows, spec, fit_config = fit_config,
-                                   silver_rates = summary.get("silver_rates"))
+                                   silver_rates = summary.get("silver_rates"),
+                                   forward_rates = summary.get("forward_rates"))
         saved = np.load(out_dir / "fits" / tag / "draws.npz")
         draws = {k: jax.numpy.asarray(saved[k].reshape((-1,) + saved[k].shape[2:])[::4])
                  for k in saved.files}
@@ -159,7 +160,8 @@ def sensitivity_at_rows(out_dir: Path) -> list:
         spec = eval(summary["spec"], {"ModelSpec": cb.ModelSpec,
                                       "PriorConfig": cb.PriorConfig})
         prepared = cb.prepare_data(rows, spec, fit_config = fit_config,
-                                   silver_rates = summary.get("silver_rates"))
+                                   silver_rates = summary.get("silver_rates"),
+                                   forward_rates = summary.get("forward_rates"))
         saved = np.load(out_dir / "fits" / tag / "draws.npz")
         draws = {k: jax.numpy.asarray(saved[k].reshape((-1,) + saved[k].shape[2:])[::4])
                  for k in saved.files}

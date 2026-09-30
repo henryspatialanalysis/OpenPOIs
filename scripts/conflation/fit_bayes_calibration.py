@@ -155,7 +155,8 @@ def posterior_predictive_checks(draws: dict, prepared, rows: pd.DataFrame,
                 extra = jnp.exp(cb.class_log_probs(params, spec, g,
                                                    data[segment]["r"]))
             elif spec.arm == "C" and spec.label_noise != "fixed":
-                log_se, _, log_sp, _ = cb.silver_log_rates(params, spec)
+                log_se, _, log_sp, _ = cb.silver_log_rates(params, spec,
+                                                           data[segment])
                 extra = jnp.stack([jnp.exp(log_se), jnp.exp(log_sp)])
             else:
                 extra = jnp.zeros(2)
@@ -586,14 +587,20 @@ def main() -> None:
                                  for r, v in per_round.iterrows())
         + f"); spec {spec}")
 
-    # Arm C fixed noise: prepare_data computes the rates from every round's
-    # gold, each round under its own design weights (execution log, decisions 21 and 23).
+    # Arm C fixed noise (fractional or mixture): prepare_data computes the
+    # rates from every round's gold, each round under its own design weights
+    # (execution log, decisions 21 and 23).
     prepared = cb.prepare_data(rows, spec, fit_config = fit_config)
     silver_rates = prepared.silver_rates
     if silver_rates is not None:
         log("silver-label rates P(exists | segment, verdict): " + "; ".join(
             f"{s} exists {r['exists']:.4f} gone {r['gone']:.4f}"
             for s, r in silver_rates.items()))
+    forward_rates = prepared.forward_rates
+    if forward_rates is not None:
+        log("forward rates (fixed mixture): " + "; ".join(
+            f"{s} Se {r['se']:.4f} (raw {r['raw_se']:.4f}) Sp {r['sp']:.4f} "
+            f"(raw {r['raw_sp']:.4f})" for s, r in forward_rates.items()))
     log("knots: " + "; ".join(f"{k} {len(v) - 1} intervals"
                               for k, v in prepared.knots.items()))
 
@@ -704,6 +711,7 @@ def main() -> None:
                                      spec),
         "prior_predictive": prior_summary,
         "silver_rates": silver_rates,
+        "forward_rates": forward_rates,
         # Current round first; report_bayes_calibration rebuilds the table
         # from this list (common.load_handoff(rounds = ...)).
         "rounds": rounds,

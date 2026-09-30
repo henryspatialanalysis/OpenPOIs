@@ -427,7 +427,36 @@ each section.
       raw ratio alongside, and the chance baselines (design doc decision 26).
     - **Library:** Nat added Louis (1982) [U2LXHF6H] and Orchard & Woodbury (1972)
       [KDGF5K5J]; the design doc's references carry the IDs.
-
+26. **The fixed-rate mixture is built** (2026-10-01; design doc §3.5c, decision 24).
+    Code and tests only; nothing fitted.
+    - **Likelihood.** `ModelSpec.label_noise = "fixed_mixture"` takes the (M15c)
+      branch of `pointwise_log_likelihood`: log[p Se + (1 − p)(1 − Sp)] for
+      "exists", log[p(1 − Se) + (1 − p) Sp] for "gone", and the plain Bernoulli for
+      gold. Se and Sp are per-segment data (`silver_se`, `silver_sp` in the
+      prepared segments), so no parameter or prior is added. A rate of exactly 0 or
+      1 is floored at log −1e3, as for "none".
+    - **Rates.** `forward_silver_rates` moved from `simulate_bayes_recovery.py` into
+      `calibration_bayes` beside `silver_label_rates`. Both now share one weighting
+      helper, so the forward rates use the same per-round 1/π weights, round pooling
+      and training-gold mask as q. Each rate is Jeffreys-smoothed on the Kish ESS of
+      its denominator (the gold rows that exist, for Se; those that do not, for Sp).
+      `prepare_data` computes them from the fit's training gold unless
+      `forward_rates` is passed. The fit stores them on
+      `PreparedData.forward_rates` and in `summary.json`, and the report rebuilds
+      fits from the saved rates.
+    - **Simulator.** It imports the library function. The in_family generator keeps
+      the raw rates it used in Phase 1 (Overture Se = 1.000); a fitted mixture gets
+      the smoothed ones. `--label-noise` now reaches the fitted arm C, and
+      `--tag-suffix` names a variant's files `<scenario>_rNN_armC<suffix>` and
+      labels its summary rows `C<suffix>`. The truth stays the `armC` fit.
+    - **CV.** New `--compare-tags` assembles earlier passes' folds (e.g.
+      `armC,armB`) beside a suffixed pass. The paired bootstrap then compares the
+      mixture with arm C and arm B, and writes `cv_results_mixture.*`.
+    - **Tests 18–20.** Se = Sp = 1 gives the Bernoulli on the label. Value and
+      gradient match a numpy reference: the analytic dF = r − p pulled back through
+      the curves, and finite differences. The forward rates match a hand
+      computation, ignore held-out gold, pool rounds, and stay strictly inside
+      (0, 1) when the raw rates are 1.
 ## Questions for Nat: status
 
 - **Q-a** (data-centre anchor, α ~ N(0, 1.5²)): accepted, 2026-09-30.

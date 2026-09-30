@@ -463,6 +463,8 @@ Sp fixed from the gold instead of estimated.
   on Overture and matched would make a "gone" verdict certain, so the forward rates need
   the same Jeffreys smoothing as q.
 - Cost: a fixed-rate branch in the existing asymmetric code, a test, and a refit.
+- **Built 2026-10-01, not fitted:** `label_noise = "fixed_mixture"`, with the
+  rates from `calibration_bayes.forward_silver_rates` (execution log, entry 26).
 
 **Evidence on round 20260730** (does q vary with score?). Design-weighted gold rate
 within (segment, verdict) by raw-score tercile, with gold n. For the exists verdicts

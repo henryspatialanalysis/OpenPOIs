@@ -202,10 +202,13 @@ def add_spec_arguments(parser) -> None:
                         choices = ["refined9", "merged6", "verdict3"],
                         help = "LLM class scheme (overrides --verdict-classes).")
     parser.add_argument("--label-noise", default = "fixed",
-                        choices = ["fixed", "symmetric", "asymmetric", "none"],
+                        choices = list(cb.LABEL_NOISE),
                         help = ("Arm C silver-label noise: fixed rates from gold "
-                                "(default); symmetric / asymmetric estimated "
-                                "(first run, S2C); none (S3C-a)."))
+                                "(default); fixed_mixture, the mixture with "
+                                "forward rates Se, Sp from gold (October test "
+                                "model, design doc §3.5c); symmetric / "
+                                "asymmetric estimated (first run, S2C); none "
+                                "(S3C-a)."))
     parser.add_argument("--pooled-rounds", default = None,
                         help = ("Comma list of earlier validation rounds pooled "
                                 "into the fit and the silver-label rates; '' for "
