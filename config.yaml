@@ -661,6 +661,15 @@ conflation:
     bootstrap_reps: 500
     band_alpha: 0.05                # 95% pointwise band
     rng_seed: 20260730
+    # Bayesian calibration prototype (arm C; not on the production path; see
+    # .claude/plans/bayesian-monotone-calibration.md and its execution log,
+    # decision 23): earlier validation rounds pooled with the current one
+    # (versions.calibration). Their phase-1 rows join the curve fit and their
+    # gold joins the fixed silver-label rates P(exists | segment, LLM verdict),
+    # each round under its own design weights. CV holds out and scores the current round only. When
+    # versions.calibration moves to the October 2026 round, set ["20260730"].
+    # Production calibration (fit_calibration.py) ignores this key.
+    pooled_rounds: []
 
 # Settings for publishing snapshots to Source Cooperative
 # (https://source.coop/henryspatialanalysis/openpois). Source Coop is
