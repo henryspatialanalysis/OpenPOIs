@@ -13,6 +13,30 @@ upload for web consumption.
 > Nat, and confirm which go into this run before starting. Items are added there so that
 > none depends on anyone remembering them.
 
+## Remote run (openpois-01)
+
+Since October 2026 the national run executes on the AWS instance `openpois-01`
+(r7i.2xlarge, 64 GiB; SSH alias `ec2-openpois`), not on the laptop, whose 24 GB WSL cap
+the conflation peak had nearly reached. The commands in this skill are unchanged; they
+run there through `scripts/remote/openpois-remote.sh`, which launches each stage
+detached (`run <stage> -- <cmd>`), heartbeats it for a Monitor (`watch <log>`), and
+pulls the tier-1 results back into the same local paths (`pull <version>`). Start and
+stop the instance with `~/bin/ec2-openpois start|stop`; stop it whenever the next step
+waits on Nat.
+
+- Config changes are made **locally** on the month's run branch (`run/YYYY-MM`), pushed,
+  and pulled with `openpois-remote.sh sync run/YYYY-MM`. Never edit on the remote.
+- Last month's outputs that this run reads (history base, prior Overture snapshot,
+  `conflated.parquet` + `calibration/`, the pinned model) stay on the remote disk between
+  runs; `openpois-remote.sh prune --apply` removes everything else after the publish.
+- Validation stays local: `pull <version> --conflated` brings down the 2.5 GB file that
+  `openpois-validator` draws from, and `push-handoff <round>` sends the handoff back.
+- Procedure and rationale: [plans/remote-monthly-run.md](../../plans/remote-monthly-run.md).
+
+Publishing from the remote: after Nat's local `source-coop login`, run
+`openpois-remote.sh creds put` (writes the temporary credentials to the remote
+`.env.json` fallback), publish, then `openpois-remote.sh creds clear`.
+
 ## Prerequisites
 
 - Rated OSM snapshot (`osm_snapshot_rated.parquet`) at `versions.snapshot_osm` — produced by [skills/full-data-pull](../full-data-pull/SKILL.md) step 3.

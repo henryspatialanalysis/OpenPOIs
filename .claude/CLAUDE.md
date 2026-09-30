@@ -83,6 +83,8 @@ Style: Black (format-on-save in VSCode). Lint: flake8 + pylint, configured in `p
 
 ## Running long workflows
 
+**The monthly national run executes on the AWS instance `openpois-01`**, driven from here by `scripts/remote/openpois-remote.sh`; see the "Remote run" section of the full-data-pull skill and [plans/remote-monthly-run.md](plans/remote-monthly-run.md).
+
 When kicking off a long-running pipeline (downloads, rating, conflation, upload), stream stdout to a file you can tail at any time — don't rely on piping through `head`/`tail` or on the background-task's captured-output file, since Python output may stay buffered for long stretches. Prefer:
 
 ```bash
