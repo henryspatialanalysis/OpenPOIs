@@ -25,10 +25,14 @@ Output file(s):
   - ~/data/openpois/conflation/<version>/calibration/{segment}_curve.parquet
   - ~/data/openpois/conflation/<version>/calibration/{segment}_metadata.json
   - ~/data/openpois/conflation/<version>/calibration/fit_report.md
+  - ~/data/openpois/conflation/<version>/calibration/ht_review_<round>.pdf
+    (+ ht_review_<round>_bins.csv): the design-weighted check of the curves
+    just written (``ht_review.py``); it never fails the run
 
 Usage:
     python scripts/conflation/fit_calibration.py [--input-suffix cd] [--test]
         [--out-dir DIR [--allow-deployed]] [--matched-index-mode MODE]
+        [--skip-monotonicity] [--skip-ht-review]
 
 ``--out-dir`` writes the curves and report elsewhere (evaluation runs); it
 refuses the deployed ``conflation/<version>/calibration`` directory unless
@@ -40,6 +44,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+import traceback
 from pathlib import Path
 
 import numpy as np
@@ -49,15 +54,15 @@ from config_versioned import Config
 
 from openpois.conflation import calibration, calibration_fit
 
+# Gold rows a monotonicity-table bin needs before its reversal z is reported;
+# thinner bins are merged into a neighbour rather than skipped.
+MONOTONICITY_MIN_GOLD = 5
+
 
 def _suffixed_path(base_path: Path, suffix: str | None) -> Path:
     """Insert ``suffix`` before the parquet extension."""
     if not suffix:
         return base_path
-# Gold rows a monotonicity-table bin needs before its reversal z is reported;
-# thinner bins are merged into a neighbour rather than skipped.
-MONOTONICITY_MIN_GOLD = 5
-
     return base_path.with_name(f"{base_path.stem}_{suffix}{base_path.suffix}")
 
 
@@ -137,15 +142,51 @@ def monotonicity_tables(validation_rows: pd.DataFrame,
             )
             out[(segment, column)] = calibration_fit.axis_monotonicity_table(
                 rows, column, edges, fit_config, segment = segment,
+                min_gold = MONOTONICITY_MIN_GOLD,
             )
     return out
 
 
+def ht_review_lines(out_dir: Path, validation_rows: pd.DataFrame,
+                    handoff_metadata: dict,
+                    fit_config: calibration_fit.FitConfig) -> list:
+    """Run the design-weighted check on the curves just written.
+
+    Writes ``ht_review_<round>.pdf`` beside them and returns the fit report's
+    section. The check is a review aid and never fails the run: any error is
+    printed and recorded in the section instead.
+    """
+    try:
+        # Sibling script, imported here so that importers of this module (the
+        # Bayesian scripts use population_by_segment) do not load matplotlib.
+        import ht_review
+
+        result = ht_review.run_review(out_dir, validation_rows,
+                                      handoff_metadata,
+                                      fit_config = fit_config)
+    except Exception as error:  # the check must never fail the run
+        traceback.print_exc()
+        return ["## Design-weighted (Horvitz-Thompson) check", "",
+                f"The check raised `{error!r}` and was skipped. It never "
+                f"fails the run; rerun it with "
+                f"`scripts/conflation/ht_review.py --curves-dir {out_dir}`.",
+                ""]
+    summary = result["check"]["summary"]
+    for row in summary.itertuples():
+        print(f"  HT check {row.segment}/{row.view}: {row.beyond_1sd} of "
+              f"{row.tested} bins beyond 1 SD, {row.beyond_2sd} beyond 2 SD")
+    print(f"HT review: {result['pdf']}")
+    return result["lines"]
+
+
 def write_fit_report(out_dir: Path, results: dict, handoff_metadata: dict,
-                min_gold = MONOTONICITY_MIN_GOLD,
                      fit_config: calibration_fit.FitConfig,
-                     monotonicity: dict = None) -> Path:
-    """Human-readable fit diagnostics beside the curve artifacts."""
+                     monotonicity: dict = None, ht_lines: list = None) -> Path:
+    """Human-readable fit diagnostics beside the curve artifacts.
+
+    ``ht_lines`` is the design-weighted check's section
+    (:func:`ht_review_lines`), placed after the HT reference comparison.
+    """
     lines = [
         "# Confidence calibration fit report",
         "",
@@ -292,6 +333,9 @@ def write_fit_report(out_dir: Path, results: dict, handoff_metadata: dict,
             f"{100.0 * inside.mean():.1f}% of grid points"
         )
 
+    if ht_lines:
+        lines += [""] + list(ht_lines)
+
     lines += ["", "## Refined classes (phase-2 inclusion)", "",
               "| segment | class | population | gold | inclusion | HT weight |",
               "|---|---|---|---|---|---|"]
@@ -416,6 +460,10 @@ def main() -> None:
         "--skip-monotonicity", action = "store_true",
         help = "Skip the per-axis monotonicity tables in the report.",
     )
+    parser.add_argument(
+        "--skip-ht-review", action = "store_true",
+        help = "Skip the design-weighted check and its review PDF.",
+    )
     args = parser.parse_args()
     started = time.time()
 
@@ -493,8 +541,14 @@ def main() -> None:
         {} if args.skip_monotonicity
         else monotonicity_tables(validation_rows, fit_config)
     )
+    ht_lines = (
+        [] if args.skip_ht_review
+        else ht_review_lines(out_dir, validation_rows, handoff_metadata,
+                             fit_config)
+    )
     report_path = write_fit_report(out_dir, results, handoff_metadata,
-                                   fit_config, monotonicity = monotonicity)
+                                   fit_config, monotonicity = monotonicity,
+                                   ht_lines = ht_lines)
     print(f"Fit report: {report_path}")
     print(f"Done in {time.time() - started:.1f}s")
 

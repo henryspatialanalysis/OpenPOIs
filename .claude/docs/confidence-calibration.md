@@ -222,7 +222,9 @@ Se/Sp are reported as diagnostics only.
 |---|---|
 | [src/openpois/conflation/calibration_fit.py](../../src/openpois/conflation/calibration_fit.py) | the estimator: classes, inclusion, working models, difference estimator, matched indices (pool / additive / interaction) and cell surface, bootstrap, cross-fit |
 | [src/openpois/conflation/calibration.py](../../src/openpois/conflation/calibration.py) | deploy: curve index (any index form via `index_score`), `apply_curve` / `apply_surface`, edge rules, streamed rewrite |
-| [scripts/conflation/fit_calibration.py](../../scripts/conflation/fit_calibration.py) | fit driver → curves + `fit_report.md` |
+| [scripts/conflation/fit_calibration.py](../../scripts/conflation/fit_calibration.py) | fit driver → curves + `fit_report.md` + `ht_review_<round>.pdf` |
+| [src/openpois/conflation/calibration_ht.py](../../src/openpois/conflation/calibration_ht.py) | design-weighted (HT) check of a deployed map: Hájek rates, bins, flags |
+| [scripts/conflation/ht_review.py](../../scripts/conflation/ht_review.py) | HT review PDF; standalone CLI for reused curves |
 | [scripts/conflation/apply_calibration.py](../../scripts/conflation/apply_calibration.py) | apply driver |
 | [scripts/conflation/plot_calibration.py](../../scripts/conflation/plot_calibration.py) | diagnostic figures |
 | [scripts/conflation/compare_matched_index.py](../../scripts/conflation/compare_matched_index.py) | matched-mode comparison: cross-fit through the published lookup, paired ladder, deployed impact |
@@ -273,21 +275,68 @@ Then bump `versions.calibration` in `config.yaml` to the new round.
 
 ## Design-weighted (Horvitz–Thompson) check: a standard output from October 2026
 
-Decided 2026-09-30; to be implemented in the October run (TODO.md has the full design).
-Every calibration fit will report, per segment:
-- the design-weighted gold rate per atom-aware bin (Hájek, w = 1/π_class, bins merged to
-  at least 20 gold rows, a coarse 2-D grid for matched), with its ESS and CI;
-- that rate against the deployed map's mean over the same rows. Bins where the map sits
-  more than ±1 SD (binomial SD of the bin's exists/checked ratio) from it are marked,
-  and bins beyond 2 SD are marked more strongly. About 32% of bins cross 1 SD by chance;
-- a calibration-in-the-large offset per segment;
-- a review document with graphics, `calibration/ht_review_<round>.pdf`.
+Decided 2026-09-30 (full design in TODO.md); implemented 2026-09-30 in
+`src/openpois/conflation/calibration_ht.py` (numbers) and
+`scripts/conflation/ht_review.py` (PDF and CLI). Revised the same day to use every
+phase-1 row, silver included, with the misclassification correction applied first
+(Nat). It is model-free, so it guards any deployed map against bias. The Bayesian
+prototype below showed both failure directions it catches: arm A −0.035 and arm C +0.01
+on matched.
+- **Corrected labels.** Each usable phase-1 row gets ỹ: its gold truth if it is gold,
+  else q = P(exists | segment, LLM verdict). For exists and gone, q is
+  `calibration_bayes.silver_label_rates` (arm C's q, so the check and the prototype use
+  the same correction); unverifiable gets the same quantity from the same helpers. Each
+  is the design-weighted gold share (w = 1/π over the production refined classes, per
+  round), Jeffreys-smoothed on its Kish ESS. The rates used are printed in the report.
+- **Per bin:** r = mean ỹ over the bin's phase-1 rows, SD = √(r(1−r)/n) with n the row
+  count (Jeffreys-smoothed r for the SD only when r is 0 or 1), and z = (model − r) /
+  SD, where model is the deployed map's mean over the same rows, computed through
+  `calibration.calibrate_frame` with the curve metadata. |z| > 1 is flagged and
+  |z| > 2 flagged more strongly. The gold-only Hájek rate is kept as a reference column
+  and a faint marker; it is not flagged on.
+- **Calibration in the large** per segment: the same comparison over all its rows.
 
-The check never fails a run (Nat, 2026-10-01). It exists for review.
+Bins: atom-aware bins on the native score for osm and overture (10 base bins); for
+matched, a 2-D grid of Overture columns that isolate each atom crossed with OSM
+quartiles, plus deciles of the handoff's `raw_score` (the 0.588/0.412 blend, which does
+not depend on the deployed index). Every bin is merged until it holds ≥ 20 phase-1 rows
+(`merge_thin_bins`; on the matched grid the OSM bins merge within each Overture column).
+An atom keeps its own bin unless the stretch beside it is too thin.
 
-It is model-free, so it guards any deployed map against bias. The Bayesian prototype
-below showed both failure directions the check catches: arm A −0.035 and arm C +0.01 on
-matched.
+Reading the shares: an exact map crosses 1 SD in about 32% of bins and 2 SD in about
+5%. The SD ignores the uncertainty in q, so it is somewhat optimistic. In simulation of
+the two-phase design with an exact map (accurate definitive verdicts, unverifiables
+censused), 34.5% and 4.9% of bins were flagged. The correction assumes q is flat in
+score within segment × verdict. That holds closely for the definitive verdicts (the fit
+report's constancy check), and unverifiables are censused, so none of them is silver.
+If a later round samples unverifiables instead of censusing them, their flat q would
+bias the bins, since their true rate rises with score (in simulation, 50% and 14% of
+bins flagged under an exact map). The curves were also fit on this gold.
+
+The check never fails a run (Nat, 2026-10-01). `fit_calibration.py` runs it on the
+curves it has just written (`--skip-ht-review` turns it off; an error is recorded in the
+report instead of raised). It puts a section into `fit_report.md` with per-view flag
+counts, calibration in the large and the correction rates. The PDF lands beside the
+curves at `conflation/<version>/calibration/ht_review_<round>.pdf`, with the bin table
+(row and gold counts, corrected and gold-only rates) as `ht_review_<round>_bins.csv`.
+Its pages: a summary with the correction rates and the flagged bins; one reliability
+page per 1-D view (corrected rate with ±1 and ±2 SD bars, the gold-only rate as a faint
+marker, the deployed step lookup or, for matched deciles, the deployed value per row,
+and a gold-count strip); the matched heatmap of z with OSM slices at the two Overture
+atoms; the bin table. On a reuse month, when the curves are copied rather than fit, run
+it on its own:
+
+```bash
+python scripts/conflation/ht_review.py [--curves-dir DIR] [--out-dir DIR]
+```
+
+which also writes the report section as `ht_review_<round>.md`. First result
+(2026-09-30, the reused September curves on round 20260730): osm 0 of 10 bins beyond
+1 SD; matched 7 of 20 cells (1 beyond 2 SD) and 4 of 10 deciles (none); overture 10 of
+15 beyond 1 SD and 5 beyond 2 SD. The overture misses are the known shape problem: the
+monotone floor sits under the < 0.30 bin and above the 0.45–0.85 dip, and the old curve
+undershoots the 0.990219 atom (rate 0.936, model 0.827, z −6.3). Calibration in the
+large is within 0.003 on every segment.
 
 ## Bayesian calibration prototype (under evaluation, not deployed)
 

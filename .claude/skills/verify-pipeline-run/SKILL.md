@@ -109,6 +109,7 @@ Confirm `conf_mean`, `conf_lower`, `conf_upper` columns are populated for every 
   conflated.parquet             # canonical, calibrated
   calibration/fit_report.md     # read this first
   calibration/{segment}_curve.parquet + _metadata.json
+  calibration/ht_review_<round>.pdf   # design-weighted check of the deployed map
   calibration/biggest_movers.csv, shift_by_label.csv
   viz/calibration_{curves,reliability,shift}.png
 ```
@@ -143,6 +144,11 @@ each table means. Then check the deployed output:
   as written, so this inversion on exactly the `shadow_cd` rows (and zero
   others) is the expected signature, not a defect (verified identical on
   20260730 and 20260902).
+- **Design-weighted (HT) check**: open `calibration/ht_review_<round>.pdf` (flag
+  counts are in `fit_report.md`; on a reuse month run
+  `scripts/conflation/ht_review.py`, which writes the PDF and `ht_review_<round>.md`
+  beside the copied curves). Read the share of bins beyond 1 and 2 SD against the 32%
+  and 5% chance baseline, and look at every bin beyond 2 SD. It never fails a run.
 - **Composite vs reference**: the fit report's Horvitz-Thompson reference curve
   should sit inside the composite's band over most of the grid. A systematic gap
   means the working model is wrong — investigate before publishing.
