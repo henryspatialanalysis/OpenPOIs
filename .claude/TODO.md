@@ -2,6 +2,40 @@
 
 Short running list of in-progress / upcoming work. Edit freely; trim older completed items when the list gets long. Date items `YYYY-MM-DD` when added.
 
+## Next monthly run: October 2026 checklist (raise every item before starting)
+
+Added 2026-09-30. The run skills (full-data-pull, conflate-snapshots, verify-pipeline-run)
+point here: at the start of the October run, list these items to Nat and confirm which
+go in before any step runs. Details are in the linked items under **Upcoming**.
+
+1. **Refit calibration once (method change).** Reuse is off even on a drift-gate pass.
+   See "October 2026 run: refit calibration once".
+2. **Implement the standard Horvitz–Thompson check**: a PDF review document with
+   graphics, flagging bins more than ±1 SD off; it never fails the run. See "Standard
+   design-weighted (Horvitz–Thompson) check" (Nat, 2026-09-30 and 2026-10-01).
+3. **New validation data (≤ 1,000 LLM-checked rows).** It must be ready before the
+   calibration refit if it is to be used. See "October validation round: up to 1,000
+   new LLM checks". Sequencing: conflation and CD produce the October population → draw
+   the rows → validator LLM checks and a human census of new unverifiables → export the
+   handoff → bump `versions.calibration` → refit.
+4. **Pool the July and October rounds in the Bayesian arm C** (curves and silver-label
+   rates) and refit it (prototype; not published), with the fixed-rate mixture as a
+   test model beside it (design doc §3.5c). See "Bayesian arm C: pool the October
+   round".
+5. **Re-test the matched interaction on the new round.** See "Re-test the matched
+   interaction on the next validation round".
+6. **Emit `overture_confidence_imputed` from `merge.py`.** It wants the next conflation
+   run.
+7. **Monotonicity check: merge sub-floor bins.** Natural to do alongside item 2.
+8. **Check conflation merge-phase memory headroom** (needed before November; the
+   October peak RSS tells how urgent it is).
+
+**Before November** (not October):
+- **The matched-surface band under-coverage in the Bayesian model** (Nat: skip in
+  October, pick up before November). See "Bayesian matched surface: close the
+  under-coverage".
+- **Urbanicity in the calibration model** (Nat, 2026-09-27: reconsider in November).
+
 ## In progress
 
 - [ ] **Stale download-test mocks — 5 failures.** Added 2026-07-25. `tests/test_osm_history_pbf.py` (3) and `tests/test_osm_snapshot.py` (2) fail because their mocks predate the "Resilient parallel download" refactor (5024b5b): two patch the removed `openpois.io.osm_history_pbf._load_cookie_session`; one mocks the osmium filter step without creating the intermediate `*-tagfilt` file the code now reads; two mock the request layer the snapshot downloader no longer goes through (they hit the stub URL for real and 404). Pre-existing — surfaced while validating the 2026-07-24 conflation spill fix, unrelated to it. Fix is to update the mocks/fixtures to the current download API.
@@ -10,6 +44,50 @@ Short running list of in-progress / upcoming work. Edit freely; trim older compl
 
 - [ ] **October 2026 run: refit calibration once (method change).** Added 2026-09-26. `matched_index_mode` is now `interaction` and `band_aggregation` is `bin`, so the prior curves (pool-mode, old band) must not be reused even if the Overture drift gate passes. Run `make fit_calibration` against `versions.calibration: 20260730`, then check `fit_report.md`: the interaction coefficients should be close to the round-20260730 fit (a3 ≈ −11, `a1+a3` active) and matched curve metadata should show `index_mode: interaction`, `score_decimals: 6`. The overture curve also shifts at this refit because of the `build_lookup` edge fix. See the "Method-change override" in [docs/confidence-calibration.md](docs/confidence-calibration.md).
 - [ ] **Close the remaining band under-coverage (smoothing bias).** Added 2026-09-26. With `band_aggregation: bin`, simulated coverage of the nominal 95% band is 0.89 (matched), 0.91 (osm), 0.66 (overture). What remains is kernel smoothing bias where the curve bends, worst at the Overture atoms (0.919912, 0.990219). Candidates: an atom-aware bandwidth, or giving each atom its own cell in the overture curve. Re-check with `scripts/conflation/simulate_band_coverage.py --truths osm_1d,overture_1d`. Until then the published bands are narrower than a true 95%.
+- [ ] **Standard design-weighted (Horvitz–Thompson) check in every calibration run.** Added 2026-09-30 (Nat; implement in the October run). A model-free guard against bias in whatever calibration model is deployed. It applies to the v4 curves now and to the Bayesian arm C if it is adopted. Phase 1 showed why it is needed: arm C runs about +0.01 high on Overture and matched when silver labels are treated as exact, and arm A ran −0.035 low on matched. The HT rate caught both. Design:
+  - **Estimator.** Per segment, the Hájek rate in each bin: Σ w·y / Σ w over gold rows, with w = 1/π_class from `calibration_fit.inclusion_by_class`. Report it with the Kish ESS, SE = √(r(1−r)/ESS) and a 95% CI.
+  - **Bins.** Atom-aware bins (`calibration_fit.atom_aware_edges`), merged until each holds at least 20 gold rows; this also fixes the sub-floor-bin issue in the item below. Matched gets a coarse 2-D cell grid (the atoms × OSM quartiles) plus raw-score deciles.
+  - **Comparison.** Set it against the deployed map's mean over the same phase-1 rows. The discrepancy is d = model − HT rate, in units of the bin's SD.
+  - **Never fails the run** (Nat, 2026-10-01). It is a review aid: nothing in the pipeline gates on it.
+  - **Flag rule** (Nat, 2026-10-01). Mark a bin when |d| > 1 SD, where SD = √(r(1−r)/n) is the binomial SD of the bin's exists/checked ratio r. Mark |d| > 2 SD more strongly.
+    - Use the design-weighted r with n = Kish ESS: the raw ratio is biased because phase 2 oversamples gone and unverifiable verdicts. Show the raw ratio and raw n beside it. (Confirmed by Nat, 2026-10-01, with the 32% / 5% chance-baseline reporting below.)
+    - For a bin with r = 0 or 1, use the Jeffreys-smoothed r for the SD only, (r·n + 0.5)/(n + 1), so that the SD is not zero.
+    - Even a perfectly calibrated map has about 32% of bins beyond 1 SD and 5% beyond 2 SD. The document states that, and reports the share flagged against it.
+    - Also report calibration-in-the-large per segment: the overall HT rate against the model's mean.
+  - **Review document: `calibration/ht_review_<round>.pdf`**, built with matplotlib `PdfPages` (no new dependency; python-docx is not installed).
+    - Page 1: a summary table per segment (bins, share beyond 1 and 2 SD against 32% and 5%, calibration in the large) and the flagged bins listed.
+    - One page per 1-D segment: a reliability-style plot of the HT rate with ±1 SD and ±2 SD bars at the bin midpoints, the deployed curve or step lookup overlaid, flagged bins highlighted, and a strip of gold counts per bin.
+    - Matched: a heatmap of d/SD on the 2-D cells, plus OSM slices at the two Overture atoms.
+    - Last page: the bin table (edges, raw n, gold n, ESS, raw and weighted r, SD, model, d/SD).
+  - **Reporting.** Link the PDF, and give the flag counts, in `fit_report.md` and the monthly run summary, and point the verify-pipeline-run skill at it.
+  - **Reuse.** `calibration_fit.ht_reference_curve` and `axis_monotonicity_table`, plus the Phase 1 helpers `scripts/conflation/bayes_calibration_common.binned_ht_rates` and the `rate_by_knot` check in `fit_bayes_calibration.posterior_predictive_checks`. The latter already does the z-test.
+- [ ] **October validation round: up to 1,000 new LLM checks.** Added 2026-09-30 (design in `.claude/plans/bayesian-monotone-calibration.md` §8; decisions 2026-09-27/28). Work lives in `openpois-validator`; it starts once the October conflation (after change detection) produces the population.
+  - **Draw.** Up to 1,000 new phase-1 rows (non-shadow, named) in strata of segment × knot interval (knot-cell groups for matched), allocated n_h ∝ N_h · posterior SD. Put a floor of 30 in the prior-dominated regions (matched Overture < 0.90, OSM < 0.58, Overture segment < 0.35) and extra weight on the matched high-Overture band. Record the inclusion probabilities.
+  - **Checks.** Run the same LLM protocol (scores stay blind), recording `template_version`. **No drift anchor.**
+  - **Gold.** A human or desk census of every new LLM-unverifiable, which arm C requires. Phase-2 draws stay uniform within verdict class.
+  - **Covariates.** Collect `shared_label` group and urbanicity on every row.
+  - **Output.** Export as a new round `data/calibration/<round>/`.
+  - **Optional preposterior check.** 3 allocations × 5 synthetic draws, about 2–3 h.
+- [ ] **Bayesian arm C: pool the October round.** Added 2026-09-30, extended 2026-10-01 (Nat; prototype, not published). The fixed-rate arm C (`ModelSpec.label_noise = "fixed"`, design doc §3.5b) and round pooling (decision 20) are wired in but have never been fitted.
+  - **Main model:** fractional labels as wired (M15c'), with q constant in score within each segment × verdict cell (Nat, 2026-10-01: do not vary q by score).
+  - **Test model: the fixed-rate mixture** (Nat, 2026-10-01; design doc §3.5c). Build before the October fit:
+    - `label_noise = "fixed_mixture"`: the likelihood log[p·Se + (1−p)(1−Sp)] for "exists" and log[p(1−Se) + (1−p)Sp] for "gone", with Se and Sp passed in as data (the asymmetric branch of `pointwise_log_likelihood`, without sampling them).
+    - Forward rates per segment, design-weighted from the same training gold as q (pooled rounds, per-round weights, held-out gold excluded in CV), Jeffreys-smoothed so that Se = 1.000 on Overture and matched does not make a "gone" verdict certain. The same code as `forward_silver_rates` in `simulate_bayes_recovery.py`, moved into `calibration_bayes` beside `silver_label_rates`.
+    - Tests: Se = Sp = 1 gives the Bernoulli on the label; value and gradient match a numpy reference; the rates respect the holdout.
+    - Runs: a full fit tagged `armC_mixture`, and CV beside arm C and B (`CV_ARMS=C,B` plus a second C pass with `--tag-suffix _mixture --label-noise fixed_mixture`), the in_family coverage scenario, and the per-tercile check of design doc §3.5c against both models.
+    - Compare: pooled and per-segment relative Brier and LPD (paired bootstrap), band width, in-family coverage (the mixture's wider bands may help matched, §12 item 1), and the Overture "exists" tercile pattern.
+  - **Setup.** When `versions.calibration` moves to the October round, set `conflation.calibration.pooled_rounds: ["20260730"]`. Both rounds' phase-1 rows then enter the curve fit, and both rounds' gold enters the rates P(exists | segment, verdict), each round under its own design weights. CV holds out and scores October only.
+  - **Drift checks first.** (1) LLM drift: per-round rates (`calibration_bayes.silver_label_rates` on each round alone); if a (segment, verdict) rate differs beyond binomial error, or the LLM template changed, keep the rates separate. (2) Curve drift: each round's design-weighted gold rate by score bin; a systematic gap means the score's meaning moved, so do not pool the rounds.
+  - **Output directory.** Use a fresh one, e.g. `~/data/openpois/conflation/<october conflation version>/calibration_eval_bayes_<date>/`. Without `--out-dir` the scripts default to `calibration_eval_bayes_20260927/` under the handoff's conflation version.
+  - **Fit.** `python -u scripts/conflation/fit_bayes_calibration.py --out-dir <dir> --arm C --tag armC --deployed-impact` (about 50 min). Check that the log's first line lists both rounds, and that `fit_report.md`'s silver-rates section names them.
+  - **Rerun.** `EVAL=<dir> bash scripts/conflation/run_bayes_phase1.sh`: CV (arms C and B), the coverage study (in_family, realistic, category, step) and the sensitivity runs; then `report_bayes_calibration.py --out-dir <dir>`. It skips outputs that exist, so the fit above is reused.
+  - **Expected.** About 0.01 lower than the first run on Overture and matched, and closer to the Horvitz–Thompson rates.
+- [ ] **Bayesian matched surface: close the under-coverage (before November).** Added 2026-09-30 (Nat: skip in October, pick up before November).
+  - **Finding.** The matched 95% posterior band covers 0.75 in-family, and 0.67 in the flat high-Overture region; Overture is 0.95 and OSM 0.91.
+  - **Diagnosis.** The band width matches sampling noise (half-width 0.018 against 1.96 × SD = 0.0165). Coverage fails through pointwise smoothing bias (corr(coverage, |bias| / half-width) = −0.96). The bias is worst where the true surface climbs steeply to its ~0.94–0.96 ceiling (−0.03 to −0.09).
+  - **Candidates.** Local flexibility near the ceiling (more knots in the high-Overture band, or adaptive smoothing variances); a credible level recalibrated by simulation (the coverage study as the calibration map); a coarser matched grid. A looser τ_M alone does not help (S6_taumatched4 moved the surface 0.003).
+  - **Re-test.** `simulate_bayes_recovery.py` in_family.
+  - **Refs.** Design doc §12.1; execution log decision 20.
 - [ ] **Monotonicity check: merge sub-floor bins instead of skipping them.** Added 2026-09-26. The fit report's per-axis table gives no z for a pair involving a bin with < 5 gold. On round 20260730 a one-row bin (0.91967–0.919912) hides the overture segment's v4 §4.6 reversal. Merge thin bins into a neighbour in `calibration_fit.atom_aware_edges` / `axis_monotonicity_table`.
 - [ ] **Re-test the matched interaction on the next validation round.** Added 2026-09-26. The October switch to `interaction` rests on a consistent-sign but small gain (≈ −0.0003 Brier; interval excluding zero in 6/20 seeds). More matched gold with `overture_confidence` < 0.92 (currently 91 of 444) would settle whether the substitutive interaction is real. Oversample that column in the next draw and re-run `compare_matched_index.py`.
 
