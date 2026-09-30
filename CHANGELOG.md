@@ -66,6 +66,20 @@
   'manual_exclude'`) and `include` rows to 1 (`'manual_include'`). Rows are
   kept, so schema and counts are unchanged; the two new flag values join
   `shadow_cd`, `missing_conf` and `unnamed_extrapolated`.
+- **Evaluated, not deployed: a Bayesian monotone-spline calibration.** A
+  prototype replacement for the calibration curves, fitted in JAX
+  (`openpois.conflation.calibration_bayes`). It uses monotone quadratic
+  splines per segment, a doubly monotone surface for matched POIs, and LLM
+  verdicts on non-gold validation rows as fractional labels at fixed,
+  design-weighted gold concordance rates. In 10-fold cross-validation on
+  round 20260730 it ties the production curves (pooled relative Brier 0.996,
+  95% interval 0.990 to 1.002). Its matched 95% bands under-cover (0.75 in
+  simulation). **Published `conf_mean` is unchanged.** The October round will
+  pool with July in a refit, with a fixed-rate mixture likelihood as a test
+  model. The same work adds a standard design-weighted (Horvitz-Thompson)
+  review of each calibration run from October, and an optional
+  `adaptation_kwargs` passthrough in `openpois.models.jax_core` whose default
+  is unchanged.
 
 ## 2026-09-02-v0
 
