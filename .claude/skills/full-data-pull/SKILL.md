@@ -7,6 +7,11 @@ description: Use when the user wants to refresh the independent POI snapshots (O
 
 Downloads the snapshot sources (50 US states + DC + 5 inhabited territories: PR, VI, GU, MP, AS), refreshes the OSM history that drives ghost reconstruction, and applies the rating model to OSM so conflation can run.
 
+> **Before any step: raise the next-run checklist.** Open
+> [.claude/TODO.md](../../TODO.md) → "Next monthly run … checklist". List every item to
+> Nat, and confirm which go into this run before starting. Items are added there so that
+> none depends on anyone remembering them.
+
 ## Prerequisites
 
 - conda env `openpois` active.

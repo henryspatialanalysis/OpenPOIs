@@ -8,6 +8,11 @@ description: Use when the user wants to match rated OSM POIs with Overture POIs 
 Taxonomy-aware matching between rated OSM and Overture, then partition and
 upload for web consumption.
 
+> **Before any step: raise the next-run checklist.** Open
+> [.claude/TODO.md](../../TODO.md) → "Next monthly run … checklist". List every item to
+> Nat, and confirm which go into this run before starting. Items are added there so that
+> none depends on anyone remembering them.
+
 ## Prerequisites
 
 - Rated OSM snapshot (`osm_snapshot_rated.parquet`) at `versions.snapshot_osm` — produced by [skills/full-data-pull](../full-data-pull/SKILL.md) step 3.

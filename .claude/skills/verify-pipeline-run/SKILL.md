@@ -193,4 +193,4 @@ print(d.count_rows(), len(d.schema.names))
 
 ## Recording issues
 
-Anything anomalous goes into [.claude/TODO.md](../../TODO.md) under **In progress** so follow-ups don't drop.
+Anything anomalous goes into [.claude/TODO.md](../../TODO.md) under **In progress** so follow-ups don't drop. Also tick off (or carry forward) the items in TODO.md's "Next monthly run … checklist" that this run was meant to cover. From October 2026, the calibration QA includes the standard Horvitz–Thompson check: per-bin design-weighted gold rates against the deployed map, in the review PDF `calibration/ht_review_<round>.pdf`. It never fails a run. Bins more than ±1 SD off are marked for Nat's review; about 32% of bins cross 1 SD by chance, so read the share flagged against that. See TODO.md.
