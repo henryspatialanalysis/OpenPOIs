@@ -75,6 +75,7 @@ from openpois.conflation.taxonomy import (
     load_overture_crosswalk,
     load_top_level_matches,
 )
+from openpois.io.overture import check_overture_confidence
 
 CHECKPOINT_SUBDIR = "chunk_matches"
 DEDUP_CHECKPOINT_SUBDIR = "chunk_selfdedup"
@@ -391,6 +392,7 @@ if __name__ == "__main__":
         test_bbox = test_bbox, label = "Overture",
         return_source_rows = True,
     )
+    check_overture_confidence(overture_gdf["confidence"], label = "Overture")
     log_rss("after Overture load")
 
     # -- Taxonomy assignment ---------------------------------------

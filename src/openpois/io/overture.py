@@ -55,7 +55,50 @@ from pathlib import Path
 
 import duckdb
 import geopandas as gpd
+import numpy as np
+import pandas as pd
+import pyarrow.parquet as pq
 import requests
+
+
+# -----------------------------------------------------------------------------
+# Confidence check
+# -----------------------------------------------------------------------------
+
+def check_overture_confidence(confidence, label: str = "Overture") -> None:
+    """Raise if any Overture ``confidence`` is missing or outside [0, 1].
+
+    Every Overture place carries a provider confidence: none of the snapshots
+    ingested from 2026-06 to 2026-08 had a null. A missing or out-of-range value
+    is an ingest artefact, so the pipeline stops rather than inventing a score
+    downstream (``merge.py`` used to fill 0.5). A value of exactly 0.5 is a
+    genuine provider score, not a placeholder.
+
+    Args:
+        confidence: Array-like of confidence values; non-numeric entries count
+            as missing.
+        label: Names the data in the error message.
+    """
+    values = pd.to_numeric(
+        pd.Series(np.asarray(confidence, dtype = object)), errors = "coerce"
+    ).to_numpy(dtype = float)
+    n_missing = int(np.isnan(values).sum())
+    n_out_of_range = int(((values < 0) | (values > 1)).sum())
+    if n_missing or n_out_of_range:
+        raise ValueError(
+            f"{label}: {n_missing:,} of {len(values):,} rows have no confidence "
+            f"and {n_out_of_range:,} are outside [0, 1]. Overture supplies a "
+            "confidence for every place, so this is an ingest artefact; fix the "
+            "snapshot rather than imputing a score."
+        )
+
+
+def check_overture_snapshot_confidence(path: str | Path) -> None:
+    """Run ``check_overture_confidence`` over a snapshot's column on disk."""
+    column = pq.read_table(path, columns = ["confidence"]).column("confidence")
+    check_overture_confidence(
+        column.to_numpy(zero_copy_only = False), label = f"Overture snapshot {path}"
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -564,6 +607,10 @@ def download_overture_snapshot(
         threads = max(int(duckdb_threads), 4),
         temp_directory = temp_directory,
     )
+
+    # Fail before cleanup, so a bad snapshot never reaches conflation and the
+    # parts stay on disk for inspection.
+    check_overture_snapshot_confidence(output_path)
 
     # Cleanup on success only. Leaving intermediates on failure is intentional
     # so the next run can resume.
