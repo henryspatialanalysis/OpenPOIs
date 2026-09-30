@@ -457,6 +457,21 @@ each section.
       the curves, and finite differences. The forward rates match a hand
       computation, ignore held-out gold, pool rounds, and stay strictly inside
       (0, 1) when the raw rates are 1.
+27. **Decisions on the mixture build** (Nat, 2026-09-30).
+    - **Coverage generator keeps the raw rates.** The in_family world is drawn with
+      the raw Se and Sp (Overture and matched Se = 1.000), as in Phase 1, so the
+      mixture is scored on the same simulated worlds as arm C. A fitted mixture is
+      given the smoothed rates; the resulting mismatch is about 0.3% in Se.
+    - **Jeffreys smoothing applies to Sp as well as Se.** It is the posterior mean
+      under Beta(1/2, 1/2), the same rule as q; the largest move is matched Sp,
+      0.861 to 0.854 (ESS 51).
+    - **The mixture is the model the monthly update runs.** `run_bayes_phase1.sh`
+      gains stage 3b (the mixture's full fit, its CV pass against arms C and B, and
+      its in-family coverage) for a full evaluation, and `MODE=mixture` runs only
+      the mixture's full fit and the report, with `armC_mixture` as the report's
+      main model (`report_bayes_calibration.py --main`). From October 2026 the
+      monthly run uses `MODE=mixture`; the comparison across arms is not repeated.
+
 ## Questions for Nat: status
 
 - **Q-a** (data-centre anchor, α ~ N(0, 1.5²)): accepted, 2026-09-30.

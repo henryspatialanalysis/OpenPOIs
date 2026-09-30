@@ -44,7 +44,7 @@ all three with symlinks, so **no config or code change is needed** to run remote
 | Drift gate, `check_history`, `make rate`, `build_type_affinity.py` | Remote | Needs the snapshots that are already there. |
 | `make conflate` (ghosts, baseline, CD, calibrate, overrides) | Remote | The memory problem this plan exists to solve. |
 | `summarize.py`, HT review PDF, `format_for_upload.py`, both PMTiles | Remote | Reads the 2.5 GB conflated file. |
-| Bayesian arm C fits and CV (checklist item 4) | Remote | JAX, about 50 minutes for the fit and hours for CV. The inputs are already there. |
+| Bayesian fixed-rate mixture fit (checklist item 4) | Remote | JAX, about 50 minutes (`MODE=mixture` of `run_bayes_phase1.sh`). The inputs are already there. |
 | **Validation round** (`openpois-validator`, LLM checks, human census, phone lane, review UI, handoff export) | **Local** | See the paragraph below. |
 | Publish to Source Coop | Remote | 7 GB at in-region speed, versus about 1h40m from home last month. |
 | Verify: DuckDB invariants on the output | Remote | Streams the parquet there, so nothing large is downloaded to run it. |
@@ -192,8 +192,9 @@ Stop the instance (`ec2-openpois stop`) whenever the next step waits on a person
      calibrated in a post-calibration file;
    - `push-handoff <round>`; bump `versions.calibration` (and `pooled_rounds`) on the run
      branch, push, `sync`;
-   - remote: `make calibrate && make apply_manual_overrides`, the Bayes fits and CV, the
-     summaries again, then `pull <v>`. **Nat** gives the release decision.
+   - remote: `make calibrate && make apply_manual_overrides`, the mixture fit
+     (`MODE=mixture` `run_bayes_phase1.sh`), the summaries again, then `pull <v>`.
+     **Nat** gives the release decision.
 7. **Package.** `format_for_upload.py`, then both `prepare_pmtiles.py` runs.
 8. **Publish.** Nat's local `source-coop login`; `creds put`; the upload `--dry-run`, the
    upload, the published-release checks; `creds clear`.
@@ -226,7 +227,8 @@ mirrored locally: the published release on Source Coop is the archive.
 6. Local keeps tier-1 summaries plus `conflated.parquet`.
 7. No manual-overrides CSV exists; the stage runs as a no-op until the Close lane writes
    one.
-8. Bayesian fits and CV run on the remote.
+8. The Bayesian fixed-rate mixture fit runs on the remote; only the mixture is run
+   monthly (`MODE=mixture`).
 9. Source Coop credentials are minted locally and copied over for the publish.
 10. Stages are launched one at a time for now; revisit a single `run_month.sh` after the
     first supervised run.

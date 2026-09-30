@@ -23,8 +23,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bayes_calibration_common as common  # noqa: E402
 
 # Arm C is the main model (execution log, decision 12); A and B are comparators.
+# The fixed-rate mixture (armC_mixture) is the model the monthly update runs from
+# October 2026; `--main armC_mixture` makes it the report's main model.
 MAIN = "armC"
-MAIN_TAGS = ("armC", "armA", "armB")
+MAIN_TAGS = ("armC", "armC_mixture", "armA", "armB")
 SENSITIVITY = {
     "S2C_asym": "asymmetric label noise (Se, Sp; priors at 0.998 / 0.913)",
     "S3C_exact": "silver labels treated as exact (β = 1)",
@@ -96,7 +98,9 @@ def gold_rate_table(out_dir: Path, tags: tuple) -> list:
     available = [t for t in tags if (out_dir / "fits" / t / "draws.npz").exists()]
     # Every fit in one directory shares its rounds; the main fit's table is the
     # reference (all its pooled rounds, each under its own design weights).
-    rows = common.fit_rows(config, out_dir, available[0] if available else MAIN)
+    if not available:
+        return ["(no fits with saved draws)"]
+    rows = common.fit_rows(config, out_dir, available[0])
     weights = common.design_weights(rows, fit_config)
     production = common.load_production()
     preds = {}
@@ -193,7 +197,10 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description = __doc__)
     parser.add_argument("--out-dir", default = None)
+    parser.add_argument("--main", default = MAIN,
+                        help = "tag of the main model (default %(default)s)")
     args = parser.parse_args()
+    main_tag = args.main
     config = common.load_config()
     _, metadata = common.load_handoff(config)
     out_dir = common.eval_dir(config, metadata, args.out_dir)
@@ -213,9 +220,9 @@ def main() -> None:
             continue
         lines.append(f"- **{tag}** ({s['num_parameters']} parameters): {diag_line(s)}")
     lines.append("")
-    main = load_json(out_dir / "fits" / MAIN / "summary.json")
+    main = load_json(out_dir / "fits" / main_tag / "summary.json")
     if main:
-        lines += [f"### Key parameters ({MAIN}, posterior mean [95% interval])", "",
+        lines += [f"### Key parameters ({main_tag}, posterior mean [95% interval])", "",
                   "| parameter | mean | 95% interval |", "|---|---|---|"]
         for name, v in main["parameters"].items():
             lines.append(f"| {name} | {fmt(v['mean'])} | [{fmt(v['lower'])}, "
@@ -244,7 +251,7 @@ def main() -> None:
                                 if share is not None else ""))
             lines.append("")
         if "ppc" in main:
-            ppc = load_json(out_dir / "fits" / MAIN / "ppc.json")
+            ppc = load_json(out_dir / "fits" / main_tag / "ppc.json")
             if ppc and ppc.get("rate_by_knot"):
                 lines += ["", "| segment | interval | n gold | HT rate | model mean "
                           "[95%] |", "|---|---|---|---|---|"]
@@ -289,6 +296,17 @@ def main() -> None:
                          f"{r['n_exists']} | {r['gone']:.4f} | {r['raw_gone']:.4f} | "
                          f"{r['n_gone']} |")
         lines.append("")
+    if main and main.get("forward_rates"):
+        lines += ["### Forward rates used (fixed-rate mixture)", "",
+                  "Se = P(verdict exists | exists), Sp = P(verdict gone | gone), "
+                  "among definitive verdicts; Jeffreys-smoothed on the Kish ESS.", "",
+                  "| segment | Se | raw | ESS | Sp | raw | ESS |",
+                  "|---|---|---|---|---|---|---|"]
+        for seg, r in main["forward_rates"].items():
+            lines.append(f"| {seg} | {r['se']:.4f} | {r['raw_se']:.4f} | "
+                         f"{r['ess_se']:.1f} | {r['sp']:.4f} | {r['raw_sp']:.4f} | "
+                         f"{r['ess_sp']:.1f} |")
+        lines.append("")
     lines += ["### Calibration against the design-weighted gold rate", "",
               "Mean posterior-mean P(exists) over the validation rows in each group, "
               "against the Hajek-weighted gold rate. The gold rate is itself noisy "
@@ -308,6 +326,12 @@ def main() -> None:
     else:
         lines.append("Not run.")
     lines.append("")
+    cv_mixture_md = out_dir / "cv" / "cv_results_mixture.md"
+    if cv_mixture_md.exists():
+        lines += ["### Fixed-rate mixture against arms C and B", ""]
+        body = cv_mixture_md.read_text().splitlines()
+        lines += [line for line in body if not line.startswith("# ")]
+        lines.append("")
 
     lines += ["## 3. Coverage study (§5.2)", ""]
     cov = load_json(out_dir / "coverage" / "coverage_summary.json")

@@ -21,10 +21,11 @@ fixed-rate mixture test model), 6 and 7. The rest are run steps.
    new LLM checks". Sequencing: conflation and CD produce the October population → draw
    the rows → validator LLM checks and a human census of new unverifiables → export the
    handoff → bump `versions.calibration` → refit.
-4. **Pool the July and October rounds in the Bayesian arm C** (curves and silver-label
-   rates) and refit it (prototype; not published), with the fixed-rate mixture as a
-   test model beside it (design doc §3.5c). See "Bayesian arm C: pool the October
-   round".
+4. **Fit the fixed-rate mixture on the pooled July and October rounds** (Nat,
+   2026-09-30: the mixture is the model the monthly update uses; the other arms,
+   CV, coverage and sensitivity runs are not repeated). One command:
+   `MODE=mixture EVAL=<dir> bash scripts/conflation/run_bayes_phase1.sh`. Code done
+   2026-09-30. See "Bayesian arm C: pool the October round".
 5. **Re-test the matched interaction on the new round.** See "Re-test the matched
    interaction on the next validation round".
 6. **Fail early on Overture POIs without a confidence score** (Nat, 2026-09-30; code
@@ -98,6 +99,7 @@ fixed-rate mixture test model), 6 and 7. The rest are run steps.
   - **Drift checks first.** (1) LLM drift: per-round rates (`calibration_bayes.silver_label_rates` on each round alone); if a (segment, verdict) rate differs beyond binomial error, or the LLM template changed, keep the rates separate. (2) Curve drift: each round's design-weighted gold rate by score bin; a systematic gap means the score's meaning moved, so do not pool the rounds.
   - **Output directory.** Use a fresh one, e.g. `~/data/openpois/conflation/<october conflation version>/calibration_eval_bayes_<date>/`. Without `--out-dir` the scripts default to `calibration_eval_bayes_20260927/` under the handoff's conflation version.
   - **Fit.** `python -u scripts/conflation/fit_bayes_calibration.py --out-dir <dir> --arm C --tag armC --deployed-impact` (about 50 min). Check that the log's first line lists both rounds, and that `fit_report.md`'s silver-rates section names them.
+  - **October scope (Nat, 2026-09-30).** Only the mixture: `MODE=mixture EVAL=<dir> bash scripts/conflation/run_bayes_phase1.sh` fits `armC_mixture` with the deployed-impact preview and writes the report with it as the main model. The Fit and Rerun steps below are the full evaluation, kept for a later month that needs it (`MODE=full` now also runs the mixture's CV pass and coverage as stage 3b).
   - **Rerun.** `EVAL=<dir> bash scripts/conflation/run_bayes_phase1.sh`: CV (arms C and B), the coverage study (in_family, realistic, category, step) and the sensitivity runs; then `report_bayes_calibration.py --out-dir <dir>`. It skips outputs that exist, so the fit above is reused.
   - **Expected.** About 0.01 lower than the first run on Overture and matched, and closer to the Horvitz–Thompson rates.
 - [ ] **Bayesian matched surface: close the under-coverage (before November).** Added 2026-09-30 (Nat: skip in October, pick up before November).

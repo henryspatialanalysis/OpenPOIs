@@ -12,7 +12,16 @@
 #          cross-fit.
 # Stage 3: fake-data coverage study (arm C fitted; arm B on misspecified rounds)
 #          and the arm C sensitivity fits S2C-S7.
+# Stage 3b: the fixed-rate mixture test model (label_noise = fixed_mixture, design
+#          doc §3.5c): its full fit, a CV pass compared pairwise with arms C and B,
+#          and its in-family coverage.
 # Stage 4: fit_report.md.
+#
+# MODE=mixture runs only the mixture's full fit (with the deployed-impact preview)
+# and the report, with the mixture as the report's main model. That is the monthly
+# update from October 2026 on (Nat, 2026-09-30): the comparison across arms is
+# done, and the month needs only the chosen model. MODE=full (default) runs every
+# stage.
 #
 # Every stage is resumable: the Python scripts skip outputs that already exist
 # (CV folds, coverage rounds); full fits are skipped when summary.json exists,
@@ -39,6 +48,8 @@ ARM_A_TAG=${ARM_A_TAG:-armA_variant}
 # decision 16): the default is C,B.
 CV_ARMS=${CV_ARMS:-C,B}
 COV_PARALLEL=${COV_PARALLEL:-5}
+MODE=${MODE:-full}
+MIXTURE_TAG=armC_mixture
 export OMP_NUM_THREADS=3
 cd "$REPO"
 
@@ -58,6 +69,19 @@ fit() {  # fit <tag> <args...>
   stamp "fit $tag exit $rc"
   return $rc
 }
+
+if [ "$MODE" = mixture ]; then
+  stamp "MODE mixture: fixed-rate mixture fit and report only"
+  fit "$MIXTURE_TAG" --arm C --label-noise fixed_mixture $MAIN --deployed-impact \
+    || { stamp "PIPELINE FAILED: $MIXTURE_TAG"; exit 1; }
+  $PY -u scripts/conflation/report_bayes_calibration.py --out-dir "$EVAL" \
+    --main "$MIXTURE_TAG" > "$LOGS/report.log" 2>&1 \
+    || { stamp "PIPELINE FAILED: report"; exit 1; }
+  stamp "PIPELINE DONE"
+  exit 0
+elif [ "$MODE" != full ]; then
+  stamp "PIPELINE FAILED: unknown MODE $MODE (full or mixture)"; exit 1
+fi
 
 stamp "STAGE 1 START (main fits)"
 # In the Phase 1 directory these fits exist already, so the calls only wait / skip;
@@ -104,6 +128,20 @@ run_sens2 & S2=$!
 wait $S1 $S2
 wait $COV || stamp "coverage exited non-zero (see coverage.log)"
 stamp "STAGE 3 DONE"
+
+stamp "STAGE 3b START (fixed-rate mixture)"
+fit "$MIXTURE_TAG" --arm C --label-noise fixed_mixture $MAIN --deployed-impact \
+  || { stamp "PIPELINE FAILED: $MIXTURE_TAG"; exit 1; }
+# The CV pass reuses the armC and armB folds from stage 2 for the paired comparison.
+$PY -u scripts/conflation/cv_bayes_calibration.py --out-dir "$EVAL" --arms C \
+  --tag-suffix _mixture --label-noise fixed_mixture --compare-tags armC,armB \
+  --parallel "$PARALLEL" $LIGHT >> "$LOGS/cv_mixture.log" 2>&1 \
+  || { stamp "PIPELINE FAILED: mixture CV"; exit 1; }
+$PY -u scripts/conflation/simulate_bayes_recovery.py --out-dir "$EVAL" --rounds 20 \
+  --misspecified-rounds 0 --label-noise fixed_mixture --tag-suffix _mixture \
+  --parallel "$COV_PARALLEL" $LIGHT > "$LOGS/coverage_mixture.log" 2>&1 \
+  || stamp "mixture coverage exited non-zero (see coverage_mixture.log)"
+stamp "STAGE 3b DONE"
 
 stamp "STAGE 4 START (report)"
 $PY -u scripts/conflation/report_bayes_calibration.py --out-dir "$EVAL" > "$LOGS/report.log" 2>&1 \
