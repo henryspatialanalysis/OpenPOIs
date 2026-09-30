@@ -265,3 +265,47 @@ Then bump `versions.calibration` in `config.yaml` to the new round.
    the published 40-bin lookup, built per fold. That is higher than the pre-2026-09
    curve-interpolated figure (pool 0.0787 against 0.0776 on 20260730), because
    publication in 40 bins costs some discrimination.
+
+## Design-weighted (Horvitz–Thompson) check: a standard output from October 2026
+
+Decided 2026-09-30; to be implemented in the October run (TODO.md has the full design).
+Every calibration fit will report, per segment:
+- the design-weighted gold rate per atom-aware bin (Hájek, w = 1/π_class, bins merged to
+  at least 20 gold rows, a coarse 2-D grid for matched), with its ESS and CI;
+- that rate against the deployed map's mean over the same rows. Bins where the map sits
+  more than ±1 SD (binomial SD of the bin's exists/checked ratio) from it are marked,
+  and bins beyond 2 SD are marked more strongly. About 32% of bins cross 1 SD by chance;
+- a calibration-in-the-large offset per segment;
+- a review document with graphics, `calibration/ht_review_<round>.pdf`.
+
+The check never fails a run (Nat, 2026-10-01). It exists for review.
+
+It is model-free, so it guards any deployed map against bias. The Bayesian prototype
+below showed both failure directions the check catches: arm A −0.035 and arm C +0.01 on
+matched.
+
+## Bayesian calibration prototype (under evaluation, not deployed)
+
+A Bayesian alternative to the v4 estimator was built and validated off the production
+path on round 20260730 (Phase 1, 2026-09-27 to 2026-09-30).
+- **Model.** Monotone quadratic-spline curves per segment (2-D and doubly monotone for
+  matched), fit in JAX / BlackJAX.
+- **Data layer.** The preferred "arm C" treats gold rows as labelled and non-gold rows
+  as fractional labels. The label is q = P(exists | segment, LLM verdict), the
+  design-weighted gold concordance rate, passed in as data.
+- **Result.** In 10-fold CV it ties the October production map: pooled relative Brier
+  0.996 [0.990, 1.002].
+- **Open issue.** Its matched-surface bands under-cover (0.75).
+
+Nothing in the deploy path reads it. The only production-code change is an optional
+`adaptation_kwargs` passthrough in `openpois.models.jax_core`, with the default
+unchanged.
+
+| What | Where |
+|---|---|
+| Design, equations, literature, results | [.claude/plans/bayesian-monotone-calibration.md](../plans/bayesian-monotone-calibration.md) |
+| Execution log, every decision and benchmark | [.claude/plans/bayesian-monotone-calibration-notes.md](../plans/bayesian-monotone-calibration-notes.md) |
+| Model code | `src/openpois/conflation/calibration_bayes.py` |
+| Scripts | `scripts/conflation/{fit,cv}_bayes_calibration.py`, `simulate_bayes_recovery.py`, `report_bayes_calibration.py`, `run_bayes_phase1.sh`, `bayes_calibration_common.py` |
+| Outputs | `~/data/openpois/conflation/20260730/calibration_eval_bayes_20260927/` (`fit_report.md`) |
+| Config | `conflation.calibration.pooled_rounds`: earlier validation rounds pooled into the prototype's fit and its silver-label rates, each under its own design (prototype only; production ignores it) |
