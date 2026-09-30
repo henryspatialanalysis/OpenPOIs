@@ -303,8 +303,9 @@ def deployed_impact(grid_draws: dict, production: dict, conflated_path: Path,
     """Posterior-mean curve on the population vs published and October values.
 
     Streams column-scoped (never a whole-file load). Rows whose
-    ``calibration_flag`` is set (shadow CD, manual pins, missing conf,
-    unnamed extrapolation) are skipped: they do not ride the plain curve.
+    ``calibration_flag`` is set (shadow CD, manual pins, unnamed
+    extrapolation, and ``missing_conf`` in releases before October 2026) are
+    skipped: they do not ride the plain curve.
     """
     mean_1d = {s: grid_draws[s].mean(axis = 0) for s in cb.ONE_D_SEGMENTS}
     surface = grid_draws["matched"].mean(axis = 0).reshape(len(GRID_2D),

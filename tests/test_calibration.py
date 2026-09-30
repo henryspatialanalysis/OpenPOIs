@@ -13,7 +13,8 @@ The load-bearing statistical properties, each mapped to the v4 writeup:
   production default is the interaction index with the bin-level band
   (2026-09-26 matched-segment writeup)
 - the deploy step's edge rules: shadow-matched rows keep the CD value, unnamed
-  OSM rows are flagged, missing-conf rows are flagged, row count preserved
+  OSM rows are flagged, an Overture score of 0.5 is an ordinary score, row
+  count preserved
 """
 
 from __future__ import annotations
@@ -437,8 +438,8 @@ def test_calibrate_frame_edge_rules():
         {
             "source": ["matched", "osm", "osm", "overture", "overture"],
             "osm_conf_mean": [0.9, 0.85, 0.85, np.nan, np.nan],
-            "overture_confidence": [0.9, np.nan, np.nan, 0.5, 0.95],
-            "conf_mean": [0.88, 0.85, 0.85, 0.07, 0.95],
+            "overture_confidence": [0.9, np.nan, np.nan, 0.5, 0.5],
+            "conf_mean": [0.88, 0.85, 0.85, 0.07, 0.5],
             "shadow_matched": [False, False, False, True, False],
             "name": ["Cafe", "Bar", None, "Shop", "Deli"],
         }
@@ -459,16 +460,15 @@ def test_calibrate_frame_edge_rules():
     # Named rows on a curve carry no flag, and the archive column is the input.
     assert out["calibration_flag"].iloc[0] is None
     assert out["conf_mean_uncalibrated"].tolist() == frame["conf_mean"].tolist()
-    # Overture row at the imputed sentinel is flagged (not shadowed here).
+    # An Overture row at exactly 0.5 is an ordinary provider score: no flag,
+    # and it rides the overture curve like any other score.
     assert out["calibration_flag"].iloc[4] is None
+    assert out["conf_mean"].iloc[4] == pytest.approx(0.60)
 
 
-def test_missing_conf_flag_fires_on_the_sentinel():
-    flags = calibration.calibration_flags(
-        np.array(["overture", "overture"]), np.array([0.5, 0.91])
-    )
-    assert flags[0] == calibration.FLAG_MISSING_CONF
-    assert flags[1] == ""
+def test_overture_score_of_one_half_is_not_flagged():
+    flags = calibration.calibration_flags(np.array(["overture", "overture"]))
+    assert flags.tolist() == ["", ""]
 
 
 def test_apply_calibration_preserves_rows_and_appends_columns(tmp_path):

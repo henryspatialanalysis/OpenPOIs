@@ -86,7 +86,6 @@ Three consequences worth knowing before you filter on it:
 |---|---|
 | *(null)* | Ordinary case: confidence read from the segment's calibration curve |
 | `shadow_cd` | Overture row demoted by OpenStreetMap-history change detection; keeps that value, no interval |
-| `missing_conf` | Overture supplied no confidence upstream; a placeholder was imputed before calibration |
 | `unnamed_extrapolated` | Unnamed feature, outside the validation sample; calibrated by extrapolation |
 
 ## Quickstart

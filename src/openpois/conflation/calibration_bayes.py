@@ -495,8 +495,9 @@ def invert_coefficients_2d(c_tilde: np.ndarray, hx: np.ndarray,
 def usable_rows(validation_rows: pd.DataFrame) -> pd.DataFrame:
     """Validation rows the calibration uses, rounded, in segment order.
 
-    Mirrors ``calibration_fit.fit_all_segments``: the missing-confidence
-    stratum and unknown verdicts are excluded.
+    Mirrors ``calibration_fit.fit_all_segments``: rows whose stratum is not a
+    segment (the retired ``overture_missing_conf`` of round 20260730) and
+    unknown verdicts are excluded.
     """
     rows = validation_rows[
         validation_rows["llm_verdict"].isin(cf.VERDICTS)

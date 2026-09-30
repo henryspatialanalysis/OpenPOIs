@@ -2181,10 +2181,10 @@ def fit_all_segments(validation_rows: pd.DataFrame, fit_config: FitConfig,
     """Fit every segment present in the handoff table.
 
     ``populations`` maps segment to a frame of the production population's
-    ``osm_score`` / ``overture_score`` columns (bin placement only). Rows in
-    the missing-confidence stratum are excluded: their Overture score is an
-    upstream placeholder, and including them would put a false mass spike at
-    0.5 in the curve.
+    ``osm_score`` / ``overture_score`` columns (bin placement only). Rows
+    whose ``stratum`` is not a segment are excluded: round 20260730 drew a
+    separate ``overture_missing_conf`` stratum (Overture scores of exactly 0.5,
+    then thought to be imputed; retired 2026-09-30) under its own design.
     """
     results = {}
     usable = validation_rows[

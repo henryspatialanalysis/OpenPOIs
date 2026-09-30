@@ -27,11 +27,12 @@ fixed-rate mixture test model), 6 and 7. The rest are run steps.
    round".
 5. **Re-test the matched interaction on the new round.** See "Re-test the matched
    interaction on the next validation round".
-6. **Fail early on Overture POIs without a confidence score** (Nat, 2026-09-30; replaces
-   the `overture_confidence_imputed` flag for October). A missing score should not be
-   possible and is probably an ingestion artefact, so the ingest should stop on it rather
-   than impute 0.5 in `merge.py`. Find where the nulls arise first.
-7. **Monotonicity check: merge sub-floor bins.** Natural to do alongside item 2.
+6. **Fail early on Overture POIs without a confidence score** (Nat, 2026-09-30; code
+   done the same day). None has ever occurred: every 0.5 was a real provider score. The
+   ingest now stops on a missing or out-of-range value, and `missing_conf` is retired
+   (see the closed item under **Upcoming**).
+7. **Monotonicity check: merge sub-floor bins.** Code done 2026-09-30
+   (`calibration_fit.merge_thin_bins`); first used by the October fit report.
 8. **Check conflation merge-phase memory headroom** (needed before November; the
    October peak RSS tells how urgent it is).
 9. **First run on openpois-01** (Nat, 2026-09-30). The national run moves to the AWS
@@ -117,8 +118,12 @@ fixed-rate mixture test model), 6 and 7. The rest are run steps.
 - [ ] **`publish.credentials_file` is now only referenced by the fallback path.** Added 2026-07-30. Harmless, but worth a look next time the publish config is touched: `upload_to_source_coop.py` still resolves and passes it even though the CLI normally wins.
 
 - [ ] **Condition the calibration curves on category, not score alone.** Added 2026-07-30. The biggest known weakness of the v4 calibration. The OSM curve tops out near 0.87 because ~22% of even the highest-scoring OSM records are LLM-unverifiable and only ~65% of those are real — and that ceiling is applied to every category equally, so stable institutional labels get pulled *down*: `Place of Worship` 0.92 → 0.85, with `School`, `Post Office` and `Public Safety` similar (see `calibration/shift_by_label.csv`). A long-established, frequently-edited church does not share an unnamed pitch's unverifiability profile, but a segment-marginal curve cannot tell them apart. Fix is to condition the class-mix term on a coarse category grouping, or model verifiability directly as a covariate. Needs more gold per cell than round 20260730 has; the 2,500-per-segment sample was balanced on category but not sized for per-category curves. See [docs/confidence-calibration.md](docs/confidence-calibration.md) and the 2026-07-30 v4 writeup §8. **Downstream evidence 2026-09-23** (wtm.ingest cutoff revisit, 233 POIs): category misfit removed 17 of 154 existing places, and Seattle's Overture-only 0.75–0.85 records were real only ~40–65% of the time against a national match — so a geography term (metro turnover) belongs in the same conditioning discussion as category.
-- [ ] **Emit `overture_confidence_imputed` from `merge.py`.** Added 2026-07-30. `merge.py` fills missing Overture confidence with `0.5` and writes that into the stored column, so a published `0.5` is ambiguous between "Overture said 0.5" and "Overture said nothing". Both the validator's frame builder and the calibration deploy step currently infer missingness from `isclose(x, 0.5)`, which is a guess. A boolean column alongside it removes the ambiguity and lets the missing-confidence stratum be identified exactly. Cheap; wants the next conflation run.
-- [ ] **Measure the missing-confidence stratum.** Added 2026-07-30. Round 20260730 dropped it from the dispatch queue, so its constant was withheld (3 gold labels against a floor of 30) and those rows ride the overture curve at their imputed 0.5 with `calibration_flag = 'missing_conf'`. Only ~1,048 Overture-only + 25 matched rows nationally, so the stakes are low, but it is the one published stratum with no direct evidence. Include it in the next validation round's draw.
+- [x] **Missing Overture confidence: premise retired.** Closed 2026-09-30; replaces the
+  "Emit `overture_confidence_imputed`" and "Measure the missing-confidence stratum"
+  items. No Overture snapshot has ever had a missing confidence, so every 0.5 was a
+  genuine provider score. The ingest now fails on a missing or out-of-range value,
+  `merge.py` no longer fills 0.5, and the `missing_conf` flag and the validator's
+  `overture_missing_conf` stratum are gone. See docs/confidence-calibration.md.
 - [ ] **Decide whether the standalone OSM dataset should carry a calibrated confidence.** Added 2026-07-30. `conf_mean` now means different things in the two published datasets: calibrated P(exists and open) in `conflated-parquet/`, but the raw uncalibrated turnover posterior in `osm-parquet/`. Documented in the published README, but it is a real trap for third parties. Calibrating the OSM dataset is not straightforward: our curves are per detection *segment*, and the standalone OSM file contains POIs that matched Overture, so applying the osm-only curve to them would be the wrong curve. Options are (a) leave as is with clearer naming, (b) rename the OSM column to something like `turnover_conf_mean`, which is a breaking schema change, or (c) join the conflation result to carry each POI's segment-correct calibrated value, which changes what the dataset *is*.
 - [ ] **Variance-based phase-2 allocation for the next validation round.** Added 2026-07-30. Round 20260730's audit allocation was retrofitted (a census plus a step-C top-up) rather than designed. The v4 writeup §7.2 gives the rule: allocate gold ∝ `N_v·√(q_v(1−q_v))` across LLM-verdict classes, using this round's fitted class rates. Also retire the superseded `audit:` knobs in the validator config (`n_enriched`, `n_random_kappa`, `n_unverifiable_phone`), which still encode the pre-v4 enrichment logic.
 - [ ] **Speed up the streamed label partitioning.** Added 2026-07-30. `write_label_partitioned_from_parquet` does one filtered scan of the source per partition — 102 scans of a 2.5 GB file for the conflated tree — because the file is not sorted by `shared_label`, so row-group statistics prune nothing. It is memory-safe (the point of the change) but I/O-bound. Sorting the canonical parquet by `shared_label` before partitioning, or writing a sorted intermediate, would let pyarrow prune row groups and cut this to roughly a single pass. Not urgent; the step is minutes, not hours.

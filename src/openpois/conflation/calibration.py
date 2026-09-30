@@ -23,8 +23,8 @@ Per-segment curve index:
                  ``surface`` mode -- no index at all but a 2-D cell lookup.
                  No fixed 0.7 downweight and no 0.588/0.412 blend.
 ``osm``          ``osm_conf_mean`` (the OSM turnover posterior mean)
-``overture``     ``overture_confidence`` (post-imputation; exactly 0.5 marks
-                 the upstream missing-confidence imputation)
+``overture``     ``overture_confidence`` (the provider score; never missing,
+                 which the ingest enforces)
 ===============  ==========================================================
 
 Edge rules, each recorded in ``calibration_flag``:
@@ -34,10 +34,6 @@ Edge rules, each recorded in ``calibration_flag``:
     indexed on the un-penalized Overture score, so applying it would silently
     undo the demotion; CD is a separate evidence channel with its own
     validation.
-``missing_conf``
-    Overture rows carrying the imputed 0.5. The stratum's own constant was
-    withheld this round (three gold labels), so they ride the overture curve at
-    0.5 and are flagged.
 ``unnamed_extrapolated``
     Unnamed POIs, excluded from the validation frame because the verification
     instrument needs a name to search on. Calibrated through the osm curve as
@@ -61,10 +57,8 @@ from openpois.conflation.calibration_fit import (POOLED_SEGMENTS,
                                                  index_score)
 
 SEGMENTS = ("matched", "osm", "overture")
-MISSING_CONF_SENTINEL = 0.5
 
 FLAG_SHADOW = "shadow_cd"
-FLAG_MISSING_CONF = "missing_conf"
 FLAG_UNNAMED = "unnamed_extrapolated"
 
 _NEW_FIELD_SPECS = [
@@ -155,18 +149,13 @@ def curve_index(source: np.ndarray, osm_conf_mean: np.ndarray,
     return scores
 
 
-def calibration_flags(source: np.ndarray, overture_confidence: np.ndarray,
-                      shadow_matched: np.ndarray = None,
+def calibration_flags(source: np.ndarray, shadow_matched: np.ndarray = None,
                       name: np.ndarray = None) -> np.ndarray:
     """Per-row edge-rule flag (empty string where the plain curve applies)."""
     flags = np.full(len(source), "", dtype = object)
     if name is not None:
         unnamed = pd.isna(name) | (pd.Series(name).astype(str).str.len() == 0)
         flags[unnamed.to_numpy() & (source == "osm")] = FLAG_UNNAMED
-    is_overture = source == "overture"
-    flags[is_overture & (overture_confidence == MISSING_CONF_SENTINEL)] = (
-        FLAG_MISSING_CONF
-    )
     if shadow_matched is not None:
         flags[np.asarray(shadow_matched, dtype = bool)] = FLAG_SHADOW
     return flags
@@ -224,7 +213,6 @@ def calibrate_frame(frame: pd.DataFrame, curves: dict,
                              ).to_numpy(dtype = float)
     ov_conf = pd.to_numeric(frame["overture_confidence"], errors = "coerce"
                             ).to_numpy(dtype = float)
-    flag_ov_conf = ov_conf
     for segment, decimals in (score_decimals or {}).items():
         if decimals is None:
             continue
@@ -246,8 +234,7 @@ def calibrate_frame(frame: pd.DataFrame, curves: dict,
         pool_params = (pool_params or {}).get("matched"),
         index_mode = (index_modes or {}).get("matched", "pool"),
     )
-    flags = calibration_flags(source, flag_ov_conf, shadow_matched = shadow,
-                              name = names)
+    flags = calibration_flags(source, shadow_matched = shadow, name = names)
 
     conf_mean = np.full(len(frame), np.nan, dtype = float)
     conf_lower = np.full(len(frame), np.nan, dtype = float)

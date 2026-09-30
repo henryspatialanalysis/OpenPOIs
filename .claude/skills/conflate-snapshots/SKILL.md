@@ -150,7 +150,7 @@ Publishing from the remote: after Nat's local `source-coop login`, run
    `fit_calibration.py` fails fast rather than shipping uncalibrated data.
 
    Outputs:
-   - `conflated.parquet` — canonical output that downstream steps consume (CD + calibration + manual overrides applied). `conf_mean`/`conf_lower`/`conf_upper` are calibrated P(exists and open); `conf_mean_uncalibrated` archives the post-CD value; `calibration_flag` records edge rules (`shadow_cd`, `missing_conf`, `unnamed_extrapolated`, `manual_exclude`, `manual_include`).
+   - `conflated.parquet` — canonical output that downstream steps consume (CD + calibration + manual overrides applied). `conf_mean`/`conf_lower`/`conf_upper` are calibrated P(exists and open); `conf_mean_uncalibrated` archives the post-CD value; `calibration_flag` records edge rules (`shadow_cd`, `unnamed_extrapolated`, `manual_exclude`, `manual_include`; `missing_conf` was retired in October 2026).
    - `conflated_cd.parquet` — post-CD, pre-calibration.
    - `conflated_baseline.parquet` — neither CD nor calibration; kept on disk for spot-checks.
    - `calibration/` — fitted curves, per-segment metadata, and `fit_report.md`.

@@ -20,7 +20,7 @@ segment's fitted curve:
 |---|---|
 | `matched` | **interaction index**: a monotone bilinear function of the two scores' rescaled logits (parameters under `index` in the curve metadata) |
 | `osm` | `osm_conf_mean` (OSM turnover posterior mean) |
-| `overture` | `overture_confidence` (post-imputation) |
+| `overture` | `overture_confidence` (the provider score; never missing) |
 
 Columns written: `conf_mean` / `conf_lower` / `conf_upper` are **overwritten** with the
 calibrated triple (so the PMTiles allowlist, the site, and the published schema need no
@@ -130,12 +130,16 @@ Se/Sp are reported as diagnostics only.
   'shadow_cd'`, interval NaN). The overture curve is indexed on `overture_confidence`,
   which CD never touches, so running the curve on them would silently discard the
   demotion. They also do not influence the lookup's bin edges.
-- **`overture_confidence == 0.5` is ambiguous** in the published data: `merge.py`
-  imputes 0.5 for missing Overture confidence, so a stored 0.5 could be either. The
-  stratum's own constant was withheld this round (3 gold labels, floor 30), so those
-  rows ride the overture curve at 0.5 with `calibration_flag = 'missing_conf'`. Only
-  ~1,048 Overture-only and 25 matched rows are affected. Fixing this upstream wants an
-  `overture_confidence_imputed` boolean out of `merge.py`.
+- **An Overture score of exactly 0.5 is a real score** (retired `missing_conf`,
+  2026-09-30). Releases before October 2026 flagged these rows `missing_conf`, on the
+  belief that `merge.py` had imputed 0.5 for a missing confidence. No Overture snapshot
+  from 2026-06 to 2026-08 ever had a missing value (0 nulls; 0, 1,178 and 2,767 rows at
+  exactly 0.5 in the June, July and August releases), so every 0.5 was Overture's own.
+  The ingest now fails on a missing or out-of-range confidence
+  (`openpois.io.overture.check_overture_confidence`, run after the download, at
+  conflation load and in `merge.py`), and 0.5 rows ride the overture curve unflagged.
+  Round 20260730's 4 `overture_missing_conf` handoff rows stay out of the fit, since
+  they were drawn under their own design.
 - **Unnamed POIs are an extrapolation.** They are excluded from the validation frame
   (the verifier needs a name to search on), and are calibrated through the osm curve
   with `calibration_flag = 'unnamed_extrapolated'`.

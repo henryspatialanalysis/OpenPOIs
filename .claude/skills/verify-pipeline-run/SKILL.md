@@ -134,8 +134,9 @@ each table means. Then check the deployed output:
   must never yield a lower calibrated value. Bin the index and check for
   inversions; there should be none.
 - **Flag counts are plausible**: `shadow_cd` should equal the change-detection
-  row count exactly, `unnamed_extrapolated` the unnamed-OSM count, and
-  `missing_conf` the count of Overture rows at exactly 0.5.
+  row count exactly and `unnamed_extrapolated` the unnamed-OSM count. From
+  October 2026 there is no `missing_conf` flag: an Overture score of 0.5 is an
+  ordinary score, and a missing one fails the ingest.
 - **Shadow rows untouched**: every `shadow_matched` row must satisfy
   `conf_mean = conf_mean_uncalibrated`, and shadow rows are the **only** rows
   where `conf_lower > conf_mean` — CD demotes the mean and leaves the interval

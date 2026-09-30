@@ -4,6 +4,14 @@
 
 ### Methods changes
 
+- **An Overture confidence of exactly 0.5 is an ordinary score.** Earlier
+  releases flagged these rows `calibration_flag = 'missing_conf'`, on the
+  belief that conflation had imputed 0.5 for a missing provider confidence.
+  No Overture release we have ingested has had a missing confidence (0, 1,178
+  and 2,767 rows at exactly 0.5 in the June, July and August 2026 releases,
+  all Overture's own values), so the flag is gone and those rows are
+  calibrated like any other Overture row. The ingest now stops on a missing or
+  out-of-range confidence instead of filling a placeholder.
 - **Monthly ghost history rolls forward from daily diffs.** When the turnover
   model is not refit, `download.osm.history_mode: incremental` (now the
   default) builds `osm_data` by rolling last month's history parquets forward
