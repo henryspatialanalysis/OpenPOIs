@@ -453,9 +453,9 @@ Sp fixed from the gold instead of estimated.
   through $p_i$: an "exists" verdict is less likely to be right at a low score than at a
   high one.
 - The curvature is $-p_i(1-p_i) + r_i(1-r_i)$. By the missing-information principle
-  (Orchard & Woodbury, 1972; Louis, 1982), a silver row's information is a gold row's
-  minus the variance of its unknown label. Uncertain silver rows count for less, and the
-  bands widen by exactly that amount.
+  (Orchard & Woodbury, 1972; Louis, 1982, eqs. 3.2–3.3), a silver row's information is
+  a gold row's minus the variance of its unknown label. Uncertain silver rows count for
+  less, and the bands widen by exactly that amount.
 - It assumes non-differential error: P(v | y) does not depend on the score given y.
   Arm A estimated such a slope; dropping it (β ≡ 0) did not change arm A's bias
   (decision 13).
@@ -1364,8 +1364,7 @@ the library full text or the publisher record.
   99(466), 546–556. https://doi.org/10.1198/016214504000000467 [EZILDGB4]
 - Louis, T. A. (1982). Finding the observed information matrix when using the EM
   algorithm. *Journal of the Royal Statistical Society, Series B (Methodological)*,
-  44(2), 226–233. https://doi.org/10.1111/j.2517-6161.1982.tb01203.x [not in library;
-  Nat adding, 2026-10-01]
+  44(2), 226–233. https://doi.org/10.1111/j.2517-6161.1982.tb01203.x [U2LXHF6H]
 - McCullagh, P., & Nelder, J. A. (1989). *Generalized linear models* (2nd ed.).
   Chapman & Hall. https://doi.org/10.1007/978-1-4899-3242-6 [not in library]
 - Meyer, M. C. (2018). A framework for estimation and inference in generalized additive
@@ -1374,8 +1373,7 @@ the library full text or the publisher record.
 - Orchard, T., & Woodbury, M. A. (1972). A missing information principle: Theory and
   applications. In L. M. Le Cam, J. Neyman, & E. L. Scott (Eds.), *Proceedings of the
   Sixth Berkeley Symposium on Mathematical Statistics and Probability* (Vol. 1,
-  pp. 697–715). University of California Press. [not in library; Nat adding,
-  2026-10-01]
+  pp. 697–715). University of California Press. [KDGF5K5J]
 - Pya, N., & Wood, S. N. (2015). Shape constrained additive models. *Statistics and
   Computing*, 25(3), 543–559. https://doi.org/10.1007/s11222-013-9448-7 [BQ9DMLKA]
 - Rubin, D. B. (1976). Inference and missing data. *Biometrika*, 63(3), 581–592.

@@ -425,7 +425,8 @@ each section.
     - **q by score:** not varied (design doc decision 25).
     - **HT flag reference:** the design-weighted ratio with SD from the Kish ESS, the
       raw ratio alongside, and the chance baselines (design doc decision 26).
-    - **Library:** Nat is adding Louis (1982) and Orchard & Woodbury (1972).
+    - **Library:** Nat added Louis (1982) [U2LXHF6H] and Orchard & Woodbury (1972)
+      [KDGF5K5J]; the design doc's references carry the IDs.
 
 ## Questions for Nat: status
 
