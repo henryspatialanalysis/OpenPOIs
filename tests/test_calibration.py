@@ -1120,6 +1120,44 @@ def test_atom_aware_edges_and_monotonicity_table():
     assert np.all(np.isnan(table["drop_z"].to_numpy()[:-1][pair_thin]))
 
 
+def test_merge_thin_bins_folds_a_sub_floor_bin_into_its_neighbour():
+    # Round 20260730's shape: a one-gold-row bin just below an atom.
+    edges = np.array([0.0, 0.5, 0.91967, 0.919912, 0.919913, 1.0])
+    values = np.concatenate([np.full(20, 0.3), [0.919], np.full(30, 0.919912),
+                             np.full(20, 0.95)])
+    gold = np.ones(len(values), dtype = bool)
+    merged = calibration_fit.merge_thin_bins(edges, values, gold, min_gold = 5)
+    # The thin bin [0.5, 0.91967) had no gold; [0.91967, 0.919912) one row.
+    # Both fold into the non-atom neighbour below, and the atom stays isolated.
+    assert 0.919912 in merged and 0.919913 in merged
+    bins = calibration_fit._bin_index(np.round(values, 6), merged)
+    assert np.bincount(bins, minlength = len(merged) - 1).min() >= 5
+
+
+def test_merge_thin_bins_leaves_an_axis_without_enough_gold_alone():
+    edges = np.array([0.0, 0.5, 1.0])
+    gold = np.array([True, False, True])
+    out = calibration_fit.merge_thin_bins(edges, [0.2, 0.6, 0.7], gold,
+                                          min_gold = 5)
+    assert out.tolist() == edges.tolist()
+
+
+def test_merged_monotonicity_table_reports_every_interior_z():
+    rng = np.random.default_rng(17)
+    overture = np.concatenate([np.full(900, 0.919912),
+                               rng.uniform(0.3, 1.0, 2100)])
+    rows = _matched_rows(n = 3000, seed = 17, overture = overture)
+    edges = calibration_fit.merge_thin_bins(
+        calibration_fit.atom_aware_edges(rows["overture_score"], 10),
+        rows["overture_score"], rows["gold"], 5,
+    )
+    table = calibration_fit.axis_monotonicity_table(
+        rows, "overture_score", edges, _fit_config(), reps = 20, min_gold = 5
+    )
+    assert (table["n_gold"] >= 5).all()
+    assert np.isfinite(table["drop_z"].iloc[:-1]).all()
+
+
 def test_build_lookup_bins_edge_values_like_deploy():
     """A bin's published value is the mean over exactly the rows deploy
     sends to it -- including rows sitting ON an interior edge (atoms)."""

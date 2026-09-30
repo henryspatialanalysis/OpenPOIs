@@ -2258,6 +2258,44 @@ def atom_aware_edges(values, n_bins: int, atom_share: float = 0.05
     return np.unique(np.round(edges, SCORE_DECIMALS + 2))
 
 
+def merge_thin_bins(edges: np.ndarray, values, gold,
+                    min_gold: int) -> np.ndarray:
+    """Remove interior edges until every bin holds at least ``min_gold`` gold.
+
+    The thinnest bin merges into a neighbour: the one with fewer gold rows, so
+    merged bins stay balanced, or the only one at an end. An atom's own bin
+    (one rounding step wide, from ``atom_aware_edges``) is merged into only
+    when the thin bin has no other neighbour, so atoms stay isolated where the
+    gold allows. A thin bin gets no reversal z in ``axis_monotonicity_table``,
+    so merging it lets a reversal across it be tested instead of hidden (a
+    one-row bin at 0.91967-0.919912 hid the overture segment's reversal on
+    round 20260730). Returns ``edges`` unchanged when the axis as a whole has
+    fewer than ``min_gold`` gold rows.
+    """
+    edges = np.asarray(edges, dtype = float)
+    values = np.round(np.asarray(values, dtype = float), SCORE_DECIMALS)
+    gold = np.asarray(gold, dtype = bool)
+    if gold.sum() < min_gold:
+        return edges
+    step = 10.0 ** -SCORE_DECIMALS
+
+    def is_atom_bin(b: int) -> bool:
+        return bool(np.isclose(edges[b + 1] - edges[b], step))
+
+    while len(edges) > 2:
+        counts = np.bincount(_bin_index(values[gold], edges),
+                             minlength = len(edges) - 1)
+        thin = int(np.argmin(counts))
+        if counts[thin] >= min_gold:
+            break
+        neighbours = [b for b in (thin - 1, thin + 1) if 0 <= b < len(counts)]
+        choices = [b for b in neighbours if not is_atom_bin(b)] or neighbours
+        target = min(choices, key = lambda b: counts[b])
+        # Bins i and i + 1 share edges[i + 1].
+        edges = np.delete(edges, max(thin, target))
+    return edges
+
+
 def axis_monotonicity_table(rows: pd.DataFrame, column: str,
                             edges: np.ndarray, fit_config: FitConfig,
                             reps: int = 200,

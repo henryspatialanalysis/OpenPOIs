@@ -106,7 +106,8 @@ fixed-rate mixture test model), 6 and 7. The rest are run steps.
   - **Candidates.** Local flexibility near the ceiling (more knots in the high-Overture band, or adaptive smoothing variances); a credible level recalibrated by simulation (the coverage study as the calibration map); a coarser matched grid. A looser τ_M alone does not help (S6_taumatched4 moved the surface 0.003).
   - **Re-test.** `simulate_bayes_recovery.py` in_family.
   - **Refs.** Design doc §12.1; execution log decision 20.
-- [ ] **Monotonicity check: merge sub-floor bins instead of skipping them.** Added 2026-09-26. The fit report's per-axis table gives no z for a pair involving a bin with < 5 gold. On round 20260730 a one-row bin (0.91967–0.919912) hides the overture segment's v4 §4.6 reversal. Merge thin bins into a neighbour in `calibration_fit.atom_aware_edges` / `axis_monotonicity_table`.
+- [x] **Monotonicity check: merge sub-floor bins instead of skipping them.** Done
+  2026-09-30: `calibration_fit.merge_thin_bins`, called by `fit_calibration.py`. Added 2026-09-26. The fit report's per-axis table gives no z for a pair involving a bin with < 5 gold. On round 20260730 a one-row bin (0.91967–0.919912) hides the overture segment's v4 §4.6 reversal. Merge thin bins into a neighbour in `calibration_fit.atom_aware_edges` / `axis_monotonicity_table`.
 - [ ] **Re-test the matched interaction on the next validation round.** Added 2026-09-26. The October switch to `interaction` rests on a consistent-sign but small gain (≈ −0.0003 Brier; interval excluding zero in 6/20 seeds). More matched gold with `overture_confidence` < 0.92 (currently 91 of 444) would settle whether the substitutive interaction is real. Oversample that column in the next draw and re-run `compare_matched_index.py`.
 
 - [ ] **Conflation merge-phase memory headroom.** Added 2026-09-02. The 20260902 run

@@ -54,6 +54,10 @@ def _suffixed_path(base_path: Path, suffix: str | None) -> Path:
     """Insert ``suffix`` before the parquet extension."""
     if not suffix:
         return base_path
+# Gold rows a monotonicity-table bin needs before its reversal z is reported;
+# thinner bins are merged into a neighbour rather than skipped.
+MONOTONICITY_MIN_GOLD = 5
+
     return base_path.with_name(f"{base_path.stem}_{suffix}{base_path.suffix}")
 
 
@@ -109,7 +113,11 @@ def population_by_segment(conflated_path: Path,
 
 def monotonicity_tables(validation_rows: pd.DataFrame,
                         fit_config: calibration_fit.FitConfig) -> dict:
-    """Per-axis atom-aware monotonicity tables for every segment."""
+    """Per-axis atom-aware monotonicity tables for every segment.
+
+    Bins with fewer than ``MONOTONICITY_MIN_GOLD`` gold rows are merged into a
+    neighbour first, so every adjacent pair gets a reversal z.
+    """
     usable = validation_rows[
         validation_rows["llm_verdict"].isin(calibration_fit.VERDICTS)
         & validation_rows["stratum"].isin(calibration_fit.SEGMENTS)
@@ -123,7 +131,10 @@ def monotonicity_tables(validation_rows: pd.DataFrame,
         if len(rows) < 50:
             continue
         for column, n_bins in specs:
-            edges = calibration_fit.atom_aware_edges(rows[column], n_bins)
+            edges = calibration_fit.merge_thin_bins(
+                calibration_fit.atom_aware_edges(rows[column], n_bins),
+                rows[column], rows["gold"], MONOTONICITY_MIN_GOLD,
+            )
             out[(segment, column)] = calibration_fit.axis_monotonicity_table(
                 rows, column, edges, fit_config, segment = segment,
             )
@@ -131,6 +142,7 @@ def monotonicity_tables(validation_rows: pd.DataFrame,
 
 
 def write_fit_report(out_dir: Path, results: dict, handoff_metadata: dict,
+                min_gold = MONOTONICITY_MIN_GOLD,
                      fit_config: calibration_fit.FitConfig,
                      monotonicity: dict = None) -> Path:
     """Human-readable fit diagnostics beside the curve artifacts."""

@@ -168,10 +168,11 @@ Se/Sp are reported as diagnostics only.
   on an edge. The overture curve shifted at its first refit after the fix.
 - **Standing per-axis monotonicity check.** `fit_report.md` has a "Monotonicity by axis"
   table per segment: atom-aware bins, difference-estimator and HT rates, bootstrap SEs
-  and reversal z-scores. Bins with fewer than 5 gold rows report no z, so a one-row bin
-  can hide a real reversal behind it. The overture segment's 0.85–0.92 → 0.9199-atom
-  drop (v4 §4.6) is masked this way on round 20260730. Read the DE column, not only
-  the z.
+  and reversal z-scores. Since 2026-09-30 a bin with fewer than 5 gold rows is merged
+  into a neighbour first (`calibration_fit.merge_thin_bins`; an atom keeps its own bin
+  unless the thin bin has no other neighbour), so every adjacent pair gets a z. Before
+  that, thin bins were skipped, and a one-row bin at 0.91967–0.919912 hid the overture
+  segment's 0.85–0.92 → 0.9199-atom drop (v4 §4.6) on round 20260730.
 - **Calibration error is a binned gap, not a Brier score.** The debiased estimator
   subtracts each bin's own sampling variance (Kumar, Liang & Ma 2019). Subtracting
   per-observation Bernoulli variance instead drives it to exactly zero — a bug that
