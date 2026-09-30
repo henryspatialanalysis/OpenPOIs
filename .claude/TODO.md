@@ -8,6 +8,9 @@ Added 2026-09-30. The run skills (full-data-pull, conflate-snapshots, verify-pip
 point here: at the start of the October run, list these items to Nat and confirm which
 go in before any step runs. Details are in the linked items under **Upcoming**.
 
+**Raised 2026-09-30.** Code going into the pre-run PR to main: items 2, 4 (the
+fixed-rate mixture test model), 6 and 7. The rest are run steps.
+
 1. **Refit calibration once (method change).** Reuse is off even on a drift-gate pass.
    See "October 2026 run: refit calibration once".
 2. **Implement the standard Horvitz–Thompson check**: a PDF review document with
@@ -24,11 +27,18 @@ go in before any step runs. Details are in the linked items under **Upcoming**.
    round".
 5. **Re-test the matched interaction on the new round.** See "Re-test the matched
    interaction on the next validation round".
-6. **Emit `overture_confidence_imputed` from `merge.py`.** It wants the next conflation
-   run.
+6. **Fail early on Overture POIs without a confidence score** (Nat, 2026-09-30; replaces
+   the `overture_confidence_imputed` flag for October). A missing score should not be
+   possible and is probably an ingestion artefact, so the ingest should stop on it rather
+   than impute 0.5 in `merge.py`. Find where the nulls arise first.
 7. **Monotonicity check: merge sub-floor bins.** Natural to do alongside item 2.
 8. **Check conflation merge-phase memory headroom** (needed before November; the
    October peak RSS tells how urgent it is).
+9. **First run on openpois-01** (Nat, 2026-09-30). The national run moves to the AWS
+   instance, driven by `scripts/remote/openpois-remote.sh`; October holds the publish for
+   the new validation round (item 3). Procedure: `.claude/plans/remote-monthly-run.md` §4.
+   Before the national run, do the one-time `setup` / `sync main` / `seed` and a
+   `make conflate TEST=1` smoke run that exercises `run`, `watch` and `pull`.
 
 **Before November** (not October):
 - **The matched-surface band under-coverage in the Bayesian model** (Nat: skip in
@@ -37,6 +47,13 @@ go in before any step runs. Details are in the linked items under **Upcoming**.
 - **Urbanicity in the calibration model** (Nat, 2026-09-27: reconsider in November).
 
 ## In progress
+
+- [ ] **No manual-overrides CSV exists yet.** Added 2026-09-30. `versions.manual_overrides:
+  "20260924"` points at `~/data/openpois/manual_overrides/20260924/manual_overrides.csv`,
+  which is on neither the laptop nor openpois-01, so `apply_manual_overrides` has been a
+  logged no-op on every run (as designed for a missing file). Find out where the Close
+  triage lane writes its rows, then place the file there or point
+  `conflation.manual_overrides.path` at it, before the first run that should apply pins.
 
 - [ ] **Stale download-test mocks — 5 failures.** Added 2026-07-25. `tests/test_osm_history_pbf.py` (3) and `tests/test_osm_snapshot.py` (2) fail because their mocks predate the "Resilient parallel download" refactor (5024b5b): two patch the removed `openpois.io.osm_history_pbf._load_cookie_session`; one mocks the osmium filter step without creating the intermediate `*-tagfilt` file the code now reads; two mock the request layer the snapshot downloader no longer goes through (they hit the stub URL for real and 404). Pre-existing — surfaced while validating the 2026-07-24 conflation spill fix, unrelated to it. Fix is to update the mocks/fixtures to the current download API.
 
