@@ -68,6 +68,22 @@ confidence, unnamed POIs) in a ``calibration_flag`` column.
    :undoc-members:
    :show-inheritance:
 
+openpois.conflation.calibration_bayes (experimental)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A Bayesian alternative to the calibration estimator, under evaluation and not used in
+published data. Each segment gets a monotone, range-bounded quadratic B-spline of its
+score(s); the matched segment's surface is doubly monotone without constraining the
+sign of the interaction. The curves are fit in JAX with BlackJAX NUTS. The preferred
+data layer treats human-labeled rows as labelled, and the remaining rows' LLM verdicts
+as fractional labels whose accuracy, P(exists | segment, verdict), comes from the
+design-weighted human labels and is passed in as data.
+
+.. automodule:: openpois.conflation.calibration_bayes
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 openpois.conflation.taxonomy
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
