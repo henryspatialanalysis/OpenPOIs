@@ -54,7 +54,19 @@ LOGS=$EVAL/logs
 # Main fits get 1,000 + 1,000; CV / coverage / sensitivity fits need posterior
 # means and 95% bands only (execution log, decision 8). MAIN may be overridden
 # for a short local check, e.g. MAIN="--warmup 200 --samples 200 --chains 2".
-MAIN=${MAIN:-"--warmup 1000 --samples 1000 --chains 4"}
+# conflation.calibration.bayes: sampler settings for the production fits.
+bayes_setting() {  # bayes_setting <key> [segment]: one value, or empty
+  REPO="$REPO" $PY - "$@" <<'PYEOF'
+import os, sys, yaml
+config = os.path.join(os.path.expanduser(os.environ["REPO"]), "config.yaml")
+b = yaml.safe_load(open(config))["conflation"]["calibration"].get("bayes", {})
+value = b.get(sys.argv[1])
+if isinstance(value, dict):
+    value = value.get(sys.argv[2]) if len(sys.argv) > 2 else None
+print("" if value is None else value)
+PYEOF
+}
+MAIN=${MAIN:-"--warmup $(bayes_setting warmup) --samples $(bayes_setting samples) --chains $(bayes_setting chains)"}
 LIGHT="--warmup 600 --samples 400 --chains 4"
 PARALLEL=${PARALLEL:-5}
 # Flags of the arm A variant carried into CV (set from the structure tests).
@@ -91,9 +103,10 @@ if [ "$MODE" = mixture ]; then
   stamp "MODE mixture: one fixed-rate mixture fit per segment, then the report ($EVAL)"
   declare -A PIDS
   for s in $SEGMENTS; do
+    ta=$(bayes_setting target_accept "$s")
     ( export OMP_NUM_THREADS=2
       fit "mixture_$s" --arm C --label-noise fixed_mixture --segments "$s" $MAIN \
-        --deployed-impact ) &
+        ${ta:+--target-accept "$ta"} --deployed-impact ) &
     PIDS[$s]=$!
   done
   FAILED=""

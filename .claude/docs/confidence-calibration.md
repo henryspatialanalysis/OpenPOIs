@@ -55,6 +55,13 @@ Decided by Nat on 2026-09-30, first deployed in the October 2026 run.
   passes_acceptance`: R̂ ≤ 1.01, bulk and tail ESS ≥ 400, no divergences, E-BFMI ≥ 0.3,
   no tree-depth saturation, and the same R̂ and ESS on the curve values). If any segment
   fails, `export_bayes_curves.py` writes nothing deployable and the run stops for Nat.
+- **Sampler settings** (`conflation.calibration.bayes`): 1,000 warmup and 1,000 samples
+  × 4 chains, with a per-segment NUTS `target_accept`. Fit alone, each segment adapts a
+  larger step size than the matched surface imposed in the joint fit. On the July
+  round at the default 0.80, OSM had 19 divergences and matched 12 (plus R̂ 1.014 and
+  tail ESS 311), failing the rule; Overture passed. At 0.99 OSM (4 min) and matched
+  (29 min, sharing the CPU) pass with no divergences; 2,000 + 2,000 draws at 0.95
+  still left one matched divergence (2026-10-01 tuning on openpois-01).
 - **Published values.** `conf_mean` is the posterior mean of P(exists) at the POI's
   score(s); `conf_lower` / `conf_upper` are the pointwise 2.5% and 97.5% posterior
   quantiles. **The matched band under-covers** (about 0.75 of a nominal 95% band in the
