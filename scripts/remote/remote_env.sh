@@ -22,9 +22,11 @@ source ~/miniforge3/etc/profile.d/conda.sh
 conda activate openpois 2> /dev/null || true
 # The env's libstdc++ must win over the system one: Ubuntu 22.04's stops at
 # CXXABI_1.3.13, and scipy's compiled extensions need 1.3.15. Whichever copy an
-# earlier import loads first is the one every later extension gets.
+# earlier import loads first is the one every later extension gets. Preload only
+# that library: putting the env's lib/ on LD_LIBRARY_PATH also swaps in its
+# OpenSSL, which breaks the system ssh that git fetch uses.
 if [ "${CONDA_DEFAULT_ENV:-}" = openpois ]; then
-    export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export LD_PRELOAD="$CONDA_PREFIX/lib/libstdc++.so.6"
 fi
 
 # GitHub access for `git fetch` without the login shell's agent.
