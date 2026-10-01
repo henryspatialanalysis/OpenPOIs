@@ -519,9 +519,10 @@ def _labels_on_label(rows):
 
 
 def test_fixed_mixture_with_exact_rates_is_the_bernoulli_on_the_label(rows):
-    """Se = Sp = 1: the mixture (M15c) is the plain Bernoulli on the label."""
+    """Exact verdicts: the mixture (M15c) is the plain Bernoulli on the label."""
     spec = cb.ModelSpec(arm = "C", label_noise = "fixed_mixture")
-    exact = {s: {"se": 1.0, "sp": 1.0} for s in cb.SEGMENT_ORDER}
+    exact = {s: {"e1": 1.0, "g1": 0.0, "e0": 0.0, "g0": 1.0}
+             for s in cb.SEGMENT_ORDER}
     prepared = cb.prepare_data(rows, spec, forward_rates = exact)
     params = _random_params(prepared, np.random.default_rng(41), scale = 0.5)
     # Se and Sp are data: the parameters are the fractional arm C's.
@@ -538,7 +539,7 @@ def test_fixed_mixture_with_exact_rates_is_the_bernoulli_on_the_label(rows):
 
 
 def _numpy_mixture(params, prepared):
-    """Independent numpy (M15c) at fixed Se, Sp: per-row log-lik and d/dF.
+    """Independent numpy (M15c) at fixed P(verdict | y): log-lik and d/dF.
 
     The derivative in F is y - p for a gold row and r - p for a silver row,
     where r is the row's posterior P(exists | verdict) (design doc §3.5c).
@@ -551,15 +552,16 @@ def _numpy_mixture(params, prepared):
         seg = data[segment]
         f = np.asarray(logits[segment], dtype = float)
         p = expit(f)
-        se, sp = float(seg["silver_se"]), float(seg["silver_sp"])
+        e1, g1, e0, g0 = (float(seg[f"silver_{k}"])
+                          for k in ("e1", "g1", "e0", "g0"))
         gold, y, label = seg["gold"] > 0.5, seg["y"], seg["silver_label"]
-        says_exists = p * se + (1 - p) * (1 - sp)
-        says_gone = p * (1 - se) + (1 - p) * sp
+        says_exists = p * e1 + (1 - p) * e0
+        says_gone = p * g1 + (1 - p) * g0
         loglik = np.where(
             gold, y * log_expit(f) + (1 - y) * log_expit(-f),
             np.where(label == 1, np.log(says_exists),
                      np.where(label == 0, np.log(says_gone), 0.0)))
-        r = np.where(label == 1, p * se / says_exists, p * (1 - se) / says_gone)
+        r = np.where(label == 1, p * e1 / says_exists, p * g1 / says_gone)
         d_f = np.where(gold, y - p, np.where(label >= 0, r - p, 0.0))
         out[segment] = (loglik, d_f)
     return out
@@ -570,8 +572,11 @@ def test_fixed_mixture_matches_numpy_reference_value_and_gradient():
     spec = cb.ModelSpec(arm = "C", label_noise = "fixed_mixture")
     prepared = cb.prepare_data(rows, spec)
     for s in cb.SEGMENT_ORDER:
-        assert 0.5 < float(prepared.segments[s]["silver_se"]) < 1.0
-        assert 0.5 < float(prepared.segments[s]["silver_sp"]) < 1.0
+        seg = prepared.segments[s]
+        assert 0.5 < float(seg["silver_e1"]) < 1.0
+        assert 0.5 < float(seg["silver_g0"]) < 1.0
+        assert float(seg["silver_e1"]) + float(seg["silver_g1"]) < 1.0
+        assert float(seg["silver_e0"]) + float(seg["silver_g0"]) < 1.0
     params = _random_params(prepared, np.random.default_rng(44), scale = 0.4)
     data = prepared.to_jax()
     reference = _numpy_mixture(params, prepared)
@@ -628,6 +633,21 @@ def test_forward_rates_are_design_weighted_training_gold_and_inside(rows):
         ess = np.sum(w[sel]) ** 2 / np.sum(w[sel] ** 2)
         np.testing.assert_allclose(rates[seg][f"raw_{name}"], raw)
         np.testing.assert_allclose(rates[seg][name], (raw * ess + 0.5) / (ess + 1))
+    # The mixture's rates are over all verdicts: unverifiable gold rows stay in
+    # the denominator, so exists + gone is P(definitive | y).
+    for truth in (1, 0):
+        sel = (w > 0) & (y == truth)
+        ess = np.sum(w[sel]) ** 2 / np.sum(w[sel] ** 2)
+        definitive = np.sum(w[sel] * np.isin(verdict[sel], ["exists", "gone"]))
+        assert definitive < np.sum(w[sel])
+        for prefix, hit in (("e", "exists"), ("g", "gone")):
+            raw = np.sum(w[sel] * (verdict[sel] == hit)) / np.sum(w[sel])
+            np.testing.assert_allclose(rates[seg][f"raw_{prefix}{truth}"], raw)
+            np.testing.assert_allclose(rates[seg][f"{prefix}{truth}"],
+                                       (raw * ess + 0.5) / (ess + 1))
+        np.testing.assert_allclose(
+            rates[seg][f"raw_e{truth}"] + rates[seg][f"raw_g{truth}"],
+            definitive / np.sum(w[sel]))
     # Held-out gold never informs the rates: flipping its labels changes nothing
     # under the training mask, though it changes the full-gold rates.
     held = np.zeros(len(rows), dtype = bool)
@@ -642,8 +662,8 @@ def test_forward_rates_are_design_weighted_training_gold_and_inside(rows):
     prepared = cb.prepare_data(rows, spec, held_out = held, fit_config = fit_config)
     assert prepared.forward_rates == train
     for s in cb.SEGMENT_ORDER:
-        assert float(prepared.segments[s]["silver_se"]) == train[s]["se"]
-        assert float(prepared.segments[s]["silver_sp"]) == train[s]["sp"]
+        for key in ("e1", "g1", "e0", "g0"):
+            assert float(prepared.segments[s][f"silver_{key}"]) == train[s][key]
     # Pooling a second round adds its gold.
     pooled = cb.forward_silver_rates([rows, rows], fit_config)
     assert pooled[seg]["n_se"] == 2 * rates[seg]["n_se"]

@@ -377,3 +377,33 @@ def style_axes(ax) -> None:
     for side in ("left", "bottom"):
         ax.spines[side].set_color(COLORS["muted"])
     ax.tick_params(colors = COLORS["muted"], labelsize = 8)
+
+
+def forward_rate_table(forward_rates: dict) -> list:
+    """Markdown rows of the fixed-rate mixture's forward rates, per segment.
+
+    Rates over all verdicts (``e1`` ... ``g0``, from 2026-10-01) when the
+    summary carries them, else the older Se / Sp among definitive verdicts.
+    """
+    if all("e1" in r for r in forward_rates.values()):
+        lines = ["P(verdict | y) over all verdicts (unverifiable included), "
+                 "design-weighted and Jeffreys-smoothed on the Kish ESS; "
+                 "exists + gone = P(definitive | y).", "",
+                 "| segment | P(exists \\| 1) | P(gone \\| 1) | ESS y = 1 | "
+                 "P(exists \\| 0) | P(gone \\| 0) | ESS y = 0 |",
+                 "|---|---|---|---|---|---|---|"]
+        for segment, r in forward_rates.items():
+            lines.append(f"| {segment} | {r['e1']:.4f} | {r['g1']:.4f} | "
+                         f"{r['ess_1']:.1f} | {r['e0']:.4f} | {r['g0']:.4f} | "
+                         f"{r['ess_0']:.1f} |")
+        return lines
+    lines = ["Se = P(verdict exists | exists), Sp = P(verdict gone | gone), "
+             "among definitive verdicts; design-weighted and Jeffreys-smoothed "
+             "on the Kish ESS.", "",
+             "| segment | Se | raw | ESS | Sp | raw | ESS |",
+             "|---|---|---|---|---|---|---|"]
+    for segment, r in forward_rates.items():
+        lines.append(f"| {segment} | {r['se']:.4f} | {r['raw_se']:.4f} | "
+                     f"{r['ess_se']:.1f} | {r['sp']:.4f} | {r['raw_sp']:.4f} | "
+                     f"{r['ess_sp']:.1f} |")
+    return lines

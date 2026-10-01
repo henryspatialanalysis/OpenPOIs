@@ -272,18 +272,11 @@ def fit_report(metadata: dict, summaries: dict, unaccepted: list) -> str:
             f"{d['treedepth_saturated']} | "
             + ("PASS" if acc.get("all") else "FAIL (" + ", ".join(failing) + ")")
             + " |")
-    lines += ["", "## Forward rates (fixed in the mixture)", "",
-              "Se = P(verdict exists | exists), Sp = P(verdict gone | gone), among "
-              "definitive verdicts; design-weighted and Jeffreys-smoothed on the "
-              "Kish ESS.", "",
-              "| segment | Se | raw | ESS | Sp | raw | ESS |",
-              "|---|---|---|---|---|---|---|"]
-    for segment, meta in metadata.items():
-        r = meta["forward_rates"]
-        if r:
-            lines.append(f"| {segment} | {r['se']:.4f} | {r['raw_se']:.4f} | "
-                         f"{r['ess_se']:.1f} | {r['sp']:.4f} | {r['raw_sp']:.4f} | "
-                         f"{r['ess_sp']:.1f} |")
+    lines += ["", "## Forward rates (fixed in the mixture)", ""]
+    rates = {segment: meta["forward_rates"] for segment, meta in metadata.items()
+             if meta["forward_rates"]}
+    if rates:
+        lines += common.forward_rate_table(rates)
     impact = {}
     for segment, meta in metadata.items():
         entry = ((summaries[meta["tag"]].get("deployed_impact") or {})

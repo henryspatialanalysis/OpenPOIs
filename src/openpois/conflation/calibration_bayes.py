@@ -45,9 +45,11 @@ doc decisions 12 and 17):
     segment, verdict) is the design-weighted gold concordance rate
     (``silver_label_rates``), passed in as data (``label_noise = "fixed"``). The
     test model ``fixed_mixture`` (design doc §3.5c, option M) instead sums the
-    unknown truth out of the verdict, log[p Se + (1 - p)(1 - Sp)] for "exists",
-    with the forward rates Se, Sp per segment passed in as data
-    (``forward_silver_rates``). The estimated-noise variants ``symmetric`` (one
+    unknown truth out of the verdict, log[p P(exists | 1) + (1 - p) P(exists |
+    0)] for "exists", with the forward rates P(verdict | y) over all verdicts
+    per segment passed in as data (``forward_silver_rates``; until 2026-10-01
+    they were conditional on a definitive verdict, which biased the curve
+    low). The estimated-noise variants ``symmetric`` (one
     agreement parameter, as first run), ``asymmetric`` (Se, Sp) and ``none``
     (labels exact) are kept as sensitivities. Under arm C's likelihood,
     estimated noise is identified only through the selection-induced gap
@@ -741,18 +743,32 @@ def forward_silver_rates(frames, fit_config: cf.FitConfig = None,
     Se = 1.000 on Overture and matched (round 20260730) would make a "gone"
     verdict certain proof of closure.
 
+    The mixture itself reads the rates over ALL verdicts, unverifiable
+    included: ``e1`` = P(verdict exists | y = 1), ``g1`` = P(verdict gone |
+    y = 1), ``e0`` = P(verdict exists | y = 0) and ``g0`` = P(verdict gone |
+    y = 0), so ``e + g`` is P(definitive | y). A silver row's likelihood is
+    P(verdict | s) = p P(verdict | 1) + (1 - p) P(verdict | 0); the rates
+    conditional on a definitive verdict (Se, Sp) drop P(definitive | y), which
+    is not constant in y (gone POIs are far more often unverifiable), and
+    under-credit existence in every silver row (2026-10-01). Se and Sp stay
+    for the coverage study, whose generator draws unverifiables separately.
+    Each of e and g is Jeffreys-smoothed as a share of all gold rows with
+    that y, so e + g stays below 1.
+
     Returns ``{segment: {"se": .., "sp": .., "raw_se": .., "raw_sp": ..,
-    "n_se": n, "n_sp": n, "ess_se": .., "ess_sp": ..}}``, where ``n_se`` counts
-    the gold rows that exist (the denominator of Se) and ``n_sp`` those that
-    do not. Only ``segments`` are returned.
+    "n_se": n, "n_sp": n, "ess_se": .., "ess_sp": .., "e1": .., "g1": ..,
+    "e0": .., "g0": .., "raw_e1": .., ..., "n_1": n, "n_0": n, "ess_1": ..,
+    "ess_0": ..}}``, where ``n_se`` counts the definitive gold rows that exist
+    (the denominator of Se), ``n_sp`` those that do not, and ``n_1`` / ``n_0``
+    all gold rows that exist / do not. Only ``segments`` are returned.
     """
     pooled = _weighted_gold(frames, fit_config, gold_masks)
     out = {}
     for segment in segments:
         entry = {}
-        base = ((pooled["segment"] == segment)
-                & pooled["verdict"].isin(["exists", "gone"])
-                & (pooled["w"] > 0)).to_numpy()
+        in_segment = ((pooled["segment"] == segment)
+                      & (pooled["w"] > 0)).to_numpy()
+        base = in_segment & pooled["verdict"].isin(["exists", "gone"]).to_numpy()
         for name, truth, verdict in (("se", 1.0, "exists"), ("sp", 0.0, "gone")):
             sel = base & (pooled["y"] == truth).to_numpy()
             w = pooled.loc[sel, "w"].to_numpy()
@@ -765,6 +781,17 @@ def forward_silver_rates(frames, fit_config: cf.FitConfig = None,
             entry[f"n_{name}"] = int(len(w))
             entry[f"ess_{name}"] = ess
             entry[f"raw_{name}"] = rate
+        for truth in (1, 0):
+            sel = in_segment & (pooled["y"] == float(truth)).to_numpy()
+            w = pooled.loc[sel, "w"].to_numpy()
+            verdicts = pooled.loc[sel, "verdict"].to_numpy()
+            for prefix, verdict in (("e", "exists"), ("g", "gone")):
+                smoothed, rate, ess = _jeffreys_rate(
+                    w, (verdicts == verdict).astype(float))
+                entry[f"{prefix}{truth}"] = smoothed
+                entry[f"raw_{prefix}{truth}"] = rate
+            entry[f"n_{truth}"] = int(len(w))
+            entry[f"ess_{truth}"] = ess
         out[segment] = entry
     return out
 
@@ -903,10 +930,12 @@ def prepare_data(rows: pd.DataFrame, spec: ModelSpec, knots: dict = None,
             entry["silver_q"] = np.where(
                 entry["silver_label"] == 1, rates["exists"],
                 np.where(entry["silver_label"] == 0, rates["gone"], 0.0))
-        # Fixed mixture: the segment's forward rates, as 0-d arrays.
+        # Fixed mixture: the segment's forward rates over all verdicts,
+        # P(verdict | y), as 0-d arrays.
         if mixture:
-            entry["silver_se"] = np.asarray(forward_rates[segment]["se"], dtype = float)
-            entry["silver_sp"] = np.asarray(forward_rates[segment]["sp"], dtype = float)
+            for key in ("e1", "g1", "e0", "g0"):
+                entry[f"silver_{key}"] = np.asarray(forward_rates[segment][key],
+                                                    dtype = float)
         if spec.arm == "C":
             # Only held-out rows may lack a label: a non-gold unverifiable row
             # that is not held out would be dropped on its verdict, which is
@@ -1126,14 +1155,14 @@ def silver_log_rates(params: dict, spec: ModelSpec, seg: dict = None) -> tuple:
 
     Symmetric noise uses Se = Sp = beta_label; "none" makes silver labels exact
     (log 1 = 0 and log 0 approximated by -1e3 so the logaddexp stays finite).
-    "fixed_mixture" reads the segment's forward rates from its data ``seg``
-    (``silver_se``, ``silver_sp``); they are data, so no gradient flows to
-    them, and a rate of exactly 0 or 1 gets the same -1e3 floor.
+    "fixed_mixture" reads the segment's forward rates over all verdicts from
+    its data ``seg`` and returns them in the same slots: (log P(exists | 1),
+    log P(gone | 1), log P(gone | 0), log P(exists | 0)). They are data, so no
+    gradient flows to them, and a rate of exactly 0 gets the same -1e3 floor.
     """
     if spec.label_noise == "fixed_mixture":
-        se, sp = seg["silver_se"], seg["silver_sp"]
-        return tuple(jnp.maximum(v, -1e3) for v in (
-            jnp.log(se), jnp.log1p(-se), jnp.log(sp), jnp.log1p(-sp)))
+        return tuple(jnp.maximum(jnp.log(seg[f"silver_{key}"]), -1e3)
+                     for key in ("e1", "g1", "g0", "e0"))
     if spec.label_noise == "symmetric":
         x = params["logit_beta_label"]
         log_b, log_1mb = jax.nn.log_sigmoid(x), jax.nn.log_sigmoid(-x)

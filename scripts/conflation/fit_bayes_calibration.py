@@ -622,9 +622,11 @@ def main() -> None:
             for s, r in silver_rates.items()))
     forward_rates = prepared.forward_rates
     if forward_rates is not None:
-        log("forward rates (fixed mixture): " + "; ".join(
-            f"{s} Se {r['se']:.4f} (raw {r['raw_se']:.4f}) Sp {r['sp']:.4f} "
-            f"(raw {r['raw_sp']:.4f})" for s, r in forward_rates.items()))
+        log("forward rates P(verdict | y), all verdicts (fixed mixture): "
+            + "; ".join(
+                f"{s} exists|1 {r['e1']:.4f} gone|1 {r['g1']:.4f} "
+                f"exists|0 {r['e0']:.4f} gone|0 {r['g0']:.4f}"
+                for s, r in forward_rates.items()))
     log("knots: " + "; ".join(f"{k} {len(v) - 1} intervals"
                               for k, v in prepared.knots.items()))
     n_by_segment = {s: int((rows["segment"] == s).sum()) for s in spec.segments}

@@ -390,15 +390,7 @@ def main() -> None:
         lines.append("")
     if main and main.get("forward_rates"):
         lines += ["### Forward rates used (fixed-rate mixture)", "",
-                  "Se = P(verdict exists | exists), Sp = P(verdict gone | gone), "
-                  "among definitive verdicts; Jeffreys-smoothed on the Kish ESS.", "",
-                  "| segment | Se | raw | ESS | Sp | raw | ESS |",
-                  "|---|---|---|---|---|---|---|"]
-        for seg, r in main["forward_rates"].items():
-            lines.append(f"| {seg} | {r['se']:.4f} | {r['raw_se']:.4f} | "
-                         f"{r['ess_se']:.1f} | {r['sp']:.4f} | {r['raw_sp']:.4f} | "
-                         f"{r['ess_sp']:.1f} |")
-        lines.append("")
+                  *common.forward_rate_table(main["forward_rates"]), ""]
     lines += ["### Calibration against the design-weighted gold rate", "",
               "Mean posterior-mean P(exists) over the validation rows in each group, "
               "against the Hajek-weighted gold rate. The gold rate is itself noisy "
