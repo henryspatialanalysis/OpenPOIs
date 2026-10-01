@@ -3,10 +3,11 @@
 Design-weighted (Horvitz-Thompson) review of a deployed calibration map.
 
 Runs ``openpois.conflation.calibration_ht.run_ht_check`` against a directory of
-fitted curves and writes the review document. ``fit_calibration.py`` calls
-:func:`run_review` after it writes the curves; this script runs it on its own
-against existing curves, which is how a reuse month (curves copied, not fit)
-gets its review. The check never fails a run: it is a review aid.
+fitted curves and writes the review document. ``make calibrate`` runs it on the
+exported Bayesian grid curves after they are applied; the retired v4
+``fit_calibration.py`` called :func:`run_review` itself. A reuse month (curves
+copied, not fit) gets its review the same way. The check never fails a run: it
+is a review aid.
 
 Config keys used:
   - versions.calibration, versions.conflation
@@ -257,7 +258,14 @@ def _summary_page(pdf, check: dict, info: dict) -> None:
 
 
 def _step(ax, lookup: pd.DataFrame) -> None:
-    """The deployed 1-D step lookup, drawn as served."""
+    """The deployed 1-D lookup, drawn as served: a step curve as steps, a
+    grid curve as the line through its nodes (deploy interpolates linearly)."""
+    if calibration.is_grid_lookup(lookup):
+        order = np.argsort(lookup["score"].to_numpy(dtype = float))
+        ax.plot(lookup["score"].to_numpy(dtype = float)[order],
+                lookup["conf_mean"].to_numpy(dtype = float)[order],
+                color = COLORS["model"], linewidth = 1.6, zorder = 2)
+        return
     lo = lookup["score_lo"].to_numpy(dtype = float)
     hi = lookup["score_hi"].to_numpy(dtype = float)
     mean = lookup["conf_mean"].to_numpy(dtype = float)
@@ -282,12 +290,20 @@ def _one_d_page(pdf, check: dict, segment: str, view: str,
         ax.scatter(rows[column], rows["model"], s = 4, color = COLORS["rows"],
                    linewidth = 0, zorder = 1)
         deployed_label = ("deployed conf_mean per phase-1 row (the lookup is "
-                          "on the fitted index, not raw_score)")
+                          "on the source scores, not raw_score)")
     else:
         column = view
-        if lookup is not None and not calibration.is_surface_lookup(lookup):
+        one_d = lookup is not None and not (
+            calibration.is_surface_lookup(lookup)
+            or calibration.is_grid_surface(lookup)
+        )
+        if one_d:
             _step(ax, lookup)
-        deployed_label = "deployed step lookup (conf_mean)"
+        deployed_label = (
+            "deployed grid curve (posterior mean conf_mean)"
+            if one_d and calibration.is_grid_lookup(lookup)
+            else "deployed step lookup (conf_mean)"
+        )
     _ht_points(ax, x, table)
     _legend(ax, deployed_label, per_row = view == "raw_score_deciles")
     values = rows[column].to_numpy(dtype = float)

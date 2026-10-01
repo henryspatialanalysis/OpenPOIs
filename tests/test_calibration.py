@@ -532,6 +532,219 @@ def test_read_curves_errors_when_directory_has_none(tmp_path):
         calibration.read_curves(tmp_path)
 
 
+# --- Grid lookups (Bayesian export, October 2026) ---------------------------
+
+def _grid_curve(segment: str, n: int = 11) -> pd.DataFrame:
+    """1-D node table in the export schema: mean 0.2 + 0.7 s, band +-0.05."""
+    score = np.linspace(0.0, 1.0, n)
+    mean = 0.2 + 0.7 * score
+    return pd.DataFrame({"segment": segment, "score": score, "conf_mean": mean,
+                         "conf_lower": mean - 0.05, "conf_upper": mean + 0.05})
+
+
+def _grid_surface(n: int = 5) -> pd.DataFrame:
+    """Matched node grid, row-major (osm outer), mean 0.1 + 0.3 o + 0.5 v
+    + 0.1 o v; nondecreasing along both axes."""
+    nodes = np.linspace(0.0, 1.0, n)
+    oo, vv = np.meshgrid(nodes, nodes, indexing = "ij")
+    mean = (0.1 + 0.3 * oo + 0.5 * vv + 0.1 * oo * vv).ravel()
+    return pd.DataFrame({
+        "segment": "matched", "osm_score": oo.ravel(),
+        "overture_score": vv.ravel(), "conf_mean": mean,
+        "conf_lower": mean - 0.05, "conf_upper": mean + 0.05,
+    })
+
+
+def _grid_metadata() -> dict:
+    out = {}
+    for segment in ("matched", "osm", "overture"):
+        out[segment] = {"method": "bayes_fixed_mixture", "lookup": "grid",
+                        "score_decimals": 6}
+    out["matched"]["index_mode"] = "grid"
+    return out
+
+
+def test_grid_lookup_detection():
+    assert calibration.is_grid_lookup(_grid_curve("osm"))
+    assert calibration.is_grid_lookup(_grid_surface())
+    assert calibration.is_grid_surface(_grid_surface())
+    assert not calibration.is_grid_surface(_grid_curve("osm"))
+    assert not calibration.is_grid_lookup(_lookup("osm"))
+    assert not calibration.is_grid_lookup(_surface_lookup_fixture())
+
+
+def test_apply_grid_curve_interpolates_clamps_and_passes_nan():
+    lookup = _grid_curve("osm")
+    nodes = lookup["score"].to_numpy()
+    at_nodes = calibration.apply_grid_curve(nodes, lookup)
+    np.testing.assert_allclose(at_nodes["conf_mean"], lookup["conf_mean"])
+    np.testing.assert_allclose(at_nodes["conf_lower"], lookup["conf_lower"])
+    np.testing.assert_allclose(at_nodes["conf_upper"], lookup["conf_upper"])
+    # Linear between nodes, on a table whose nodes are not equally spaced.
+    uneven = lookup.iloc[[0, 3, 10]].reset_index(drop = True)
+    uneven.loc[1, "conf_mean"] = 0.8
+    out = calibration.apply_grid_curve([0.15, 0.65], uneven)
+    assert out["conf_mean"].iloc[0] == pytest.approx(0.2 + 0.5 * 0.6)
+    assert out["conf_mean"].iloc[1] == pytest.approx(0.8 + 0.5 * 0.1)
+    # Out of [0, 1] clamps to the end nodes; NaN stays NaN in all three.
+    out = calibration.apply_grid_curve([-0.4, 1.7, np.nan], lookup)
+    assert out["conf_mean"].iloc[0] == pytest.approx(0.2)
+    assert out["conf_mean"].iloc[1] == pytest.approx(0.9)
+    assert out.iloc[2].isna().all()
+    assert list(out.columns) == ["conf_mean", "conf_lower", "conf_upper"]
+    # Rounding, when asked for, happens before the lookup.
+    rounded = calibration.apply_grid_curve([0.1234564], lookup,
+                                           score_decimals = 2)
+    assert rounded["conf_mean"].iloc[0] == pytest.approx(0.2 + 0.7 * 0.12)
+
+
+def test_apply_grid_surface_is_bilinear_and_monotone():
+    lookup = _grid_surface()
+    exact = calibration.apply_grid_surface(lookup["osm_score"],
+                                           lookup["overture_score"], lookup)
+    np.testing.assert_allclose(exact["conf_mean"], lookup["conf_mean"])
+    np.testing.assert_allclose(exact["conf_upper"], lookup["conf_upper"])
+    # The node function is bilinear, so interpolation reproduces it anywhere.
+    rng = np.random.default_rng(3)
+    o, v = rng.uniform(0, 1, 200), rng.uniform(0, 1, 200)
+    out = calibration.apply_grid_surface(o, v, lookup)
+    np.testing.assert_allclose(out["conf_mean"],
+                               0.1 + 0.3 * o + 0.5 * v + 0.1 * o * v)
+    # Midpoint of one cell is the mean of its four corners, row order aside.
+    shuffled = lookup.sample(frac = 1.0, random_state = 4)
+    mid = calibration.apply_grid_surface([0.125], [0.375], shuffled)
+    corners = lookup[lookup["osm_score"].isin([0.0, 0.25])
+                     & lookup["overture_score"].isin([0.25, 0.5])]
+    assert mid["conf_mean"].iloc[0] == pytest.approx(
+        corners["conf_mean"].mean()
+    )
+    # Monotone in both scores on a fine grid; clamps; NaN in either is NaN.
+    grid = np.linspace(-0.1, 1.1, 37)
+    oo, vv = np.meshgrid(grid, grid, indexing = "ij")
+    surface = calibration.apply_grid_surface(
+        oo.ravel(), vv.ravel(), lookup)["conf_mean"].to_numpy().reshape(oo.shape)
+    assert np.all(np.diff(surface, axis = 0) >= -1e-12)
+    assert np.all(np.diff(surface, axis = 1) >= -1e-12)
+    assert surface[0, 0] == pytest.approx(0.1)
+    assert surface[-1, -1] == pytest.approx(1.0)
+    out = calibration.apply_grid_surface([np.nan, 0.5], [0.5, np.nan], lookup)
+    assert out.isna().all().all()
+
+
+def test_apply_grid_surface_refuses_a_ragged_grid():
+    with pytest.raises(ValueError, match = "rectangle"):
+        calibration.apply_grid_surface([0.5], [0.5], _grid_surface().iloc[:-1])
+
+
+def test_calibrate_frame_on_grid_curves_keeps_the_edge_rules():
+    frame = pd.DataFrame(
+        {
+            "source": ["matched", "osm", "osm", "overture", "overture",
+                       "matched"],
+            "osm_conf_mean": [0.5, 0.4, 0.4, np.nan, np.nan, np.nan],
+            "overture_confidence": [0.5, np.nan, np.nan, 0.6, 0.6, 0.9],
+            "conf_mean": [0.88, 0.85, 0.85, 0.07, 0.5, 0.42],
+            "shadow_matched": [False, False, False, True, False, False],
+            "name": ["Cafe", "Bar", None, "Shop", "Deli", "Inn"],
+        }
+    )
+    curves = {"matched": _grid_surface(), "osm": _grid_curve("osm"),
+              "overture": _grid_curve("overture")}
+    meta = _grid_metadata()
+    # No pool parameters anywhere: index_mode grid must not ask for them.
+    assert calibration.pool_params_from_metadata(meta)["matched"] is None
+    out = calibration.calibrate_frame(
+        frame, curves,
+        pool_params = calibration.pool_params_from_metadata(meta),
+        index_modes = calibration.index_modes_from_metadata(meta),
+        score_decimals = calibration.score_decimals_from_metadata(meta),
+    )
+    assert out["conf_mean"].iloc[0] == pytest.approx(
+        0.1 + 0.15 + 0.25 + 0.025
+    )
+    assert out["conf_lower"].iloc[0] == pytest.approx(0.475)
+    assert out["conf_mean"].iloc[1] == pytest.approx(0.2 + 0.7 * 0.4)
+    # Unnamed OSM rides the osm curve, flagged.
+    assert out["calibration_flag"].iloc[2] == calibration.FLAG_UNNAMED
+    assert out["conf_mean"].iloc[2] == pytest.approx(0.2 + 0.7 * 0.4)
+    # Shadow row keeps its CD value and a NaN band.
+    assert out["calibration_flag"].iloc[3] == calibration.FLAG_SHADOW
+    assert out["conf_mean"].iloc[3] == pytest.approx(0.07)
+    assert np.isnan(out["conf_upper"].iloc[3])
+    assert out["conf_mean"].iloc[4] == pytest.approx(0.2 + 0.7 * 0.6)
+    # A matched row missing a score keeps its incoming value (unscored).
+    assert out["conf_mean"].iloc[5] == pytest.approx(0.42)
+    assert np.isnan(out["conf_lower"].iloc[5])
+    # Without metadata the grid shape alone selects the 2-D path.
+    bare = calibration.calibrate_frame(frame, curves)
+    np.testing.assert_allclose(bare["conf_mean"], out["conf_mean"])
+
+
+def test_grid_mode_needs_no_pool_in_curve_index():
+    scores = calibration.curve_index(np.array(["matched", "osm"]),
+                                     np.array([0.9, 0.3]),
+                                     np.array([0.9, np.nan]),
+                                     index_mode = "grid")
+    assert np.isnan(scores[0]) and scores[1] == pytest.approx(0.3)
+
+
+def test_apply_calibration_round_trip_on_grid_curves(tmp_path):
+    curves_dir = tmp_path / "calibration"
+    curves_dir.mkdir()
+    curves = {"matched": _grid_surface(), "osm": _grid_curve("osm"),
+              "overture": _grid_curve("overture")}
+    for segment, lookup in curves.items():
+        lookup.to_parquet(curves_dir / f"{segment}_curve.parquet",
+                          index = False)
+        (curves_dir / f"{segment}_metadata.json").write_text(
+            json.dumps(_grid_metadata()[segment])
+        )
+    n = 60
+    rng = np.random.default_rng(22)
+    source = np.resize(["matched", "osm", "overture"], n)
+    frame = pd.DataFrame({
+        "unified_id": [f"id{i}" for i in range(n)],
+        "source": source,
+        "osm_conf_mean": np.where(source == "overture", np.nan,
+                                  rng.uniform(0.0, 1.0, n)),
+        "overture_confidence": np.where(source == "osm", np.nan,
+                                        rng.uniform(0.0, 1.0, n)),
+        "conf_mean": rng.uniform(0.3, 1.0, n),
+        "conf_lower": rng.uniform(0.1, 0.3, n),
+        "conf_upper": rng.uniform(0.9, 1.0, n),
+        "shadow_matched": np.arange(n) == 5,
+        "name": ["Place"] * n,
+    })
+    in_path = tmp_path / "conflated_cd.parquet"
+    out_path = tmp_path / "conflated.parquet"
+    pq.write_table(pa.Table.from_pandas(frame, preserve_index = False),
+                   in_path)
+
+    read = calibration.read_curves(curves_dir)
+    meta = calibration.read_curve_metadata(curves_dir)
+    assert set(read) == set(meta) == {"matched", "osm", "overture"}
+    stats = calibration.apply_calibration(
+        in_path, out_path, read,
+        pool_params = calibration.pool_params_from_metadata(meta),
+        index_modes = calibration.index_modes_from_metadata(meta),
+        score_decimals = calibration.score_decimals_from_metadata(meta),
+        chunk_rows = 17, verbose = False,
+    )
+    assert stats["rows"] == n
+    out = pd.read_parquet(out_path)
+    assert len(out) == n and set(frame.columns) <= set(out.columns)
+    expected = calibration.calibrate_frame(
+        frame, curves, index_modes = {"matched": "grid"},
+        score_decimals = {s: 6 for s in curves},
+    )
+    np.testing.assert_allclose(out["conf_mean"], expected["conf_mean"])
+    plain = ~frame["shadow_matched"].to_numpy()
+    assert (out["conf_lower"][plain] <= out["conf_mean"][plain]).all()
+    assert (out["conf_mean"][plain] <= out["conf_upper"][plain]).all()
+    assert out["conf_mean"].iloc[5] == pytest.approx(frame["conf_mean"].iloc[5])
+    assert out["calibration_flag"].iloc[5] == calibration.FLAG_SHADOW
+
+
 # --- Matched-segment modes (2026-09) ----------------------------------------
 
 ROUND_20260730 = (

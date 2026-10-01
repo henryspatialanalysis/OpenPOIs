@@ -10,11 +10,13 @@
 - an exact map flags about the chance share of bins
 - thin or empty segments are reported, never raised on
 - the review PDF has the expected page count
+- grid curves (the Bayesian export) review and draw like step curves
 """
 
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 from pathlib import Path
 
@@ -359,3 +361,65 @@ def test_fit_run_check_never_fails_the_run(tmp_path, monkeypatch):
                                 {"validation_round": "r1"}, config)
     assert (curves_dir / "ht_review_r1.pdf").exists()
     assert any("ht_review_r1.pdf" in line for line in lines)
+
+
+# --- Grid curves (Bayesian export, October 2026) ----------------------------
+
+def _grid_curves() -> tuple:
+    """Grid curves in the export schema, exact on ``_truth``: 1-D on the
+    native score, matched on the OSM score whatever the Overture score."""
+    nodes = np.linspace(0.0, 1.0, 201)
+    curves = {}
+    for segment in ("osm", "overture"):
+        mean = _truth(nodes)
+        curves[segment] = pd.DataFrame({
+            "segment": segment, "score": nodes, "conf_mean": mean,
+            "conf_lower": mean - 0.03, "conf_upper": mean + 0.03,
+        })
+    axis = np.linspace(0.0, 1.0, 41)
+    oo, vv = np.meshgrid(axis, axis, indexing = "ij")
+    mean = _truth(oo.ravel())
+    curves["matched"] = pd.DataFrame({
+        "segment": "matched", "osm_score": oo.ravel(),
+        "overture_score": vv.ravel(), "conf_mean": mean,
+        "conf_lower": mean - 0.03, "conf_upper": mean + 0.03,
+    })
+    metadata = {s: {"method": "bayes_fixed_mixture", "lookup": "grid",
+                    "score_decimals": 6} for s in curves}
+    metadata["matched"]["index_mode"] = "grid"
+    return curves, metadata
+
+
+def test_deployed_means_on_grid_curves():
+    curves, metadata = _grid_curves()
+    for segment, seed in (("matched", 10), ("osm", 11), ("overture", 12)):
+        rows = _rows(segment, n = 400, seed = seed, atoms = True)
+        model = cht.deployed_means(rows, segment, curves, metadata)
+        score = rows["overture_score" if segment == "overture"
+                     else "osm_score"]
+        assert np.allclose(model, _truth(np.round(score, 6)))
+
+
+def test_review_pdf_on_grid_curves(tmp_path):
+    review = _script_module("ht_review")
+    curves, metadata = _grid_curves()
+    curves_dir = tmp_path / "calibration"
+    curves_dir.mkdir()
+    for segment, lookup in curves.items():
+        lookup.to_parquet(curves_dir / f"{segment}_curve.parquet",
+                          index = False)
+        (curves_dir / f"{segment}_metadata.json").write_text(
+            json.dumps(metadata[segment]), encoding = "utf-8"
+        )
+    rows = pd.concat([_rows("matched", n = 3000, seed = 13, atoms = True),
+                      _rows("osm", seed = 14),
+                      _rows("overture", seed = 15, atoms = True)],
+                     ignore_index = True)
+    result = review.run_review(curves_dir, rows, {"validation_round": "g1"})
+    check = result["check"]
+    assert not any("could not be applied" in n for n in check["notes"])
+    assert np.isfinite(check["large"]["model_mean"]).all()
+    # Summary, matched cells, matched deciles, osm, overture, bin table(s).
+    n_table = int(np.ceil(len(check["bins"]) / review.TABLE_ROWS_PER_PAGE))
+    assert result["pages"] == 5 + n_table == review.expected_pages(check)
+    assert _pdf_pages(result["pdf"]) == result["pages"]
