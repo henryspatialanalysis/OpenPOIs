@@ -1,8 +1,38 @@
 # Changelog
 
-## Unreleased
+## 2026-10-01-v0
 
-### Methods changes
+### Snapshot inputs
+
+| Source                 | Value                                       |
+| ---------------------- | ------------------------------------------- |
+| OSM snapshot date      | 2026-09-29                                  |
+| Overture release       | `2026-09-23.1` (pinned)                     |
+| OSM snapshot rows      | 4,535,124                                   |
+| Overture snapshot rows | 15,003,463                                  |
+| Boundary footprint     | US + all territories (PR, USVI, GU, MP, AS) |
+
+### Conflated output
+
+| Metric                       | This run    | Prior        | Δ                       |
+| ---------------------------- | ----------- | ------------ | ----------------------- |
+| Total rows                   | 16,591,754  | 15,586,580   | +1,005,174 (+6.45%)     |
+| Matched OSM × Overture       | 1,855,640   | 1,817,729    | +37,911 (+2.09%)        |
+| OSM-only                     | 2,673,948   | 2,685,038    | −11,090 (−0.41%)        |
+| Overture-only                | 12,062,166  | 11,083,813   | +978,353 (+8.83%)       |
+| Shadow-matched (CD penalty)  | 25,412      | 31,411       | −5,999 (−19.10%)        |
+| Shared labels                | 102         | 102          | —                       |
+
+Growth again follows the upstream Overture release (+8.8% rows month-over-month,
+of which 1,066,183 were removed by internal dedup, against 864,165 last month).
+The shadow-matched count falls with the stricter same-entity rule below.
+
+Confidence moves against 2026-09-02-v0, from the new calibration (unflagged
+rows): Overture-only mean `conf_mean` 0.683 → 0.644 (60.4% of POIs move by more
+than 0.05, 3.9% by more than 0.10); OSM-only 0.817 → 0.817; matched 0.908 →
+0.903 (9.8% and 2.1%).
+
+### Methods changes vs. prior release
 
 - **`overture_categories_alternate` follows Overture's new taxonomy.** Overture
   removed its deprecated `categories` field in release 2026-09-23.1, so the
@@ -38,9 +68,20 @@
   for matched POIs. The models are fitted in JAX
   (`openpois.conflation.calibration_bayes`) to the validation sample. Gold
   rows count as labelled; rows with only an LLM verdict enter through a
-  mixture likelihood whose sensitivity and specificity are fixed from the
-  gold, design-weighted. The July and October 2026 validation rounds are
-  pooled. `conf_lower` / `conf_upper` are the 95% posterior interval; for
+  mixture likelihood whose verdict rates, P(verdict | exists) and P(verdict |
+  gone) over all three verdicts (unverifiable included), are fixed from the
+  gold, design-weighted. Rates taken among definitive verdicts only would
+  bias the curves low, since closed POIs are far more often unverifiable
+  (Overture: 56% of closed POIs get a definitive verdict, against 90% of open
+  ones); the corrected rates raise the Overture curve by about 0.02. The July
+  and October 2026 validation rounds are pooled. All three fits pass the
+  acceptance rule (no divergences, R̂ ≤ 1.005, bulk and tail ESS ≥ 1,300);
+  the matched fit samples at target acceptance 0.998. Against the pooled
+  gold, design-weighted, the deployed map is calibrated in the large in every
+  segment (Overture 0.642 against a gold rate of 0.640). It cannot follow one
+  feature of the Overture gold: POIs scored below about 0.29 exist more often
+  (0.67) than those scored 0.29 to 0.85 (0.40 to 0.49), which a monotone curve
+  must average out. `conf_lower` / `conf_upper` are the 95% posterior interval; for
   matched POIs it is too narrow (about 0.75 coverage in simulation), a known
   limitation to be fixed. This replaces the v4 binned curves of the July and
   September releases, which are retired; the matched interaction index and
@@ -67,11 +108,12 @@
   snapshot (nodes, ways, relations) within 150 m (was rated POIs within
   50 m); ghosts older than 3 years are dropped at run time; named
   `lifecycle_prefix_added` / `primary_tag_deleted` ghosts are now emitted.
-  Expect far fewer shadow-matched rows than the 31,411 in 2026-09-02-v0.
-  **Release gate:** ≥ 70% precision (listing actually closed / moved) on a
-  hand- or LLM-vetted sample of ≥ 100 demoted POIs from `make conflate
-  TEST=1` is required before this ships; the measured number goes here.
-  _Measured precision: pending._
+  This release has 25,412 shadow-matched rows, against 31,411 in
+  2026-09-02-v0.
+  **Release gate deferred.** The planned gate, ≥ 70% precision (listing
+  actually closed / moved) on a hand- or LLM-vetted sample of ≥ 100 demoted
+  POIs, was not measured before this release, so the precision of the new
+  matcher is unmeasured. The vetted sample is carried to the next release.
 - **Manual confidence overrides, applied after calibration.** New last
   stage of `make conflate` (`apply_manual_overrides.py`) reads a
   hand-curated CSV (`unified_id, overture_id, action, reason, date,
@@ -79,7 +121,10 @@
   to `conf_mean = conf_lower = conf_upper = 0` (`calibration_flag =
   'manual_exclude'`) and `include` rows to 1 (`'manual_include'`). Rows are
   kept, so schema and counts are unchanged; the two new flag values join
-  `shadow_cd` and `unnamed_extrapolated`.
+  `shadow_cd` and `unnamed_extrapolated`. No overrides were applied in this
+  release.
+- **Type-affinity table rebuilt** against the 2026-09-23.1 category hierarchy
+  from the 2026-09-02-v0 matches.
 
 ## 2026-09-02-v0
 
