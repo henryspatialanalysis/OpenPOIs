@@ -1,31 +1,31 @@
 # Versioned directories (used with config.get_dir_path())
 versions:
-  osm_data: "20260902"
+  osm_data: "20261001"
   model_output: "20260727_by_shared_label"
-  snapshot_osm: "20260902"
+  snapshot_osm: "20261001"
   # 2026-08-19.0 release. The July 20260722* dirs stay on disk as the
   # method-paper basis and the prior-month baseline for
   # scripts/overture/compare_confidence.py (tax2/tax3 = same release,
   # widened-allowlist re-pulls; tax3 adds brand_wikidata).
-  snapshot_overture: "20260819"
+  snapshot_overture: "20260923"
   # 20260730 (kept, July release) added the two private-property / non-POI
   # exclusions: the residential-landuse spatial rule (250,905 unnamed POIs)
   # and the wildcard -> inclusion-set taxonomy change (61,764 unlabeled
   # rows). 20260902 is the first run with min_shadow_match_score 0.70 and
   # the August Overture taxonomy fixes (beauty_service rename,
   # food_delivery_service move).
-  conflation: "20260902"
+  conflation: "20261001"
   # Validation round whose condensed handoff drives the confidence
   # calibration (see .claude/docs/confidence-calibration.md). Produced by
   # openpois-validator's scripts/08_export_handoff.py; the curves are
   # release-specific and do not transport across Overture releases.
   calibration: "20260730"
-  source_coop: "2026-09-02-v0"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
+  source_coop: "2026-10-01-v0"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
   # Ghost POI dataset reconstructed from OSM history (one row per
   # detected previous-state event). Pinned to the same value as
   # ``osm_data`` since it is derived from the same history parquets,
   # and regenerated together with the monthly snapshot refresh.
-  ghost_osm: "20260902"
+  ghost_osm: "20261001"
   # Hand-curated exclude/include pins applied after calibration (see
   # conflation.manual_overrides). Rows are appended by the Close triage
   # lane; bump the version when the file is re-baselined, not per row.
@@ -47,7 +47,7 @@ download:
       coastline_buffer_m: 100
   osm:
     start_date: 2016-01-01
-    end_date: 2026-08-19
+    end_date: 2026-09-23
     # Snapshot extracts. Geofabrik publishes a dedicated PBF for PR and USVI
     # under north-america/us/, but the western-Pacific inhabited territories
     # (Guam, Northern Mariana Islands, American Samoa) have no per-territory
@@ -161,7 +161,7 @@ download:
       'website','wikidata','wikipedia'
     ]
   overture:
-    release_date: "2026-08-19.0"  # pin for determinism; null = auto-detect latest
+    release_date: "2026-09-23.1"  # pin for determinism; null = auto-detect latest
     s3_bucket: "overturemaps-us-west-2"
     s3_region: "us-west-2"
     # DuckDB resource caps for the per-part S3 scans and the final polygon
