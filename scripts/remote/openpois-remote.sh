@@ -16,8 +16,9 @@
 #   openpois-remote.sh run <stage> -- <cmd>    launch a detached stage; prints its log
 #   openpois-remote.sh watch <log> [seconds]   heartbeat lines until DONE or exit
 #   openpois-remote.sh summary [version]       write conflation/<v>/run_summary.md
-#   openpois-remote.sh pull <version> [--conflated]
-#                                              tier-1 results (+ conflated.parquet)
+#   openpois-remote.sh pull <version> [--conflated] [--cd]
+#                                              tier-1 results (+ conflated.parquet,
+#                                              + conflated_cd.parquet)
 #   openpois-remote.sh push-handoff <round>    upload data/calibration/<round>/
 #   openpois-remote.sh creds put|clear         Source Coop credentials for publish
 #   openpois-remote.sh prune [--apply]         delete all but the carry-forward
@@ -185,7 +186,8 @@ cmd_summary() {
 }
 
 cmd_pull() {
-    local version=${1:?usage: pull <conflation version> [--conflated]}
+    local version=${1:?usage: pull <conflation version> [--conflated] [--cd]}
+    shift
     local base="$HOST:data/openpois/."
     local sources=(
         "$base/conflation/$version/calibration"
@@ -194,13 +196,21 @@ cmd_pull() {
         "$base/conflation/$version/match_status_by_label.csv"
         "$base/conflation/$version/config.yaml"
         "$base/conflation/$version/run_summary.md"
+        "$base/conflation/$version/calibration_bayes"
         "$base/conflation/$version/calibration_eval_bayes_*"
         "$base/osm_data/*/history_coverage.json"
         "$base/snapshots/overture/*/viz"
     )
-    if [[ ${2:-} == "--conflated" ]]; then
-        sources+=("$base/conflation/$version/conflated.parquet")
-    fi
+    local flag
+    for flag in "$@"; do
+        case $flag in
+            --conflated) sources+=("$base/conflation/$version/conflated.parquet") ;;
+            # The validation frame's input in a month whose calibration waits
+            # for the round (make conflate_to_cd).
+            --cd) sources+=("$base/conflation/$version/conflated_cd.parquet") ;;
+            *) die "usage: pull <conflation version> [--conflated] [--cd]" ;;
+        esac
+    done
     "${RSYNC[@]}" -R --ignore-missing-args --exclude '*draws*.parquet' \
         --info=progress2 "${sources[@]}" "$LOCAL_DATA/"
     "${RSYNC[@]}" "$HOST:data/openpois/logs/" "$LOCAL_DATA/logs/"
