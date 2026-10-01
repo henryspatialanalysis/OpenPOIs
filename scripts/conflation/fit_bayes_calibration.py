@@ -5,7 +5,8 @@ Off the production path: writes only under
 ``.claude/plans/bayesian-monotone-calibration.md`` §4-§5).
 
 One invocation fits one model variant (``--arm`` plus the sensitivity flags) and
-writes, under ``fits/<tag>/``:
+writes, under ``fits/<tag>/``, for the segments in ``--segments`` (default all
+three; production fits one segment per invocation, tags ``mixture_<segment>``):
 
 - ``draws.npz``: posterior draws with (chain, draw) axes
 - ``convergence.csv``, ``curve_convergence.csv``, ``summary.json``
@@ -67,14 +68,15 @@ def flat_draws(chain_draws: dict) -> dict:
 
 
 def curve_grid_draws(draws: dict, prepared) -> dict:
-    """Posterior draws of every curve on its grid."""
+    """Posterior draws of every fitted curve on its grid."""
     out = {}
-    for segment in cb.ONE_D_SEGMENTS:
+    for segment in prepared.spec.one_d_segments:
         out[segment] = cb.curve_draws(draws, prepared, segment, osm = GRID_1D,
                                       overture = GRID_1D)
-    xx, yy = np.meshgrid(GRID_2D, GRID_2D, indexing = "ij")
-    out["matched"] = cb.curve_draws(draws, prepared, "matched", osm = xx.ravel(),
-                                    overture = yy.ravel())
+    if "matched" in prepared.spec.segments:
+        xx, yy = np.meshgrid(GRID_2D, GRID_2D, indexing = "ij")
+        out["matched"] = cb.curve_draws(draws, prepared, "matched",
+                                        osm = xx.ravel(), overture = yy.ravel())
     return out
 
 
@@ -83,22 +85,23 @@ def curve_convergence(chain_draws: dict, prepared) -> pd.DataFrame:
     n_chains, n_draws = jax.tree_util.tree_leaves(chain_draws)[0].shape[:2]
     draws = flat_draws(chain_draws)
     series = {}
-    for segment in cb.ONE_D_SEGMENTS:
+    for segment in prepared.spec.one_d_segments:
         m = cb.curve_draws(draws, prepared, segment, osm = CONV_1D,
                            overture = CONV_1D).reshape(n_chains, n_draws, -1)
         for i, s in enumerate(CONV_1D):
             series[f"{segment}@{s:.3f}"] = m[:, :, i]
-    xx, yy = np.meshgrid(CONV_2D, CONV_2D, indexing = "ij")
-    m = cb.curve_draws(draws, prepared, "matched", osm = xx.ravel(),
-                       overture = yy.ravel()).reshape(n_chains, n_draws, -1)
-    for i, (a, b) in enumerate(zip(xx.ravel(), yy.ravel())):
-        series[f"matched@{a:.2f},{b:.2f}"] = m[:, :, i]
+    if "matched" in prepared.spec.segments:
+        xx, yy = np.meshgrid(CONV_2D, CONV_2D, indexing = "ij")
+        m = cb.curve_draws(draws, prepared, "matched", osm = xx.ravel(),
+                           overture = yy.ravel()).reshape(n_chains, n_draws, -1)
+        for i, (a, b) in enumerate(zip(xx.ravel(), yy.ravel())):
+            series[f"matched@{a:.2f},{b:.2f}"] = m[:, :, i]
     return cb.convergence_table(series)
 
 
 def curves_frame(grid_draws: dict, production: dict) -> pd.DataFrame:
     frames = []
-    for segment in cb.ONE_D_SEGMENTS:
+    for segment in (s for s in cb.ONE_D_SEGMENTS if s in grid_draws):
         summary = cb.summarize_draws(grid_draws[segment])
         prod = common.production_values(production, segment, osm = GRID_1D,
                                          overture = GRID_1D)
@@ -107,14 +110,15 @@ def curves_frame(grid_draws: dict, production: dict) -> pd.DataFrame:
             else np.nan, "overture_score": GRID_1D if segment == "overture"
             else np.nan, **summary, "production": prod,
         }))
-    xx, yy = np.meshgrid(GRID_2D, GRID_2D, indexing = "ij")
-    summary = cb.summarize_draws(grid_draws["matched"])
-    prod = common.production_values(production, "matched", osm = xx.ravel(),
-                                    overture = yy.ravel())
-    frames.append(pd.DataFrame({
-        "segment": "matched", "osm_score": xx.ravel(),
-        "overture_score": yy.ravel(), **summary, "production": prod,
-    }))
+    if "matched" in grid_draws:
+        xx, yy = np.meshgrid(GRID_2D, GRID_2D, indexing = "ij")
+        summary = cb.summarize_draws(grid_draws["matched"])
+        prod = common.production_values(production, "matched", osm = xx.ravel(),
+                                        overture = yy.ravel())
+        frames.append(pd.DataFrame({
+            "segment": "matched", "osm_score": xx.ravel(),
+            "overture_score": yy.ravel(), **summary, "production": prod,
+        }))
     return pd.concat(frames, ignore_index = True)
 
 
@@ -149,7 +153,7 @@ def posterior_predictive_checks(draws: dict, prepared, rows: pd.DataFrame,
         coefficients = cb.curve_coefficients(params, geometry, spec)
         logits = cb.segment_logits(coefficients, data)
         out = {}
-        for g, segment in enumerate(cb.SEGMENT_ORDER):
+        for g, segment in enumerate(spec.segments):
             p = jax.nn.sigmoid(logits[segment])
             if spec.arm == "A":
                 extra = jnp.exp(cb.class_log_probs(params, spec, g,
@@ -171,7 +175,7 @@ def posterior_predictive_checks(draws: dict, prepared, rows: pd.DataFrame,
         checks["label_mix"] = []
     evaluated = [probs(jax.tree_util.tree_map(lambda x: x[d], sub))
                  for d in range(n_ppc)]
-    for segment in cb.SEGMENT_ORDER:
+    for segment in spec.segments:
         seg_rows = rows[rows["segment"] == segment].reset_index(drop = True)
         seg = prepared.segments[segment]
         r = seg_rows[cb.R_COLUMN[segment]].to_numpy(dtype = float)
@@ -306,12 +310,17 @@ def deployed_impact(grid_draws: dict, production: dict, conflated_path: Path,
     Streams column-scoped (never a whole-file load). Rows whose
     ``calibration_flag`` is set (shadow CD, manual pins, unnamed
     extrapolation, and ``missing_conf`` in releases before October 2026) are
-    skipped: they do not ride the plain curve.
+    skipped: they do not ride the plain curve. Only the segments in
+    ``grid_draws`` (the fit's segments) are scored.
     """
-    mean_1d = {s: grid_draws[s].mean(axis = 0) for s in cb.ONE_D_SEGMENTS}
-    surface = grid_draws["matched"].mean(axis = 0).reshape(len(GRID_2D),
-                                                          len(GRID_2D))
-    interp_2d = RegularGridInterpolator((GRID_2D, GRID_2D), surface)
+    segments = [s for s in cb.SEGMENT_ORDER if s in grid_draws]
+    mean_1d = {s: grid_draws[s].mean(axis = 0) for s in segments
+               if s in cb.ONE_D_SEGMENTS}
+    interp_2d = None
+    if "matched" in grid_draws:
+        surface = grid_draws["matched"].mean(axis = 0).reshape(
+            len(GRID_2D), len(GRID_2D))
+        interp_2d = RegularGridInterpolator((GRID_2D, GRID_2D), surface)
     columns = ["source", "osm_conf_mean", "overture_confidence", "conf_mean",
                "calibration_flag"]
     pf = pq.ParquetFile(str(conflated_path))
@@ -321,7 +330,7 @@ def deployed_impact(grid_draws: dict, production: dict, conflated_path: Path,
                "abs_prod": 0.0, "gt05_prod": 0, "gt10_prod": 0,
                "sum_bayes": 0.0, "sum_pub": 0.0, "sum_prod": 0.0,
                "band_changes_prod": 0}
-           for s in cb.SEGMENT_ORDER}
+           for s in segments}
     flags_seen = {}
     edges = np.array([0.3, 0.7, 0.9])
     for batch in pf.iter_batches(batch_size = chunk_rows, columns = columns):
@@ -332,7 +341,7 @@ def deployed_impact(grid_draws: dict, production: dict, conflated_path: Path,
         keep = flag.isna() | (flag.astype(str) == "")
         if "shadow_matched" in frame.columns:
             keep &= ~frame["shadow_matched"].fillna(False).astype(bool)
-        for segment in cb.SEGMENT_ORDER:
+        for segment in segments:
             sel = (keep & (frame["source"] == segment)).to_numpy()
             if not sel.any():
                 continue
@@ -391,9 +400,13 @@ def deployed_impact(grid_draws: dict, production: dict, conflated_path: Path,
 
 def figure_curves(frame: pd.DataFrame, ht: dict, path: Path, label: str,
                   color: str) -> None:
-    fig, axes = plt.subplots(1, 2, figsize = (10, 4), dpi = 150)
+    """One panel per fitted 1-D segment (the keys of ``ht``)."""
+    segments = [s for s in cb.ONE_D_SEGMENTS if s in ht]
+    fig, axes = plt.subplots(1, len(segments), figsize = (5 * len(segments), 4),
+                             dpi = 150, squeeze = False)
+    axes = axes[0]
     fig.patch.set_facecolor(common.COLORS["surface"])
-    for ax, segment in zip(axes, cb.ONE_D_SEGMENTS):
+    for ax, segment in zip(axes, segments):
         sub = frame[frame["segment"] == segment]
         x = sub[cb.SCORE_COLUMN[segment]].to_numpy()
         ax.fill_between(x, sub["lower"], sub["upper"], color = color,
@@ -485,9 +498,12 @@ _PRODUCTION = [None]
 
 
 def figure_prior(prior_draws: dict, path: Path) -> None:
-    fig, axes = plt.subplots(1, 3, figsize = (12, 3.6), dpi = 150)
+    segments = [s for s in cb.SEGMENT_ORDER if s in prior_draws]
+    fig, axes = plt.subplots(1, len(segments), figsize = (4 * len(segments), 3.6),
+                             dpi = 150, squeeze = False)
+    axes = axes[0]
     fig.patch.set_facecolor(common.COLORS["surface"])
-    for ax, segment in zip(axes, cb.SEGMENT_ORDER):
+    for ax, segment in zip(axes, segments):
         m = prior_draws[segment]
         x = GRID_1D if segment != "matched" else GRID_2D
         for row in m[:60]:
@@ -534,7 +550,8 @@ def key_parameters(draws: dict, spec) -> dict:
                 "lower": float(np.quantile(values, 0.025)),
                 "upper": float(np.quantile(values, 0.975))}
 
-    for g, segment in enumerate(cb.SEGMENT_ORDER):
+    # Per-segment vectors follow spec.segments (a segment fit has length 1).
+    for g, segment in enumerate(spec.segments):
         out[f"tau_{segment}"] = summ(np.exp(draws["log_tau"][:, g]))
         out[f"mu_{segment}"] = summ(draws["mu"][:, g])
         out[f"alpha_{segment}"] = summ(draws["alpha"][:, g])
@@ -603,16 +620,22 @@ def main() -> None:
             f"(raw {r['raw_sp']:.4f})" for s, r in forward_rates.items()))
     log("knots: " + "; ".join(f"{k} {len(v) - 1} intervals"
                               for k, v in prepared.knots.items()))
+    n_by_segment = {s: int((rows["segment"] == s).sum()) for s in spec.segments}
+    gold_by_segment = {s: int(rows.loc[rows["segment"] == s, "gold"].sum())
+                       for s in spec.segments}
+    log(f"segments {list(spec.segments)}: " + ", ".join(
+        f"{s} {n_by_segment[s]:,}/{gold_by_segment[s]:,}" for s in spec.segments))
 
     # Prior predictive (§5.2).
     prior = cb.sample_prior_curve_params(prepared, 400,
                                          np.random.default_rng(args.seed))
     prior_curves = {s: cb.curve_draws(prior, prepared, s, osm = GRID_1D,
                                       overture = GRID_1D)
-                    for s in cb.ONE_D_SEGMENTS}
-    prior_curves["matched"] = cb.curve_draws(
-        prior, prepared, "matched", osm = GRID_2D,
-        overture = np.full(len(GRID_2D), common.OVERTURE_ATOMS[0]))
+                    for s in spec.one_d_segments}
+    if "matched" in spec.segments:
+        prior_curves["matched"] = cb.curve_draws(
+            prior, prepared, "matched", osm = GRID_2D,
+            overture = np.full(len(GRID_2D), common.OVERTURE_ATOMS[0]))
     prior_summary = {}
     for segment, m in prior_curves.items():
         span = m.max(axis = 1) - m.min(axis = 1)
@@ -681,16 +704,18 @@ def main() -> None:
     weights = common.design_weights(rows, fit_config)
     y = np.nan_to_num(rows["y"].to_numpy(dtype = float))
     ht = {}
-    for segment in cb.ONE_D_SEGMENTS:
+    for segment in spec.one_d_segments:
         mask = (rows["segment"] == segment).to_numpy()
         ht[segment] = common.binned_ht_rates(
             rows.loc[mask, cb.SCORE_COLUMN[segment]].to_numpy(dtype = float),
             y[mask], weights[mask], prepared.knots[segment])
     color = common.COLORS.get(spec.arm, common.COLORS["A"])
-    figure_curves(frame, ht, out_dir / "figures" / f"{tag}_curves_1d.png",
-                  f"Bayes arm {spec.arm}", color)
-    figure_matched(frame, out_dir / "figures" / f"{tag}_matched.png",
-                   f"Bayes arm {spec.arm}", color)
+    if ht:
+        figure_curves(frame, ht, out_dir / "figures" / f"{tag}_curves_1d.png",
+                      f"Bayes arm {spec.arm}", color)
+    if "matched" in spec.segments:
+        figure_matched(frame, out_dir / "figures" / f"{tag}_matched.png",
+                       f"Bayes arm {spec.arm}", color)
     if "logit_beta_label" in draws:
         figure_beta_label(
             1 / (1 + np.exp(-np.asarray(draws["logit_beta_label"]))), spec,
@@ -698,7 +723,11 @@ def main() -> None:
 
     summary = {
         "tag": tag, "spec": repr(spec), "git": common.git_state(),
+        # The fitted segments; summaries without this key are joint fits.
+        "segments": list(spec.segments),
         "n_rows": int(len(rows)), "n_gold": int(rows["gold"].sum()),
+        "n_rows_by_segment": n_by_segment,
+        "n_gold_by_segment": gold_by_segment,
         "knots": {k: np.round(v, 6).tolist() for k, v in prepared.knots.items()},
         "num_parameters": int(sum(np.prod(np.shape(v)) for v in
                                   cb.parameter_template(prepared).values())),

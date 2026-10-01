@@ -657,3 +657,127 @@ def test_forward_rates_are_design_weighted_training_gold_and_inside(rows):
             assert 0.0 < r[name] < 1.0
     for r in exact.values():
         assert r["raw_se"] == 1.0 and r["raw_sp"] == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Single-segment fits (production from October 2026)
+# ---------------------------------------------------------------------------
+
+def _segment_params(params, spec, segment):
+    """The joint parameters of one segment, shaped for a single-segment spec."""
+    g = spec.segments.index(segment)
+    out = {k: params[k][g:g + 1] for k in ("alpha", "mu", "log_tau")}
+    out[f"z_{segment}"] = params[f"z_{segment}"]
+    return out
+
+
+def test_model_spec_segments_are_validated_and_ordered():
+    spec = cb.ModelSpec(arm = "C", segments = ("matched", "overture"))
+    assert spec.segments == ("overture", "matched")
+    assert spec.one_d_segments == ("overture",)
+    assert cb.ModelSpec(arm = "C", segments = "osm").segments == ("osm",)
+    assert cb.ModelSpec().segments == cb.SEGMENT_ORDER
+    with pytest.raises(ValueError, match = "subset"):
+        cb.ModelSpec(arm = "C", segments = ("osm", "poi"))
+    with pytest.raises(ValueError, match = "subset"):
+        cb.ModelSpec(arm = "C", segments = ())
+    with pytest.raises(ValueError, match = "arm A"):
+        cb.ModelSpec(arm = "A", segments = ("osm",))
+    # The summary's repr round-trips, segments included.
+    again = eval(repr(spec), {"ModelSpec": cb.ModelSpec,
+                              "PriorConfig": cb.PriorConfig})
+    assert again == spec
+
+
+def test_joint_density_factorizes_into_segment_densities(rows):
+    """Arm C with fixed rates: the joint log density is the sum over segments.
+
+    No parameter is shared, so a single-segment fit at the segment's slice of
+    the joint parameters gives exactly that segment's share, prior included
+    (a separate matched tau scale guards the by-name prior lookup).
+    """
+    priors = cb.PriorConfig(tau_scale_matched = 1.3)
+    joint_spec = cb.ModelSpec(arm = "C", label_noise = "fixed_mixture",
+                              priors = priors)
+    joint = cb.prepare_data(rows, joint_spec)
+    params = _random_params(joint, np.random.default_rng(51), scale = 0.5)
+    total = float(cb.make_log_density(joint)(params))
+    parts = 0.0
+    for segment in cb.SEGMENT_ORDER:
+        spec = cb.with_spec(joint_spec, segments = (segment,))
+        # The segment's own rows only: other segments never enter its fit.
+        single = cb.prepare_data(rows[rows["segment"] == segment], spec)
+        parts += float(cb.make_log_density(single)(
+            _segment_params(params, joint_spec, segment)))
+    np.testing.assert_allclose(parts, total, rtol = 1e-5)
+
+
+def test_single_segment_prepare_data_matches_the_joint_one(rows):
+    for noise in ("fixed_mixture", "fixed"):
+        joint = cb.prepare_data(rows, cb.ModelSpec(arm = "C", label_noise = noise))
+        for segment in cb.SEGMENT_ORDER:
+            spec = cb.ModelSpec(arm = "C", label_noise = noise,
+                                segments = (segment,))
+            for table in (rows, rows[rows["segment"] == segment]):
+                single = cb.prepare_data(table, spec)
+                assert list(single.segments) == [segment]
+                axes = ([segment] if segment != "matched"
+                        else ["matched_x", "matched_y"])
+                assert set(single.knots) == set(axes)
+                for axis in axes:
+                    np.testing.assert_array_equal(single.knots[axis],
+                                                  joint.knots[axis])
+                for key, value in single.segments[segment].items():
+                    np.testing.assert_array_equal(value,
+                                                  joint.segments[segment][key])
+                for key in ("anchor", "h", "hx", "hy", "shape"):
+                    if key in joint.geometry[segment]:
+                        np.testing.assert_array_equal(
+                            single.geometry[segment][key],
+                            joint.geometry[segment][key])
+                rates = (single.forward_rates if noise == "fixed_mixture"
+                         else single.silver_rates)
+                joint_rates = (joint.forward_rates if noise == "fixed_mixture"
+                               else joint.silver_rates)
+                assert rates == {segment: joint_rates[segment]}
+
+
+def test_matched_only_spec_uses_the_matched_tau_scale(rows):
+    priors = cb.PriorConfig(tau_scale = 0.5, tau_scale_matched = 2.0)
+    spec = cb.ModelSpec(arm = "C", segments = ("matched",), priors = priors)
+    np.testing.assert_array_equal(spec.tau_scales, [2.0])
+    np.testing.assert_array_equal(
+        cb.ModelSpec(arm = "C", priors = priors).tau_scales, [0.5, 0.5, 2.0])
+    prepared = cb.prepare_data(rows, spec)
+    params = cb.parameter_template(prepared)
+    assert params["log_tau"].shape == (1,)
+    assert set(params) == {"alpha", "mu", "log_tau", "z_matched"}
+    # Only the tau term differs between scales 2.0 and 0.5 at log tau = 0.
+    from scipy.stats import halfnorm
+    other = cb.with_spec(spec, priors = cb.PriorConfig(tau_scale = 2.0,
+                                                       tau_scale_matched = 0.5))
+    diff = float(cb.log_prior(params, spec) - cb.log_prior(params, other))
+    np.testing.assert_allclose(
+        diff, halfnorm.logpdf(1.0, scale = 2.0) - halfnorm.logpdf(1.0, scale = 0.5),
+        rtol = 1e-5)
+    draws = cb.sample_prior_curve_params(prepared, 4000, np.random.default_rng(3))
+    median_tau = float(np.median(np.exp(np.asarray(draws["log_tau"]))))
+    np.testing.assert_allclose(median_tau, 2.0 * halfnorm.median(), rtol = 0.1)
+
+
+def test_short_single_segment_fit_runs():
+    rows = _synthetic_rows(n_per_segment = 300, seed = 61)
+    spec = cb.ModelSpec(arm = "C", label_noise = "fixed_mixture",
+                        segments = ("osm",))
+    prepared = cb.prepare_data(rows, spec)
+    result = cb.fit(prepared, num_warmup = 100, num_samples = 100, num_chains = 2,
+                    seed = 62)
+    assert result.draws["alpha"].shape == (200, 1)
+    assert set(result.draws) == {"alpha", "mu", "log_tau", "z_osm"}
+    grid = np.linspace(0.0, 1.0, 51)
+    m = cb.curve_draws(result.draws, prepared, "osm", osm = grid)
+    assert m.shape == (200, 51) and np.all(np.isfinite(m))
+    assert np.all(np.diff(m, axis = 1) >= -50 * np.finfo(m.dtype).eps)
+    with pytest.raises(ValueError, match = "not in this fit"):
+        cb.curve_draws(result.draws, prepared, "matched", osm = grid,
+                       overture = grid)

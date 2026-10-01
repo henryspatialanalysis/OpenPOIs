@@ -188,8 +188,21 @@ def spec_from_args(args) -> cb.ModelSpec:
         equal_knots = getattr(args, "equal_knots", None),
         spacing_scaled_rw = bool(getattr(args, "spacing_scaled_rw", False)),
         smooth_max_t = float(getattr(args, "smooth_max_t", 0.0)),
+        segments = parse_segments(getattr(args, "segments", None)),
         priors = priors,
     )
+
+
+def parse_segments(value: str = None) -> tuple:
+    """``--segments`` comma list as a tuple (None or "" means all three)."""
+    if not value:
+        return cb.SEGMENT_ORDER
+    segments = tuple(s.strip() for s in value.split(",") if s.strip())
+    unknown = sorted(set(segments) - set(cb.SEGMENT_ORDER))
+    if unknown:
+        raise SystemExit(f"--segments: unknown {unknown}; choose from "
+                         f"{','.join(cb.SEGMENT_ORDER)}")
+    return segments
 
 
 def add_spec_arguments(parser) -> None:
@@ -209,6 +222,11 @@ def add_spec_arguments(parser) -> None:
                                 "model, design doc §3.5c); symmetric / "
                                 "asymmetric estimated (first run, S2C); none "
                                 "(S3C-a)."))
+    parser.add_argument("--segments", default = None,
+                        help = ("Comma list of segments to fit, from "
+                                "overture,osm,matched (default all three). Arm C "
+                                "with fixed rates factorizes by segment, so "
+                                "production fits each one separately."))
     parser.add_argument("--pooled-rounds", default = None,
                         help = ("Comma list of earlier validation rounds pooled "
                                 "into the fit and the silver-label rates; '' for "

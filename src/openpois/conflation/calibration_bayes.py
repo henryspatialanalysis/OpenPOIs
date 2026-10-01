@@ -5,11 +5,13 @@
 
 """Bayesian monotone-spline calibration of existence confidence (Phase 1).
 
-**Not on the production path.** This is the prototype described in
-``.claude/plans/bayesian-monotone-calibration.md`` (the "design doc"; equation
-numbers M1-M18 below refer to it). It is validated against the production
-interaction model by ``scripts/conflation/cv_bayes_calibration.py`` and is not
-read by any deploy code.
+**Production since the October 2026 run** in one form: arm C with the fixed-rate
+mixture label layer (``label_noise = "fixed_mixture"``), fit as three separate
+models (``ModelSpec.segments``), exported to grid curves by
+``scripts/conflation/export_bayes_curves.py`` and deployed by
+``openpois.conflation.calibration``. The other arms and label layers remain for
+evaluation. Design: ``.claude/plans/bayesian-monotone-calibration.md`` (the "design
+doc"; equation numbers M1-M18 below refer to it).
 
 The model calibrates P(exists and open) for each detection segment with a
 monotone, range-bounded spline of the source score(s)::
@@ -236,6 +238,13 @@ class ModelSpec:
     # sensitivities. Estimated noise is not identified from arm C's likelihood
     # except through the selection-induced gold/silver gap (decision 15).
     label_noise: str = "fixed"
+    # The segments this fit models, kept in SEGMENT_ORDER order; every
+    # per-segment parameter vector follows it. Production fits one segment at a
+    # time (plan of 2026-09-30): under arm C with fixed rates no parameter is
+    # shared across segments, so the joint posterior factorizes and three
+    # single-segment fits are the joint fit, each with its own step size and
+    # mass matrix. Arm A pools its measurement layer, so it needs all three.
+    segments: tuple = SEGMENT_ORDER
     priors: PriorConfig = field(default_factory = PriorConfig)
 
     def __post_init__(self):
@@ -247,6 +256,35 @@ class ModelSpec:
             raise ValueError(f"label_noise must be one of {LABEL_NOISE}")
         if self.class_scheme is not None and self.class_scheme not in CLASS_SCHEMES:
             raise ValueError(f"class_scheme must be one of {CLASS_SCHEMES}")
+        requested = ((self.segments,) if isinstance(self.segments, str)
+                     else tuple(self.segments))
+        unknown = sorted(set(requested) - set(SEGMENT_ORDER))
+        if unknown or not requested:
+            raise ValueError(f"segments must be a non-empty subset of "
+                             f"{SEGMENT_ORDER}, got {self.segments!r}")
+        object.__setattr__(self, "segments",
+                           tuple(s for s in SEGMENT_ORDER if s in requested))
+        if self.arm == "A" and self.segments != SEGMENT_ORDER:
+            raise ValueError("arm A pools its measurement layer across segments "
+                             f"and fits all of {SEGMENT_ORDER}; got segments "
+                             f"{self.segments}")
+
+    @property
+    def one_d_segments(self) -> tuple:
+        """The requested 1-D segments, in SEGMENT_ORDER order."""
+        return tuple(s for s in self.segments if s in ONE_D_SEGMENTS)
+
+    @property
+    def tau_scales(self) -> np.ndarray:
+        """Half-normal scale of each requested segment's tau, by segment name.
+
+        Looked up by name so a matched-only fit gets ``tau_scale_matched``.
+        """
+        pr = self.priors
+        matched = (pr.tau_scale_matched if pr.tau_scale_matched is not None
+                   else pr.tau_scale)
+        return np.array([matched if s == "matched" else pr.tau_scale
+                         for s in self.segments])
 
     @property
     def scheme(self) -> str:
@@ -554,17 +592,21 @@ def production_classes(rows: pd.DataFrame, fit_config: cf.FitConfig) -> pd.Serie
 
 
 def segment_knots(rows: pd.DataFrame, spec: ModelSpec) -> dict:
-    """Breakpoints per curve axis, from all phase-1 rows (fixed across folds)."""
+    """Breakpoints per curve axis, from all phase-1 rows (fixed across folds).
+
+    Only the requested segments' axes are built (``spec.segments``).
+    """
     knots = {}
-    for segment in ONE_D_SEGMENTS:
+    for segment in spec.one_d_segments:
         seg = rows[rows["segment"] == segment]
         knots[segment] = knot_breaks(seg[SCORE_COLUMN[segment]], spec.max_gap,
                                      spec.equal_knots)
-    matched = rows[rows["segment"] == "matched"]
-    knots["matched_x"] = knot_breaks(matched["osm_score"], spec.max_gap,
-                                     spec.equal_knots)
-    knots["matched_y"] = knot_breaks(matched["overture_score"], spec.max_gap,
-                                     spec.equal_knots)
+    if "matched" in spec.segments:
+        matched = rows[rows["segment"] == "matched"]
+        knots["matched_x"] = knot_breaks(matched["osm_score"], spec.max_gap,
+                                         spec.equal_knots)
+        knots["matched_y"] = knot_breaks(matched["overture_score"], spec.max_gap,
+                                         spec.equal_knots)
     return knots
 
 
@@ -615,7 +657,7 @@ def _geometry(knots: dict, spec: ModelSpec, medians: dict) -> dict:
     """
     geometry = {}
     center = spec.anchor == "center"
-    for segment in ONE_D_SEGMENTS:
+    for segment in spec.one_d_segments:
         xi = greville(knots[segment], spec.degree)
         geometry[segment] = {
             "h": np.diff(xi),
@@ -623,6 +665,8 @@ def _geometry(knots: dict, spec: ModelSpec, medians: dict) -> dict:
             "n_basis": len(xi),
             "anchor": _nearest(xi, medians[segment]) if center else 0,
         }
+    if "matched" not in spec.segments:
+        return geometry
     xi_x = greville(knots["matched_x"], spec.degree)
     xi_y = greville(knots["matched_y"], spec.degree)
     geometry["matched"] = {
@@ -638,7 +682,7 @@ def _geometry(knots: dict, spec: ModelSpec, medians: dict) -> dict:
 
 
 def silver_label_rates(frames, fit_config: cf.FitConfig = None,
-                       gold_masks = None) -> dict:
+                       gold_masks = None, segments: tuple = SEGMENT_ORDER) -> dict:
     """P(exists | segment, LLM verdict) for silver labels, from gold (M15c').
 
     For each segment and definitive verdict (exists, gone), the design-weighted
@@ -656,11 +700,12 @@ def silver_label_rates(frames, fit_config: cf.FitConfig = None,
     only, so held-out labels never inform the rates).
 
     Returns ``{segment: {"exists": q_e, "gone": q_g, "n_exists": n,
-    "n_gone": n, "ess_exists": .., "ess_gone": ..}}``.
+    "n_gone": n, "ess_exists": .., "ess_gone": ..}}`` for each of ``segments``
+    (every segment's rate depends on its own gold only).
     """
     pooled = _weighted_gold(frames, fit_config, gold_masks)
     out = {}
-    for segment in SEGMENT_ORDER:
+    for segment in segments:
         entry = {}
         for verdict in ("exists", "gone"):
             sel = ((pooled["segment"] == segment) & (pooled["verdict"] == verdict)
@@ -679,7 +724,7 @@ def silver_label_rates(frames, fit_config: cf.FitConfig = None,
 
 
 def forward_silver_rates(frames, fit_config: cf.FitConfig = None,
-                         gold_masks = None) -> dict:
+                         gold_masks = None, segments: tuple = SEGMENT_ORDER) -> dict:
     """Forward rates (Se, Sp) of the definitive LLM verdicts, per segment.
 
     Se = P(verdict exists | y = 1, verdict definitive) and Sp = P(verdict gone
@@ -699,11 +744,11 @@ def forward_silver_rates(frames, fit_config: cf.FitConfig = None,
     Returns ``{segment: {"se": .., "sp": .., "raw_se": .., "raw_sp": ..,
     "n_se": n, "n_sp": n, "ess_se": .., "ess_sp": ..}}``, where ``n_se`` counts
     the gold rows that exist (the denominator of Se) and ``n_sp`` those that
-    do not.
+    do not. Only ``segments`` are returned.
     """
     pooled = _weighted_gold(frames, fit_config, gold_masks)
     out = {}
-    for segment in SEGMENT_ORDER:
+    for segment in segments:
         entry = {}
         base = ((pooled["segment"] == segment)
                 & pooled["verdict"].isin(["exists", "gone"])
@@ -745,6 +790,8 @@ def _weighted_gold(frames, fit_config: cf.FitConfig = None,
         weights = np.zeros(len(frame))
         for segment in SEGMENT_ORDER:
             mask = (frame["segment"] == segment).to_numpy()
+            if not mask.any():
+                continue
             inclusion = cf.inclusion_by_class(
                 pd.Series(classes[mask]).reset_index(drop = True), gold[mask])
             weights[mask] = np.array([
@@ -788,6 +835,10 @@ def prepare_data(rows: pd.DataFrame, spec: ModelSpec, knots: dict = None,
     (``silver_label_rates``). Pass pooled multi-round rates here to fold other
     rounds' gold in. ``forward_rates`` does the same for the (Se, Sp) of
     ``label_noise = "fixed_mixture"`` (``forward_silver_rates``).
+
+    Only ``spec.segments`` are built; rows of other segments may be present and
+    are ignored (each segment's arrays, knots and rates depend on its own rows
+    only, so a single-segment fit sees exactly what the joint fit gives it).
     """
     fit_config = fit_config or cf.FitConfig()
     rows = rows.reset_index(drop = True)
@@ -803,13 +854,15 @@ def prepare_data(rows: pd.DataFrame, spec: ModelSpec, knots: dict = None,
     verdict = rows["llm_verdict"].astype(str).to_numpy()
     prod_classes = production_classes(rows, fit_config)
     if spec.arm == "C" and spec.label_noise == "fixed" and silver_rates is None:
-        silver_rates = silver_label_rates(rows, fit_config, gold_masks = [gold])
+        silver_rates = silver_label_rates(rows, fit_config, gold_masks = [gold],
+                                          segments = spec.segments)
     mixture = spec.arm == "C" and spec.label_noise == "fixed_mixture"
     if mixture and forward_rates is None:
-        forward_rates = forward_silver_rates(rows, fit_config, gold_masks = [gold])
+        forward_rates = forward_silver_rates(rows, fit_config, gold_masks = [gold],
+                                             segments = spec.segments)
 
     segments = {}
-    for segment in SEGMENT_ORDER:
+    for segment in spec.segments:
         mask = (rows["segment"] == segment).to_numpy()
         seg = rows[mask]
         r = seg[R_COLUMN[segment]].to_numpy(dtype = float)
@@ -867,10 +920,11 @@ def prepare_data(rows: pd.DataFrame, spec: ModelSpec, knots: dict = None,
         segments[segment] = entry
     medians = {s: float(np.median(rows.loc[rows["segment"] == s,
                                            SCORE_COLUMN[s]]))
-               for s in ONE_D_SEGMENTS}
-    matched = rows[rows["segment"] == "matched"]
-    medians["matched_x"] = float(np.median(matched["osm_score"]))
-    medians["matched_y"] = float(np.median(matched["overture_score"]))
+               for s in spec.one_d_segments}
+    if "matched" in spec.segments:
+        matched = rows[rows["segment"] == "matched"]
+        medians["matched_x"] = float(np.median(matched["osm_score"]))
+        medians["matched_y"] = float(np.median(matched["overture_score"]))
     return PreparedData(spec = spec, knots = knots, segments = segments,
                         geometry = _geometry(knots, spec, medians),
                         silver_rates = silver_rates,
@@ -885,14 +939,14 @@ def parameter_template(prepared: PreparedData) -> dict:
     """A zero-valued parameter pytree with the model's shapes."""
     spec, geometry = prepared.spec, prepared.geometry
     n_classes = len(spec.class_levels)
+    n_segments = len(spec.segments)
     params = {
-        "alpha": jnp.zeros(3),
-        "mu": jnp.zeros(3),
-        "log_tau": jnp.zeros(3),
-        "z_overture": jnp.zeros(geometry["overture"]["field_basis"].shape[1]),
-        "z_osm": jnp.zeros(geometry["osm"]["field_basis"].shape[1]),
-        "z_matched": jnp.zeros(geometry["matched"]["field_basis"].shape[1]),
+        "alpha": jnp.zeros(n_segments),
+        "mu": jnp.zeros(n_segments),
+        "log_tau": jnp.zeros(n_segments),
     }
+    for segment in spec.segments:
+        params[f"z_{segment}"] = jnp.zeros(geometry[segment]["field_basis"].shape[1])
     if spec.arm == "A" and not spec.pool_segments:
         params["psi"] = jnp.zeros((3, 2, n_classes - 1))
         if spec.differential:
@@ -919,11 +973,17 @@ def parameter_template(prepared: PreparedData) -> dict:
     return params
 
 
-def curve_coefficients(params: dict, geometry: dict, spec: ModelSpec) -> dict:
-    """Squashed spline coefficients for all three curves (M7-M11)."""
+def curve_coefficients(params: dict, geometry: dict, spec: ModelSpec,
+                       only: tuple = None) -> dict:
+    """Squashed spline coefficients for the spec's curves (M7-M11).
+
+    ``only`` restricts the build to those segments (``curve_draws`` builds one).
+    """
     tau = jnp.exp(params["log_tau"])
     out = {}
-    for g, segment in enumerate(SEGMENT_ORDER):
+    for g, segment in enumerate(spec.segments):
+        if only is not None and segment not in only:
+            continue
         basis = jnp.asarray(geometry[segment]["field_basis"])
         field_values = params["mu"][g] + tau[g] * (basis @ params[f"z_{segment}"])
         if segment in ONE_D_SEGMENTS:
@@ -947,7 +1007,7 @@ def curve_coefficients(params: dict, geometry: dict, spec: ModelSpec) -> dict:
 def segment_logits(coefficients: dict, data: dict) -> dict:
     """F_g(s_i) for every row, per segment (M3, M5, M6)."""
     out = {}
-    for segment in SEGMENT_ORDER:
+    for segment in coefficients:
         seg = data[segment]
         if segment in ONE_D_SEGMENTS:
             out[segment] = seg["basis"] @ coefficients[segment]
@@ -969,12 +1029,9 @@ def log_prior(params: dict, spec: ModelSpec) -> jnp.ndarray:
     pr = spec.priors
     lp = jnp.sum(jnorm.logpdf(params["alpha"], 0.0, pr.alpha_sd))
     lp += jnp.sum(jnorm.logpdf(params["mu"], pr.mu_mean, pr.mu_sd))
-    tau_scales = jnp.array([
-        pr.tau_scale, pr.tau_scale,
-        pr.tau_scale_matched if pr.tau_scale_matched is not None else pr.tau_scale,
-    ])
+    tau_scales = jnp.asarray(spec.tau_scales)
     lp += jnp.sum(_half_normal_log_scale(params["log_tau"], tau_scales))
-    for segment in SEGMENT_ORDER:
+    for segment in spec.segments:
         lp += jnp.sum(jnorm.logpdf(params[f"z_{segment}"]))
     if spec.arm == "A" and not spec.pool_segments:
         lp += jnp.sum(jnorm.logpdf(params["psi"], 0.0, pr.mu_psi_sd))
@@ -1099,7 +1156,8 @@ def pointwise_log_likelihood(params: dict, data: dict, geometry: dict,
     coefficients = curve_coefficients(params, geometry, spec)
     logits = segment_logits(coefficients, data)
     out = {}
-    for g, segment in enumerate(SEGMENT_ORDER):
+    # Arm A always has all three segments, so g indexes its (3, ...) arrays.
+    for g, segment in enumerate(spec.segments):
         seg, f = data[segment], logits[segment]
         lp1, lp0 = jax.nn.log_sigmoid(f), jax.nn.log_sigmoid(-f)
         y, gold = seg["y"], seg["gold"]
@@ -1156,9 +1214,10 @@ def initial_params(prepared: PreparedData) -> dict:
     """A sensible, feasible starting point before the MAP search."""
     params = parameter_template(prepared)
     center = prepared.spec.anchor == "center"
-    params["alpha"] = jnp.full(3, 0.3 if center else -1.0)
-    params["mu"] = jnp.full(3, 1.0)
-    params["log_tau"] = jnp.full(3, np.log(0.3))
+    n_segments = len(prepared.spec.segments)
+    params["alpha"] = jnp.full(n_segments, 0.3 if center else -1.0)
+    params["mu"] = jnp.full(n_segments, 1.0)
+    params["log_tau"] = jnp.full(n_segments, np.log(0.3))
     spec = prepared.spec
     if spec.arm == "A" and spec.pool_segments:
         params["log_omega_psi"] = jnp.asarray(np.log(0.5))
@@ -1350,9 +1409,13 @@ def curve_draws(draws: dict, prepared: PreparedData, segment: str, osm = None,
     """Posterior draws of m_g(s) = expit(F_g(s)) at new scores (M18).
 
     ``draws`` has a leading draw axis. Returns an array (draws, n points);
-    points with a missing score are NaN.
+    points with a missing score are NaN. Only ``segment``'s coefficients are
+    built; it must be one of the fit's ``spec.segments``.
     """
     spec, knots, geometry = prepared.spec, prepared.knots, prepared.geometry
+    if segment not in spec.segments:
+        raise ValueError(f"{segment} is not in this fit's segments {spec.segments}")
+    only = (segment,)
     if segment in ONE_D_SEGMENTS:
         scores = np.asarray(osm if segment == "osm" else overture, dtype = float)
         finite = np.isfinite(scores)
@@ -1360,7 +1423,7 @@ def curve_draws(draws: dict, prepared: PreparedData, segment: str, osm = None,
                                          spec.degree))
 
         def one(p):
-            c = curve_coefficients(p, geometry, spec)[segment]
+            c = curve_coefficients(p, geometry, spec, only)[segment]
             return jax.nn.sigmoid(basis @ c)
     else:
         osm = np.asarray(osm, dtype = float)
@@ -1372,7 +1435,7 @@ def curve_draws(draws: dict, prepared: PreparedData, segment: str, osm = None,
                                       spec.degree))
 
         def one(p):
-            c = curve_coefficients(p, geometry, spec)["matched"]
+            c = curve_coefficients(p, geometry, spec, only)["matched"]
             return jax.nn.sigmoid(jnp.sum((bx @ c) * by, axis = 1))
 
     batched = jax.jit(jax.vmap(one))
@@ -1408,14 +1471,13 @@ def sample_prior_curve_params(prepared: PreparedData, n_draws: int,
     out = jax.tree_util.tree_map(
         lambda x: np.zeros((n_draws,) + np.shape(x)), template
     )
-    out["alpha"] = rng.normal(0.0, pr.alpha_sd, (n_draws, 3))
-    out["mu"] = rng.normal(pr.mu_mean, pr.mu_sd, (n_draws, 3))
-    scales = np.array([
-        pr.tau_scale, pr.tau_scale,
-        pr.tau_scale_matched if pr.tau_scale_matched is not None else pr.tau_scale,
-    ])
-    out["log_tau"] = np.log(np.abs(rng.normal(0.0, 1.0, (n_draws, 3))) * scales)
-    for segment in SEGMENT_ORDER:
+    n_segments = len(prepared.spec.segments)
+    out["alpha"] = rng.normal(0.0, pr.alpha_sd, (n_draws, n_segments))
+    out["mu"] = rng.normal(pr.mu_mean, pr.mu_sd, (n_draws, n_segments))
+    scales = prepared.spec.tau_scales
+    out["log_tau"] = np.log(np.abs(rng.normal(0.0, 1.0, (n_draws, n_segments)))
+                            * scales)
+    for segment in prepared.spec.segments:
         key = f"z_{segment}"
         out[key] = rng.normal(0.0, 1.0, out[key].shape)
     return jax.tree_util.tree_map(jnp.asarray, out)

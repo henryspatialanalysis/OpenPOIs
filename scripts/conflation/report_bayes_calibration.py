@@ -8,6 +8,12 @@ Reads what the other three scripts wrote under the evaluation directory:
 
 and writes ``fit_report.md`` beside them (design doc §5.6). It does no model
 fitting.
+
+When the main tag is a single-segment fit (``summary.json`` lists fewer than three
+``segments``; the production ``MODE=mixture`` run), the report reads the three
+segment fits that share its prefix (``mixture_overture``, ``mixture_osm``,
+``mixture_matched``) and shows each segment's fit, acceptance, forward rates and
+deployed impact as one model.
 """
 
 from __future__ import annotations
@@ -27,6 +33,10 @@ import bayes_calibration_common as common  # noqa: E402
 # October 2026; `--main armC_mixture` makes it the report's main model.
 MAIN = "armC"
 MAIN_TAGS = ("armC", "armC_mixture", "armA", "armB")
+# Production segment fits (run_bayes_phase1.sh MODE=mixture), one per segment.
+SEGMENT_TAGS = {"overture": "mixture_overture", "osm": "mixture_osm",
+                "matched": "mixture_matched"}
+SEGMENTS = ("overture", "osm", "matched")
 SENSITIVITY = {
     "S2C_asym": "asymmetric label noise (Se, Sp; priors at 0.998 / 0.913)",
     "S3C_exact": "silver labels treated as exact (β = 1)",
@@ -64,6 +74,53 @@ def diag_line(summary: dict) -> str:
             f"**acceptance {'PASS' if acc['all'] else 'FAIL'}**")
 
 
+def segment_fit_tags(main_tag: str, main: dict) -> dict | None:
+    """{segment: tag} when ``main_tag`` is a single-segment fit, else None.
+
+    The sibling tags share the main tag's prefix (``mixture_matched`` ->
+    ``mixture_overture``, ``mixture_osm``); a tag without a segment suffix
+    falls back to ``SEGMENT_TAGS``.
+    """
+    segments = (main or {}).get("segments")
+    if not segments or len(segments) == len(SEGMENTS):
+        return None
+    for segment in segments:
+        suffix = f"_{segment}"
+        if main_tag.endswith(suffix):
+            prefix = main_tag[:-len(suffix)]
+            return {s: f"{prefix}_{s}" for s in SEGMENTS}
+    return dict(SEGMENT_TAGS)
+
+
+def merged_segment_summary(out_dir: Path, tags: dict) -> dict:
+    """One summary-shaped dict from the segment fits, each segment from its own.
+
+    Per-segment entries (parameters, prior predictive, rates, deployed impact)
+    are taken from the fit of that segment; ``rounds`` from the first fit found.
+    """
+    merged = {"parameters": {}, "prior_predictive": {}, "silver_rates": {},
+              "forward_rates": {}, "ppc_tags": []}
+    impact = {}
+    for segment, tag in tags.items():
+        s = load_json(out_dir / "fits" / tag / "summary.json")
+        if not s:
+            continue
+        merged.setdefault("rounds", s.get("rounds"))
+        merged["parameters"].update(s.get("parameters") or {})
+        merged["prior_predictive"].update(s.get("prior_predictive") or {})
+        for key in ("silver_rates", "forward_rates"):
+            if (s.get(key) or {}).get(segment):
+                merged[key][segment] = s[key][segment]
+        if "ppc" in s:
+            merged["ppc"] = True
+            merged["ppc_tags"].append(tag)
+        if (s.get("deployed_impact") or {}).get("segments", {}).get(segment):
+            impact[segment] = s["deployed_impact"]["segments"][segment]
+    if impact:
+        merged["deployed_impact"] = {"segments": impact}
+    return {k: v for k, v in merged.items() if v not in ({}, None)}
+
+
 def curve_shift(out_dir: Path, tag: str, reference: str = MAIN) -> dict:
     """Max and mean |Δ posterior mean| of a variant's curves vs the reference."""
     a = out_dir / "fits" / tag / "curves.parquet"
@@ -80,12 +137,14 @@ def curve_shift(out_dir: Path, tag: str, reference: str = MAIN) -> dict:
     return out
 
 
-def gold_rate_table(out_dir: Path, tags: tuple) -> list:
+def gold_rate_table(out_dir: Path, tags: tuple, segment_tags: dict = None) -> list:
     """Posterior-mean P(exists) vs the design-weighted gold rate (quintiles).
 
     Rows are phase-1 validation rows grouped by segment x raw-score quintile;
     the model value is the mean of each arm's posterior-mean curve over the
     group's rows, the reference the Hajek-weighted gold rate (1 / pi_class).
+    ``segment_tags`` ({segment: tag}) adds one column built from the
+    single-segment fits, each segment from its own fit.
     """
     import jax
 
@@ -95,31 +154,45 @@ def gold_rate_table(out_dir: Path, tags: tuple) -> list:
     enable_high_precision()
     config = common.load_config()
     fit_config = common.fit_config_from(config)
-    available = [t for t in tags if (out_dir / "fits" / t / "draws.npz").exists()]
+
+    def has_draws(tag):
+        return (out_dir / "fits" / tag / "draws.npz").exists()
+
+    # Column label -> {segment: tag}: a joint fit serves every segment.
+    columns = {t: {s: t for s in cb.SEGMENT_ORDER} for t in tags if has_draws(t)}
+    if segment_tags:
+        found = {s: t for s, t in segment_tags.items() if has_draws(t)}
+        if found:
+            columns = {"segment fits": found, **columns}
+    available = list(columns)
     # Every fit in one directory shares its rounds; the main fit's table is the
     # reference (all its pooled rounds, each under its own design weights).
     if not available:
         return ["(no fits with saved draws)"]
-    rows = common.fit_rows(config, out_dir, available[0])
+    rows = common.fit_rows(config, out_dir, next(iter(columns[available[0]].values())))
     weights = common.design_weights(rows, fit_config)
     production = common.load_production()
     preds = {}
-    for tag in available:
-        # Rebuild the fit's exact spec from the repr saved in its summary.
-        summary = load_json(out_dir / "fits" / tag / "summary.json")
-        spec = eval(summary["spec"], {"ModelSpec": cb.ModelSpec,
-                                      "PriorConfig": cb.PriorConfig})
-        prepared = cb.prepare_data(rows, spec, fit_config = fit_config,
-                                   silver_rates = summary.get("silver_rates"),
-                                   forward_rates = summary.get("forward_rates"))
-        saved = np.load(out_dir / "fits" / tag / "draws.npz")
-        draws = {k: jax.numpy.asarray(saved[k].reshape((-1,) + saved[k].shape[2:])[::4])
-                 for k in saved.files}
-        for segment in cb.SEGMENT_ORDER:
-            seg = rows[rows["segment"] == segment]
-            preds[(tag, segment)] = cb.curve_draws(
-                draws, prepared, segment, osm = seg["osm_score"].to_numpy(),
-                overture = seg["overture_score"].to_numpy()).mean(axis = 0)
+    for label, by_segment in columns.items():
+        for tag in dict.fromkeys(by_segment.values()):
+            # Rebuild the fit's exact spec from the repr saved in its summary.
+            summary = load_json(out_dir / "fits" / tag / "summary.json")
+            spec = eval(summary["spec"], {"ModelSpec": cb.ModelSpec,
+                                          "PriorConfig": cb.PriorConfig})
+            prepared = cb.prepare_data(rows, spec, fit_config = fit_config,
+                                       silver_rates = summary.get("silver_rates"),
+                                       forward_rates = summary.get("forward_rates"))
+            saved = np.load(out_dir / "fits" / tag / "draws.npz")
+            draws = {k: jax.numpy.asarray(
+                saved[k].reshape((-1,) + saved[k].shape[2:])[::4])
+                for k in saved.files}
+            for segment in spec.segments:
+                if by_segment.get(segment) != tag:
+                    continue
+                seg = rows[rows["segment"] == segment]
+                preds[(label, segment)] = cb.curve_draws(
+                    draws, prepared, segment, osm = seg["osm_score"].to_numpy(),
+                    overture = seg["overture_score"].to_numpy()).mean(axis = 0)
     lines = ["| segment | raw-score quintile | gold | design-weighted gold rate | "
              "production | " + " | ".join(available) + " |",
              "|---|---|---|---|---|" + "---|" * len(available)]
@@ -139,6 +212,7 @@ def gold_rate_table(out_dir: Path, tags: tuple) -> list:
             sel = w[idx] > 0
             ht = float(np.sum(w[idx][sel] * y[idx][sel]) / np.sum(w[idx][sel]))
             values = " | ".join(f"{preds[(t, segment)][idx].mean():.3f}"
+                                if (t, segment) in preds else "—"
                                 for t in available)
             lines.append(f"| {segment} | {label} | {int(sel.sum())} | {ht:.3f} | "
                          f"{prod[idx].mean():.3f} | {values} |")
@@ -204,25 +278,40 @@ def main() -> None:
     config = common.load_config()
     _, metadata = common.load_handoff(config)
     out_dir = common.eval_dir(config, metadata, args.out_dir)
+    main = load_json(out_dir / "fits" / main_tag / "summary.json")
+    segment_tags = segment_fit_tags(main_tag, main)
     lines = ["# Bayesian monotone-spline calibration: Phase 1 report", ""]
     lines.append(f"Validation round {metadata['validation_round']} "
                  f"(conflation {metadata['conflation_version']}). Design doc: "
                  f"`.claude/plans/bayesian-monotone-calibration.md`; execution log: "
-                 f"`bayesian-monotone-calibration-notes.md`. Nothing here is on the "
-                 f"production path.")
+                 f"`bayesian-monotone-calibration-notes.md`. "
+                 + ("Production calibration: one fit per segment "
+                    f"({', '.join(segment_tags.values())}); the release needs all "
+                    "three to pass the acceptance rule." if segment_tags else
+                    "Nothing here is on the production path."))
     lines.append("")
 
     lines += ["## 1. Full-data fits", ""]
-    for tag in MAIN_TAGS + ("armA_variant",):
+    if segment_tags:
+        listed = [(f"{segment}: {tag}", tag) for segment, tag in segment_tags.items()]
+        main_label = "segment fits"
+    else:
+        listed = [(tag, tag) for tag in MAIN_TAGS + ("armA_variant",)]
+        main_label = main_tag
+    for label, tag in listed:
         s = load_json(out_dir / "fits" / tag / "summary.json")
         if not s:
-            lines.append(f"- {tag}: not run")
+            lines.append(f"- {label}: not run")
             continue
-        lines.append(f"- **{tag}** ({s['num_parameters']} parameters): {diag_line(s)}")
+        lines.append(f"- **{label}** ({s['num_parameters']} parameters): "
+                     f"{diag_line(s)}")
     lines.append("")
-    main = load_json(out_dir / "fits" / main_tag / "summary.json")
+    if segment_tags:
+        main = merged_segment_summary(out_dir, segment_tags) or None
+    ppc_tags = main.get("ppc_tags", []) if segment_tags and main else [main_tag]
     if main:
-        lines += [f"### Key parameters ({main_tag}, posterior mean [95% interval])", "",
+        lines += [f"### Key parameters ({main_label}, posterior mean [95% interval])",
+                  "",
                   "| parameter | mean | 95% interval |", "|---|---|---|"]
         for name, v in main["parameters"].items():
             lines.append(f"| {name} | {fmt(v['mean'])} | [{fmt(v['lower'])}, "
@@ -239,7 +328,7 @@ def main() -> None:
                 f"{'/'.join(f'{x:.2f}' for x in v['p_at_0_quantiles'])} | "
                 f"{'/'.join(f'{x:.2f}' for x in v['p_at_1_quantiles'])} |")
         lines.append("")
-        for tag in MAIN_TAGS:
+        for tag in (tuple(segment_tags.values()) if segment_tags else MAIN_TAGS):
             s = load_json(out_dir / "fits" / tag / "summary.json")
             if not s or "ppc" not in s:
                 continue
@@ -251,11 +340,14 @@ def main() -> None:
                                 if share is not None else ""))
             lines.append("")
         if "ppc" in main:
-            ppc = load_json(out_dir / "fits" / main_tag / "ppc.json")
-            if ppc and ppc.get("rate_by_knot"):
+            knot_rows = []
+            for tag in ppc_tags:
+                ppc = load_json(out_dir / "fits" / tag / "ppc.json")
+                knot_rows += (ppc or {}).get("rate_by_knot") or []
+            if knot_rows:
                 lines += ["", "| segment | interval | n gold | HT rate | model mean "
                           "[95%] |", "|---|---|---|---|---|"]
-                for r in ppc["rate_by_knot"]:
+                for r in knot_rows:
                     lines.append(
                         f"| {r['segment']} | [{r['lo']:.3f}, {r['hi']:.3f}) | "
                         f"{r['n_gold']} | {r['ht_rate']:.3f} | {r['model_mean']:.3f} "
@@ -312,7 +404,7 @@ def main() -> None:
               "against the Hajek-weighted gold rate. The gold rate is itself noisy "
               "(few gold rows per quintile), so read systematic offsets across "
               "quintiles, not single cells.", ""]
-    lines += gold_rate_table(out_dir, MAIN_TAGS + ("armA_variant",))
+    lines += gold_rate_table(out_dir, MAIN_TAGS + ("armA_variant",), segment_tags)
     lines.append("")
     lines += ["Figures: `figures/<tag>_curves_1d.png`, `figures/<tag>_matched.png`, "
               "`figures/<tag>_prior_predictive.png`, `figures/armC_beta_label.png`.",
@@ -356,28 +448,35 @@ def main() -> None:
         lines.append("Not run.")
     lines.append("")
 
-    lines += [f"## 4. Sensitivity runs (§5.5; full data, vs {MAIN})", "",
-              "| run | change | acceptance | max abs Δ curve (overture / osm / "
-              "matched) | mean abs Δ curve (overture / osm / matched) |",
-              "|---|---|---|---|---|"]
-    for tag, label in SENSITIVITY.items():
-        s = load_json(out_dir / "fits" / tag / "summary.json")
-        if not s:
-            lines.append(f"| {tag} | {label} | not run | | |")
-            continue
-        shift = curve_shift(out_dir, tag)
-        mx = " / ".join(f"{shift[k][0]:.3f}" for k in ("overture", "osm", "matched"))
-        mn = " / ".join(f"{shift[k][1]:.3f}" for k in ("overture", "osm", "matched"))
-        lines.append(f"| {tag} | {label} | "
-                     f"{'PASS' if s['acceptance']['all'] else 'FAIL'} | {mx} | {mn} |")
-    lines += ["", "The grid shifts include data-empty corners of the matched surface. "
-              "The at-row shifts below are the ones that matter. Sensitivity fits use "
-              "the light setting (4 × 600 + 400), so a FAIL is usually the strict "
-              "§5.1 rule (R̂ ≤ 1.01, ESS ≥ 400, zero divergences), not a gross "
-              "failure. A large S2C shift is the collapse of Sp described in the "
-              "execution log (decision 15).", ""]
-    lines += sensitivity_at_rows(out_dir)
-    lines.append("")
+    ran_sensitivity = any((out_dir / "fits" / tag / "summary.json").exists()
+                          for tag in SENSITIVITY)
+    if segment_tags and not ran_sensitivity:
+        # The production segment run has no sensitivity fits.
+        lines += ["## 4. Sensitivity runs (§5.5)", "", "Not run.", ""]
+    else:
+        lines += [f"## 4. Sensitivity runs (§5.5; full data, vs {MAIN})", "",
+                  "| run | change | acceptance | max abs Δ curve (overture / osm / "
+                  "matched) | mean abs Δ curve (overture / osm / matched) |",
+                  "|---|---|---|---|---|"]
+        for tag, label in SENSITIVITY.items():
+            s = load_json(out_dir / "fits" / tag / "summary.json")
+            if not s:
+                lines.append(f"| {tag} | {label} | not run | | |")
+                continue
+            shift = curve_shift(out_dir, tag)
+            mx = " / ".join(f"{shift[k][0]:.3f}" for k in SEGMENTS)
+            mn = " / ".join(f"{shift[k][1]:.3f}" for k in SEGMENTS)
+            verdict = "PASS" if s["acceptance"]["all"] else "FAIL"
+            lines.append(f"| {tag} | {label} | {verdict} | {mx} | {mn} |")
+        lines += ["", "The grid shifts include data-empty corners of the matched "
+                  "surface. The at-row shifts below are the ones that matter. "
+                  "Sensitivity fits use the light setting (4 × 600 + 400), so a "
+                  "FAIL is usually the strict "
+                  "§5.1 rule (R̂ ≤ 1.01, ESS ≥ 400, zero divergences), not a gross "
+                  "failure. A large S2C shift is the collapse of Sp described in the "
+                  "execution log (decision 15).", ""]
+        lines += sensitivity_at_rows(out_dir)
+        lines.append("")
     (out_dir / "fit_report.md").write_text("\n".join(lines) + "\n")
     print(f"wrote {out_dir / 'fit_report.md'}")
 
