@@ -20,6 +20,12 @@ fi
 source ~/miniforge3/etc/profile.d/conda.sh
 # The env is missing until `openpois-remote.sh setup` has run once.
 conda activate openpois 2> /dev/null || true
+# The env's libstdc++ must win over the system one: Ubuntu 22.04's stops at
+# CXXABI_1.3.13, and scipy's compiled extensions need 1.3.15. Whichever copy an
+# earlier import loads first is the one every later extension gets.
+if [ "${CONDA_DEFAULT_ENV:-}" = openpois ]; then
+    export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
 
 # GitHub access for `git fetch` without the login shell's agent.
 export GIT_SSH_COMMAND="ssh -i ~/.ssh/id_github -o IdentitiesOnly=yes"
