@@ -357,3 +357,40 @@ class TestParsePbfToGeoDataFrame:
         assert len(gdf) == 1
         assert gdf.iloc[0]["amenity"] == "cafe"
         assert gdf.crs.to_epsg() == 4326
+
+
+class TestResolveGeofabrikLatest:
+    LISTING = (
+        '<a href="us-260101.osm.pbf">x</a> <a href="us-260928.osm.pbf">x</a> '
+        '<a href="us-260929.osm.pbf">x</a> <a href="us-260929.osm.pbf.md5">x</a> '
+        '<a href="us-virgin-islands-260930.osm.pbf">x</a>'
+    )
+
+    def _response(self, text):
+        resp = MagicMock()
+        resp.text = text
+        resp.raise_for_status.return_value = None
+        return resp
+
+    def test_picks_the_newest_dated_extract_of_that_name(self):
+        from openpois.io.osm_snapshot import resolve_geofabrik_latest
+        url = "https://download.geofabrik.de/north-america/us-latest.osm.pbf"
+        with patch("openpois.io.osm_snapshot.requests.get",
+                   return_value = self._response(self.LISTING)):
+            assert resolve_geofabrik_latest(url) == (
+                "https://download.geofabrik.de/north-america/us-260929.osm.pbf"
+            )
+
+    def test_other_urls_and_failures_pass_through(self):
+        import requests as req
+        from openpois.io.osm_snapshot import resolve_geofabrik_latest
+        dated = "https://download.geofabrik.de/north-america/us-260929.osm.pbf"
+        assert resolve_geofabrik_latest(dated) == dated
+        url = "https://download.geofabrik.de/north-america/us/puerto-rico-latest.osm.pbf"
+        with patch("openpois.io.osm_snapshot.requests.get",
+                   return_value = self._response("<html>no files</html>")):
+            assert resolve_geofabrik_latest(url) == url
+        with patch("openpois.io.osm_snapshot.requests.get",
+                   side_effect = req.ConnectionError("down")), \
+                patch("openpois.io.osm_snapshot.time.sleep"):
+            assert resolve_geofabrik_latest(url) == url

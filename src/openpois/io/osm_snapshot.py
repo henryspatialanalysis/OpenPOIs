@@ -42,10 +42,12 @@ snapshot only.
 """
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from collections.abc import Sequence
 from typing import NamedTuple
@@ -84,6 +86,45 @@ class SnapshotExtract(NamedTuple):
 # -----------------------------------------------------------------------------
 
 
+_GEOFABRIK_LATEST = re.compile(
+    r"^(?P<dir>https?://download\.geofabrik\.de/(?:.*/)?)"
+    r"(?P<name>[^/]+)-latest\.osm\.pbf$"
+)
+
+
+def resolve_geofabrik_latest(url: str, timeout: float = 30) -> str:
+    """The newest dated extract behind a Geofabrik ``-latest`` URL, else ``url``.
+
+    Geofabrik publishes each extract as ``<name>-YYMMDD.osm.pbf`` beside the
+    ``<name>-latest.osm.pbf`` alias. On 2026-10-01 the aliases answered with a
+    301 to themselves (a stale proxy cache), so every download failed with
+    ``TooManyRedirects`` while the dated files served normally. Reading the
+    directory listing and taking the newest dated file avoids the alias and
+    records which day's extract was used. Any other URL, an unreadable listing,
+    or a listing with no dated file returns ``url`` unchanged.
+    """
+    match = _GEOFABRIK_LATEST.match(url)
+    if match is None:
+        return url
+    # The listings run to ~1 MB and occasionally fail; retry before giving up.
+    listing = None
+    for attempt in range(3):
+        try:
+            listing = requests.get(match["dir"], timeout = timeout)
+            listing.raise_for_status()
+            break
+        except requests.RequestException:
+            listing = None
+            time.sleep(2 ** attempt)
+    if listing is None:
+        return url
+    pattern = rf'href="({re.escape(match["name"])}-(\d{{6}})\.osm\.pbf)"'
+    dated = sorted(set(re.findall(pattern, listing.text)), key = lambda m: m[1])
+    if not dated:
+        return url
+    return match["dir"] + dated[-1][0]
+
+
 def download_pbf(
     url: str,
     output_path: Path,
@@ -103,10 +144,14 @@ def download_pbf(
     Raises:
         requests.HTTPError: If the HTTP request fails.
     """
+    resolved = resolve_geofabrik_latest(url)
+    if resolved != url:
+        print(f"  {url} -> {resolved}")
     # Geofabrik throttles ~1 MB/s per connection and drops the TLS stream
     # mid-transfer on these multi-GB extracts; download_resilient parallelises
     # across byte ranges and resumes across drops instead of restarting.
-    return download_resilient(url, output_path, overwrite=overwrite, label="PBF")
+    return download_resilient(resolved, output_path, overwrite=overwrite,
+                              label="PBF")
 
 
 # -----------------------------------------------------------------------------
