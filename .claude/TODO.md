@@ -8,11 +8,17 @@ Added 2026-09-30. The run skills (full-data-pull, conflate-snapshots, verify-pip
 point here: at the start of the October run, list these items to Nat and confirm which
 go in before any step runs. Details are in the linked items under **Upcoming**.
 
-**Raised 2026-09-30.** Code going into the pre-run PR to main: items 2, 4 (the
-fixed-rate mixture test model), 6 and 7. The rest are run steps.
+**Raised 2026-09-30.** Code for items 2, 4, 6 and 7 is done. The run happens on
+`feature/matched-index-modes`, here and on openpois-01, and the PR to main follows the
+run (Nat, 2026-09-30). Published calibration moves to the Bayesian mixture this month
+(item 1).
 
-1. **Refit calibration once (method change).** Reuse is off even on a drift-gate pass.
-   See "October 2026 run: refit calibration once".
+1. **Calibrate with the Bayesian fixed-rate mixture** (Nat, 2026-09-30; replaces the
+   v4 refit, which is retired). Three models, fit separately: 1-D Overture-only, 1-D
+   OSM-only, 2-D matched. Bands are the 95% posterior intervals (matched under-coverage
+   documented). `make calibrate` fits, exports grid curves and deploys them; a segment
+   that fails the §5.1 acceptance rule stops the run for Nat. No provisional
+   calibration: `make conflate_to_cd` first, calibrate after the validation round.
 2. **Implement the standard Horvitz–Thompson check**: a PDF review document with
    graphics, flagging bins more than ±1 SD off; it never fails the run. See "Standard
    design-weighted (Horvitz–Thompson) check" (Nat, 2026-09-30 and 2026-10-01).
@@ -21,13 +27,13 @@ fixed-rate mixture test model), 6 and 7. The rest are run steps.
    new LLM checks". Sequencing: conflation and CD produce the October population → draw
    the rows → validator LLM checks and a human census of new unverifiables → export the
    handoff → bump `versions.calibration` → refit.
-4. **Fit the fixed-rate mixture on the pooled July and October rounds** (Nat,
-   2026-09-30: the mixture is the model the monthly update uses; the other arms,
-   CV, coverage and sensitivity runs are not repeated). One command:
-   `MODE=mixture EVAL=<dir> bash scripts/conflation/run_bayes_phase1.sh`. Code done
-   2026-09-30. See "Bayesian arm C: pool the October round".
-5. **Re-test the matched interaction on the new round.** See "Re-test the matched
-   interaction on the next validation round".
+4. **Pool the July and October rounds in the mixture fit** (Nat, 2026-09-30: the
+   other arms, CV, coverage and sensitivity runs are not repeated). Set
+   `conflation.calibration.pooled_rounds: ["20260730"]` when `versions.calibration`
+   moves to the October round; `make calibrate` then fits on both. See "Bayesian arm C:
+   pool the October round".
+5. ~~Re-test the matched interaction on the new round.~~ Obsolete with v4 retired
+   (Nat, 2026-09-30).
 6. **Fail early on Overture POIs without a confidence score** (Nat, 2026-09-30; code
    done the same day). None has ever occurred: every 0.5 was a real provider score. The
    ingest now stops on a missing or out-of-range value, and `missing_conf` is retired
@@ -39,8 +45,13 @@ fixed-rate mixture test model), 6 and 7. The rest are run steps.
 9. **First run on openpois-01** (Nat, 2026-09-30). The national run moves to the AWS
    instance, driven by `scripts/remote/openpois-remote.sh`; October holds the publish for
    the new validation round (item 3). Procedure: `.claude/plans/remote-monthly-run.md` §4.
-   Before the national run, do the one-time `setup` / `sync main` / `seed` and a
-   `make conflate TEST=1` smoke run that exercises `run`, `watch` and `pull`.
+   Before the national run, do the one-time `setup` / `sync feature/matched-index-modes`
+   / `seed`, a `make conflate TEST=1` smoke run that exercises `run`, `watch` and `pull`,
+   and one full-length `MODE=mixture` fit on the July round alone to time it and check
+   the acceptance rule at production settings (not deployed).
+10. **Re-read the site's band prose at `update-site`.** `site/public/about.html`
+   describes confidence bands and per-band POI shares from the v4 curves; check it
+   against the October Bayesian values (`.claude/docs/data-versioning.md`).
 
 **Before November** (not October):
 - **The matched-surface band under-coverage in the Bayesian model** (Nat: skip in
@@ -61,7 +72,7 @@ fixed-rate mixture test model), 6 and 7. The rest are run steps.
 
 ## Upcoming
 
-- [ ] **October 2026 run: refit calibration once (method change).** Added 2026-09-26. `matched_index_mode` is now `interaction` and `band_aggregation` is `bin`, so the prior curves (pool-mode, old band) must not be reused even if the Overture drift gate passes. Run `make fit_calibration` against `versions.calibration: 20260730`, then check `fit_report.md`: the interaction coefficients should be close to the round-20260730 fit (a3 ≈ −11, `a1+a3` active) and matched curve metadata should show `index_mode: interaction`, `score_decimals: 6`. The overture curve also shifts at this refit because of the `build_lookup` edge fix. See the "Method-change override" in [docs/confidence-calibration.md](docs/confidence-calibration.md).
+- [x] **Obsolete 2026-09-30 (v4 retired; Nat).** **October 2026 run: refit calibration once (method change).** Added 2026-09-26. `matched_index_mode` is now `interaction` and `band_aggregation` is `bin`, so the prior curves (pool-mode, old band) must not be reused even if the Overture drift gate passes. Run `make fit_calibration` against `versions.calibration: 20260730`, then check `fit_report.md`: the interaction coefficients should be close to the round-20260730 fit (a3 ≈ −11, `a1+a3` active) and matched curve metadata should show `index_mode: interaction`, `score_decimals: 6`. The overture curve also shifts at this refit because of the `build_lookup` edge fix. See the "Method-change override" in [docs/confidence-calibration.md](docs/confidence-calibration.md).
 - [ ] **Close the remaining band under-coverage (smoothing bias).** Added 2026-09-26. With `band_aggregation: bin`, simulated coverage of the nominal 95% band is 0.89 (matched), 0.91 (osm), 0.66 (overture). What remains is kernel smoothing bias where the curve bends, worst at the Overture atoms (0.919912, 0.990219). Candidates: an atom-aware bandwidth, or giving each atom its own cell in the overture curve. Re-check with `scripts/conflation/simulate_band_coverage.py --truths osm_1d,overture_1d`. Until then the published bands are narrower than a true 95%.
 - [ ] **Standard design-weighted (Horvitz–Thompson) check in every calibration run.** Added 2026-09-30 (Nat; implement in the October run). A model-free guard against bias in whatever calibration model is deployed. It applies to the v4 curves now and to the Bayesian arm C if it is adopted. Phase 1 showed why it is needed: arm C runs about +0.01 high on Overture and matched when silver labels are treated as exact, and arm A ran −0.035 low on matched. The HT rate caught both. Design:
   - **Estimator.** Per segment, the Hájek rate in each bin: Σ w·y / Σ w over gold rows, with w = 1/π_class from `calibration_fit.inclusion_by_class`. Report it with the Kish ESS, SE = √(r(1−r)/ESS) and a 95% CI.
@@ -110,7 +121,7 @@ fixed-rate mixture test model), 6 and 7. The rest are run steps.
   - **Refs.** Design doc §12.1; execution log decision 20.
 - [x] **Monotonicity check: merge sub-floor bins instead of skipping them.** Done
   2026-09-30: `calibration_fit.merge_thin_bins`, called by `fit_calibration.py`. Added 2026-09-26. The fit report's per-axis table gives no z for a pair involving a bin with < 5 gold. On round 20260730 a one-row bin (0.91967–0.919912) hides the overture segment's v4 §4.6 reversal. Merge thin bins into a neighbour in `calibration_fit.atom_aware_edges` / `axis_monotonicity_table`.
-- [ ] **Re-test the matched interaction on the next validation round.** Added 2026-09-26. The October switch to `interaction` rests on a consistent-sign but small gain (≈ −0.0003 Brier; interval excluding zero in 6/20 seeds). More matched gold with `overture_confidence` < 0.92 (currently 91 of 444) would settle whether the substitutive interaction is real. Oversample that column in the next draw and re-run `compare_matched_index.py`.
+- [x] **Obsolete 2026-09-30 (v4 retired; Nat).** **Re-test the matched interaction on the next validation round.** Added 2026-09-26. The October switch to `interaction` rests on a consistent-sign but small gain (≈ −0.0003 Brier; interval excluding zero in 6/20 seeds). More matched gold with `overture_confidence` < 0.92 (currently 91 of 444) would settle whether the substitutive interaction is real. Oversample that column in the next draw and re-run `compare_matched_index.py`.
 
 - [ ] **Conflation merge-phase memory headroom.** Added 2026-09-02. The 20260902 run
   peaked at 21.9 GB RSS (pre-merge reload of both frames) against the 24 GB WSL cap,

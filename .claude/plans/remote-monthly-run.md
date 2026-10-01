@@ -172,34 +172,40 @@ new error lines are reported without ending it. Gates marked **Nat** pause for r
 Stop the instance (`ec2-openpois stop`) whenever the next step waits on a person.
 
 1. **Local.** Raise the next-run checklist in `.claude/TODO.md` with Nat. Cut
-   `run/YYYY-MM` from main; make the version bumps from `full-data-pull` step 1 and
-   `conflate-snapshots` step 1; commit and push. `ec2-openpois start`, then
-   `openpois-remote.sh sync run/YYYY-MM` and `status`.
+   `run/YYYY-MM` from main (October 2026: run on `feature/matched-index-modes` itself,
+   so mid-run fixes land in the same PR); make the version bumps from
+   `full-data-pull` step 1 and `conflate-snapshots` step 1; commit and push.
+   `ec2-openpois start`, then `openpois-remote.sh sync <branch>` and `status`.
 2. **Pre-flight.** `compare_taxonomy.py --strict` and `make download_history PLAN=1`.
    **Nat.**
 3. **Downloads.** OSM snapshot and history in parallel, then Overture; then
    `compare_confidence.py` and `make check_history`. **Nat:** counts against the
    baselines, the drift verdict, check_history PASS.
 4. **Rate and conflate.** `make rate`; `build_type_affinity.py --conflated <prior
-   conflated.parquet>`; `make conflate`. Then `summarize.py`, the HT review PDF,
-   `summary`, and the calibration invariants from `verify-pipeline-run` via `exec`.
-5. **Pull.** `pull <v>` (with `--conflated` in a validation month). **Nat** reviews the
-   fit report, the HT PDF, the summaries and `run_summary.md`.
+   conflated.parquet>`; then `make conflate_to_cd` in a validation month (it stops
+   after change detection, so no provisional calibration runs) or `make conflate` in
+   any other month. Then `summary`.
+5. **Pull.** `pull <v>`, with `--cd` in a validation month for the validator's input
+   (`conflated_cd.parquet`). **Nat** reviews the summaries and `run_summary.md`.
 6. **Validation month only** (October 2026 holds the publish for it):
-   - locally, the `openpois-validator` round draws from the pulled `conflated.parquet`
-     and exports the handoff (Nat's go for the dispatch cost). Settle first which score
-     `frame.py` should draw on for matched rows: it reads `conf_mean`, which is
-     calibrated in a post-calibration file;
-   - `push-handoff <round>`; bump `versions.calibration` (and `pooled_rounds`) on the run
-     branch, push, `sync`;
-   - remote: `make calibrate && make apply_manual_overrides`, the mixture fit
-     (`MODE=mixture` `run_bayes_phase1.sh`), the summaries again, then `pull <v>`.
-     **Nat** gives the release decision.
-7. **Package.** `format_for_upload.py`, then both `prepare_pmtiles.py` runs.
-8. **Publish.** Nat's local `source-coop login`; `creds put`; the upload `--dry-run`, the
+   - locally, the `openpois-validator` round draws from the pulled
+     `conflated_cd.parquet` (validator `conflated_file: conflated_cd.parquet`; its
+     matched `conf_mean` is the uncalibrated blend the frame expects) and exports the
+     handoff (Nat's go for the dispatch cost);
+   - `push-handoff <round>`; bump `versions.calibration` and set `pooled_rounds` on the
+     branch, push, `sync`.
+7. **Calibrate.** `make calibrate`: the three Bayesian mixture fits (1-D Overture, 1-D
+   OSM, 2-D matched, in parallel), the export to grid curves, `apply_calibration`, the
+   plots and the HT review. **Stop point:** the export refuses to write curves when any
+   segment fails the §5.1 acceptance rule, and Nat decides. Then
+   `make apply_manual_overrides`, `summarize.py`, `summary`, the calibration invariants
+   from `verify-pipeline-run` via `exec`, and `pull <v>`. **Nat** reviews the fit
+   report, the HT PDF and the summaries, and gives the release decision.
+8. **Package.** `format_for_upload.py`, then both `prepare_pmtiles.py` runs.
+9. **Publish.** Nat's local `source-coop login`; `creds put`; the upload `--dry-run`, the
    upload, the published-release checks; `creds clear`.
-9. **Wrap up.** `update-site` locally; TODO.md bookkeeping; PR `run/YYYY-MM` to main
-   (Nat approves); `prune`, check the list, `prune --apply`; `ec2-openpois stop`.
+10. **Wrap up.** `update-site` locally; TODO.md bookkeeping; PR the run branch to main
+    (Nat approves); `prune`, check the list, `prune --apply`; `ec2-openpois stop`.
 
 ## 5. What comes back to the laptop
 
@@ -222,13 +228,15 @@ mirrored locally: the published release on Source Coop is the archive.
 2. Working storage on the 128 GB root disk; no separate volume.
 3. Carry-forward on the root disk, not EFS.
 4. October holds the publish for the new validation round.
-5. `feature/matched-index-modes` is PR'd to main before the run; each month runs on a
-   `run/YYYY-MM` branch cut from main, PR'd at the end.
+5. Each month runs on a `run/YYYY-MM` branch cut from main and PR'd at the end. October
+   2026 runs on `feature/matched-index-modes` itself, here and on the remote, so the
+   PR carries the new code and any mid-run fixes together.
 6. Local keeps tier-1 summaries plus `conflated.parquet`.
 7. No manual-overrides CSV exists; the stage runs as a no-op until the Close lane writes
    one.
-8. The Bayesian fixed-rate mixture fit runs on the remote; only the mixture is run
-   monthly (`MODE=mixture`).
+8. Published calibration is three Bayesian monotone-spline models with the fixed-rate
+   mixture label layer (1-D Overture, 1-D OSM, 2-D matched), fit on the remote; v4 is
+   retired. No provisional calibration in a validation month.
 9. Source Coop credentials are minted locally and copied over for the publish.
 10. Stages are launched one at a time for now; revisit a single `run_month.sh` after the
     first supervised run.
