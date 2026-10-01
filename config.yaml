@@ -622,18 +622,42 @@ conflation:
     # directories.manual_overrides/<versions.manual_overrides>/
     # manual_overrides.csv. A missing file is a no-op (logged).
     path: null
-  # Existence-confidence calibration (the v4 estimator; see
-  # .claude/docs/confidence-calibration.md and the 2026-07-30 v4 writeup).
-  # Fitted from the validation handoff pinned by ``versions.calibration``,
-  # then applied to every conflated POI after change detection.
+  # Existence-confidence calibration (see
+  # .claude/docs/confidence-calibration.md). From October 2026 production is
+  # three Bayesian monotone-spline fits with the fixed-rate mixture label layer
+  # (``bayes`` below), exported as grid curves and applied to every conflated
+  # POI after change detection. The v4 estimator (fit_calibration.py) is
+  # retired; its keys stay because the HT review, the CV comparator and the
+  # evaluation scripts still read them.
   calibration:
+    # The production fit: ``make fit_calibration`` (run_bayes_phase1.sh,
+    # MODE=mixture) fits each segment separately with arm C and
+    # label_noise = fixed_mixture, then ``make export_calibration``
+    # (export_bayes_curves.py) writes the grid curves to
+    # conflation/<version>/calibration/ if every segment passes acceptance.
+    bayes:
+      segments: [overture, osm, matched]
+      warmup: 1000                  # NUTS iterations per chain
+      samples: 1000
+      chains: 4
+      grid_1d: 2001                 # 1-D curve nodes on [0, 1] (step 0.0005)
+      grid_2d: 201                  # matched nodes per axis (step 0.005)
+      # Fit outputs land in conflation/<version>/<eval_dir_name>/.
+      eval_dir_name: calibration_bayes
     # Minimum gold labels for a refined (verdict x LLM-confidence) cell to
     # keep its own rate; thinner cells merge into the parent verdict class.
+    # Still read by the HT review's correction rates.
     min_cell_gold: 25
     # Cross the LLM verdict with the LLM's own verdict confidence. Worth it
     # on round 20260730: LLM-exists splits 449/450 correct at high confidence
     # against 141/148 at medium.
     refine_by_confidence: true
+    # RETIRED (v4) from here to band_alpha: matched_index_mode,
+    # band_aggregation, pool_min_coef, grid_points, curve_output_bins,
+    # bootstrap_reps and band_alpha set the v4 fit. Do not delete them: the
+    # Bayesian scripts' shared FitConfig (bayes_calibration_common.py), the CV
+    # comparator, simulate_band_coverage.py and the matched-mode evaluation
+    # scripts still read them.
     # How the matched segment combines its two source scores (see
     # .claude/docs/confidence-calibration.md, "The matched segment"):
     #   interaction - monotone bilinear logistic index in rescaled logits,
@@ -660,15 +684,15 @@ conflation:
     curve_output_bins: 40           # equal-mass value bins in the lookup
     bootstrap_reps: 500
     band_alpha: 0.05                # 95% pointwise band
-    rng_seed: 20260730
-    # Bayesian calibration prototype (arm C; not on the production path; see
-    # .claude/plans/bayesian-monotone-calibration.md and its execution log,
-    # decision 23): earlier validation rounds pooled with the current one
-    # (versions.calibration). Their phase-1 rows join the curve fit and their
-    # gold joins the fixed silver-label rates P(exists | segment, LLM verdict),
-    # each round under its own design weights. CV holds out and scores the current round only. When
-    # versions.calibration moves to the October 2026 round, set ["20260730"].
-    # Production calibration (fit_calibration.py) ignores this key.
+    rng_seed: 20260730              # also read by the Bayesian scripts
+    # Production (October 2026 on): earlier validation rounds pooled with the
+    # current one (versions.calibration) in the Bayesian fit; see
+    # .claude/plans/bayesian-monotone-calibration.md, execution log decision
+    # 23. Their phase-1 rows join the curve fit and their gold joins the fixed
+    # silver-label rates P(exists | segment, LLM verdict), each round under
+    # its own design weights. CV holds out and scores the current round only.
+    # When versions.calibration moves to the October 2026 round, set
+    # ["20260730"].
     pooled_rounds: []
 
 # Settings for publishing snapshots to Source Cooperative

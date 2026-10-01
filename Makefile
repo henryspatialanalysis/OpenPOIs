@@ -65,9 +65,14 @@ site_preview:
 #   3. apply_change_detection.py   - penalize Overture POIs that shadow-
 #                                    match a same-entity ghost; writes
 #                                    conflated_cd.parquet.
-#   4. calibrate                   - fit + apply the existence-confidence
-#                                    curves; writes the canonical
-#                                    conflated.parquet.
+#   4. calibrate                   - fit the three Bayesian fixed-rate
+#                                    mixture models (overture, osm,
+#                                    matched), export them as grid
+#                                    curves (stops if any segment fails
+#                                    acceptance), and apply them; writes
+#                                    the canonical conflated.parquet,
+#                                    then the calibration figures and
+#                                    the HT review.
 #   5. apply_manual_overrides.py   - hand-curated exclude/include pins
 #                                    (Close triage CSV), rewritten in
 #                                    place over conflated.parquet. Runs
@@ -79,8 +84,18 @@ site_preview:
 # Pass TEST=1 to scope to the Seattle bbox:
 #     make conflate            # full CONUS
 #     make conflate TEST=1     # Seattle bbox dry run
+# Under TEST=1 the Bayesian fit and export are skipped: the dry run applies
+# the curves already in conflation/<version>/calibration/.
 #
-# Sub-targets (build_ghosts / conflate_baseline / apply_cd / calibrate /
+# In a validation month the run stops after change detection, because the
+# validator samples from conflated_cd.parquet and calibration needs that
+# round's handoff:
+#     make conflate_to_cd      # steps 1-3
+#     ... validation round, handoff ...
+#     make calibrate apply_manual_overrides
+#
+# Sub-targets (build_ghosts / conflate_baseline / apply_cd / fit_calibration
+# / export_calibration / apply_calibration / calibrate /
 # apply_manual_overrides) are exposed for partial re-runs when one stage
 # is being iterated on.
 
@@ -89,8 +104,9 @@ TEST_FLAG := $(if $(TEST),--test,)
 LOG_DIR := $(HOME)/data/openpois/logs
 LOG_TS := $(shell date +%Y%m%d_%H%M%S)
 
-.PHONY: download_history check_history rate conflate build_ghosts conflate_baseline apply_cd \
-	fit_calibration apply_calibration calibrate apply_manual_overrides
+.PHONY: download_history check_history rate conflate conflate_to_cd build_ghosts \
+	conflate_baseline apply_cd fit_calibration export_calibration apply_calibration \
+	calibrate apply_manual_overrides
 
 # Build versions.osm_data: the full-history download (history_mode: full) or a
 # roll-forward of download.osm.incremental_history.base_version with Geofabrik's
@@ -135,15 +151,39 @@ apply_cd:
 		--baseline-suffix=baseline --output-suffix=cd $(TEST_FLAG) \
 		2>&1 | tee $(LOG_DIR)/apply_cd_$(LOG_TS).log
 
-# Fit the per-segment existence-confidence curves from the validation handoff
-# pinned by versions.calibration, then map every POI through them. Calibration
-# runs AFTER change detection: the CD penalty multiplies conf_mean, so
-# calibrating first would leave a calibrated probability scaled by delta.
+# Fit the per-segment existence-confidence curves from the validation rounds in
+# conflation.calibration.pooled_rounds, then map every POI through them.
+# Calibration runs AFTER change detection: the CD penalty multiplies conf_mean,
+# so calibrating first would leave a calibrated probability scaled by delta.
+#
+# fit_calibration runs the three Bayesian fixed-rate mixture fits in parallel
+# (run_bayes_phase1.sh MODE=mixture; settings in conflation.calibration.bayes);
+# export_calibration (--overwrite: a calibrate run replaces this version's curves)
+# turns their draws into grid curves in
+# conflation/<version>/calibration/ and exits non-zero, writing nothing
+# deployable, if any segment fails the acceptance rule. The v4
+# fit_calibration.py is retired. pipefail makes a failing step stop make
+# despite the tee.
+fit_calibration export_calibration apply_calibration calibrate: SHELL := /bin/bash
+fit_calibration export_calibration apply_calibration calibrate: .SHELLFLAGS := -o pipefail -c
+
 fit_calibration:
 	@mkdir -p $(LOG_DIR)
-	@$(CONDA_PYTHON) -u scripts/conflation/fit_calibration.py \
-		--input-suffix=cd $(TEST_FLAG) \
+ifeq ($(TEST),)
+	@MODE=mixture bash scripts/conflation/run_bayes_phase1.sh \
 		2>&1 | tee $(LOG_DIR)/fit_calibration_$(LOG_TS).log
+else
+	@echo "TEST=1: skipping the Bayesian fit (applying the existing curves)"
+endif
+
+export_calibration:
+	@mkdir -p $(LOG_DIR)
+ifeq ($(TEST),)
+	@$(CONDA_PYTHON) -u scripts/conflation/export_bayes_curves.py --overwrite \
+		2>&1 | tee $(LOG_DIR)/export_calibration_$(LOG_TS).log
+else
+	@echo "TEST=1: skipping the curve export (applying the existing curves)"
+endif
 
 apply_calibration:
 	@mkdir -p $(LOG_DIR)
@@ -151,9 +191,11 @@ apply_calibration:
 		--input-suffix=cd --output-suffix="" $(TEST_FLAG) \
 		2>&1 | tee $(LOG_DIR)/apply_calibration_$(LOG_TS).log
 
-calibrate: fit_calibration apply_calibration
+calibrate: fit_calibration export_calibration apply_calibration
 	@$(CONDA_PYTHON) -u scripts/conflation/plot_calibration.py \
 		2>&1 | tee $(LOG_DIR)/plot_calibration_$(LOG_TS).log
+	@$(CONDA_PYTHON) -u scripts/conflation/ht_review.py \
+		2>&1 | tee $(LOG_DIR)/ht_review_$(LOG_TS).log
 
 # Manual exclude/include pins from the Close triage CSV. Must run AFTER
 # calibrate: it rewrites conflated.parquet in place and a forced conf_mean
@@ -164,6 +206,14 @@ apply_manual_overrides:
 		$(TEST_FLAG) \
 		2>&1 | tee $(LOG_DIR)/apply_manual_overrides_$(LOG_TS).log
 
+# Steps 1-3 only: stop at conflated_cd.parquet, the frame a validation round
+# samples from. Run `make calibrate apply_manual_overrides` after the handoff.
+conflate_to_cd: build_ghosts conflate_baseline apply_cd
+	@echo
+	@echo "Conflation through change detection complete."
+	@echo "  Output: ~/data/openpois/conflation/<version>/conflated_cd.parquet"
+	@echo "  Next, after the validation handoff: make calibrate apply_manual_overrides"
+
 conflate: build_ghosts conflate_baseline apply_cd calibrate apply_manual_overrides
 	@echo
 	@echo "Conflation pipeline complete."
@@ -171,8 +221,9 @@ conflate: build_ghosts conflate_baseline apply_cd calibrate apply_manual_overrid
 	@echo "  (calibrated + manual overrides applied in place)"
 	@echo "  (pre-calibration: conflated_cd.parquet)"
 	@echo "  (no-CD archive:   conflated_baseline.parquet)"
-	@echo "  Curves + fit report: conflation/<version>/calibration/"
-	@echo "  Logs under: $(LOG_DIR)/{build_ghosts,conflate_baseline,apply_cd,fit_calibration,apply_calibration,apply_manual_overrides}_$(LOG_TS).log"
+	@echo "  Bayesian fits: conflation/<version>/calibration_bayes/"
+	@echo "  Grid curves + fit report + HT review: conflation/<version>/calibration/"
+	@echo "  Logs under: $(LOG_DIR)/{build_ghosts,conflate_baseline,apply_cd,fit_calibration,export_calibration,apply_calibration,plot_calibration,ht_review,apply_manual_overrides}_$(LOG_TS).log"
 
 # Convenience target to print all of the available targets in this file
 # From https://stackoverflow.com/questions/4219255

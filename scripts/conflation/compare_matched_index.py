@@ -2,6 +2,10 @@
 """
 Compare how the matched segment combines its two source scores.
 
+v4-era evaluation tool: it compares the v4 matched index modes, which were
+retired when the Bayesian grid curves went to production in October 2026.
+Its deployed-curve reads assume a v4 calibration directory.
+
 The matched segment carries an OSM and an Overture score. Each mode below maps
 the pair to a calibrated P(exists and open), monotone in both scores:
 

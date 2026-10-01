@@ -2,6 +2,13 @@
 """
 Fit per-segment existence-confidence calibration curves (the v4 estimator).
 
+RETIRED (October 2026). Production curves now come from the Bayesian
+fixed-rate mixture fits (``run_bayes_phase1.sh`` with ``MODE=mixture``)
+exported by ``export_bayes_curves.py``; ``make fit_calibration`` no longer runs
+this script. It stays for history and for replaying v4 curve directories, and
+because ``openpois.conflation.calibration_fit`` is still the library behind the
+HT check and the cross-validation comparator.
+
 Reads the condensed validation handoff exported by openpois-validator
 (``scripts/08_export_handoff.py``) plus the conflated parquet's own score
 distribution, and writes one monotone lookup table per detection segment for

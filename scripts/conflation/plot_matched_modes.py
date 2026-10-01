@@ -2,6 +2,11 @@
 """
 Shape diagnostics for the matched-segment combination modes.
 
+v4-era evaluation tool: it plots the v4 matched index modes, retired in
+October 2026. The independence surface reads the deployed 1-D curves as v4
+step lookups, so point it at a conflation version whose calibration
+directory holds v4 curves.
+
 Reads the per-mode full fits written by
 ``compare_matched_index.py --with-deployed-impact`` (``<eval dir>/fits``) and
 draws, on the common 6x4 surface cells:
