@@ -156,7 +156,7 @@ cmd_watch() {
             pgrep -f \"[s]tage_runner.sh \$f\" > /dev/null && up=up || up=DOWN
             n=\$(grep -cE 'Traceback|Killed|MemoryError|FAILED|Error:' \"\$f\" || true)
             fin=\$(grep -m1 -E '^=== STAGE .* DONE' \"\$f\" || true)
-            last=\$(grep -vE '^\s|^$' \"\$f\" | tail -1 | cut -c1-160)
+            last=\$(grep -vE '^\s*$|^\t' \"\$f\" | tail -1 | sed 's/^ *//' | cut -c1-160)
             echo \"\$up|\$n|\$fin|\$last\""); then
             ssh_fails=0
         else
