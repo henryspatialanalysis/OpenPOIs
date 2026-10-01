@@ -111,7 +111,10 @@ def test_curves_monotone_and_bounded(rows):
     xx, yy = np.meshgrid(axis, axis, indexing = "ij")
     m = cb.curve_draws(stacked, prepared, "matched", osm = xx.ravel(),
                        overture = yy.ravel()).reshape(-1, 401, 401)
-    tol = 50 * np.finfo(m.dtype).eps
+    # In fp32 the 2-D recursion's rounding depends on the CPU's vector units: steps
+    # of -1e-5 on openpois-01 (AVX-512) against -1.2e-7 on the laptop. In fp64,
+    # which the fit and export scripts enable, it is exact to 2e-16.
+    tol = 50 * np.finfo(m.dtype).eps if m.dtype == np.float64 else 5e-5
     assert np.all(np.diff(m, axis = 1) >= -tol)
     assert np.all(np.diff(m, axis = 2) >= -tol)
     assert np.all((m >= expit(cb.L_BOUND) - tol)
