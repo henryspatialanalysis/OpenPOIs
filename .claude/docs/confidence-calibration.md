@@ -5,10 +5,13 @@ the pipeline stage that does it assumes. Read this before touching
 `src/openpois/conflation/calibration*.py`, the `calibrate` Makefile target, or the
 `versions.calibration` pin.
 
-**Design source:** `~/data/library/writeups/2026-07-30-openpois-confidence-calibration-v4.md`
-(v4; supersedes §9 of the 2026-07-24 v3 review). The verification process that produces
-the labels lives in the private `openpois-validator` repo; its
-`.claude/docs/divergence-from-v3-writeup.md` records why the v3 design changed.
+**Production method since the October 2026 run:** three Bayesian monotone-spline
+models with the fixed-rate mixture label layer (next sections). Design source:
+[.claude/plans/bayesian-monotone-calibration.md](../plans/bayesian-monotone-calibration.md)
+and its execution log. **Releases 20260730 and 20260902** were calibrated with the v4
+estimator (`~/data/library/writeups/2026-07-30-openpois-confidence-calibration-v4.md`),
+retired 2026-09-30 and kept below as history. The verification process that produces
+the labels lives in the private `openpois-validator` repo.
 
 ## What the stage does
 
@@ -16,11 +19,11 @@ the labels lives in the private `openpois-validator` repo; its
 calibrated). Per POI, the raw source score(s) are mapped through the POI's detection
 segment's fitted curve:
 
-| segment (`source`) | curve index |
+| segment (`source`) | curve |
 |---|---|
-| `matched` | **interaction index**: a monotone bilinear function of the two scores' rescaled logits (parameters under `index` in the curve metadata) |
-| `osm` | `osm_conf_mean` (OSM turnover posterior mean) |
-| `overture` | `overture_confidence` (the provider score; never missing) |
+| `matched` | a **2-D surface** over (`osm_conf_mean`, `overture_confidence`), monotone non-decreasing in both scores |
+| `osm` | a 1-D curve over `osm_conf_mean` (OSM turnover posterior mean) |
+| `overture` | a 1-D curve over `overture_confidence` (the provider score; never missing) |
 
 Columns written: `conf_mean` / `conf_lower` / `conf_upper` are **overwritten** with the
 calibrated triple (so the PMTiles allowlist, the site, and the published schema need no
@@ -28,15 +31,53 @@ changes); `conf_mean_uncalibrated` archives the incoming post-CD value;
 `calibration_flag` records the edge rules. `original_conf_mean` (pre-CD, written by
 change detection) is untouched.
 
+## The production model: Bayesian fixed-rate mixture (from October 2026)
+
+Decided by Nat on 2026-09-30, first deployed in the October 2026 run.
+
+- **Three separate models**, one per segment: 1-D Overture-only, 1-D OSM-only, 2-D
+  matched. Each is a monotone quadratic spline (2-D and doubly monotone for matched)
+  on the logit scale, fit by NUTS in JAX / BlackJAX
+  (`src/openpois/conflation/calibration_bayes.py`, `ModelSpec(arm = "C",
+  label_noise = "fixed_mixture", segments = (...))`).
+- **Fixed-rate mixture label layer.** Gold rows enter as Bernoulli on their truth. A
+  silver (LLM-only) row enters as log[p·Se + (1−p)(1−Sp)] for an "exists" verdict and
+  log[p(1−Se) + (1−p)·Sp] for "gone", with Se and Sp fixed per segment from the gold:
+  design-weighted (1/π over the production refined classes, per round), pooled over
+  `versions.calibration` and `conflation.calibration.pooled_rounds`, Jeffreys-smoothed
+  on the Kish ESS.
+- **Why three fits.** With fixed rates no parameter is shared across segments (each has
+  its own α, μ, τ and spline field, with independent priors), so the joint posterior
+  factorizes and separate fits give the same answer. They run in parallel, and each
+  gets its own NUTS step size and mass matrix, which in a joint fit the matched surface
+  set for all three. `tests/test_calibration_bayes.py` pins the factorization.
+- **Acceptance gate.** Each fit must pass the §5.1 rule (`calibration_bayes.
+  passes_acceptance`: R̂ ≤ 1.01, bulk and tail ESS ≥ 400, no divergences, E-BFMI ≥ 0.3,
+  no tree-depth saturation, and the same R̂ and ESS on the curve values). If any segment
+  fails, `export_bayes_curves.py` writes nothing deployable and the run stops for Nat.
+- **Published values.** `conf_mean` is the posterior mean of P(exists) at the POI's
+  score(s); `conf_lower` / `conf_upper` are the pointwise 2.5% and 97.5% posterior
+  quantiles. **The matched band under-covers** (about 0.75 of a nominal 95% band in the
+  in-family simulation; smoothing bias where the surface climbs to its ceiling), a
+  known limitation to fix before November; the 1-D bands cover about 0.95 (Overture)
+  and 0.91 (OSM).
+- **Artifacts.** The posterior is evaluated on grids (1-D: 2,001 points; matched:
+  201 × 201) and written as `calibration/<segment>_curve.parquet` with `lookup: grid`
+  metadata. Deploy interpolates: linear in 1-D, bilinear on the surface. Every draw is
+  monotone, so the pointwise mean and quantiles are, and interpolation keeps them so.
+- **Not used in a validation month before the round.** There is no provisional
+  calibration: `make conflate_to_cd` stops after change detection, the validator draws
+  from `conflated_cd.parquet`, and `make calibrate` runs once the handoff exists.
+
 ## No fixed constants survive
 
 The pre-v4 pipeline shipped three engineering defaults, all now estimated:
 
 - `0.588·OSM + 0.412·Overture` (the matched blend, derived from
-  `overture_confidence_weight = 0.7`) → replaced by a **fitted** index of both scores.
-  The July 2026 fit used the log-odds pool; since the October 2026 release it is the
-  monotone bilinear interaction index (next section). Either can place a
-  doubly-confirmed POI above either source's own score, which the linear blend cannot.
+  `overture_confidence_weight = 0.7`) → replaced by a **fitted** function of both
+  scores: the v4 log-odds pool (July) and interaction index (September tests), and from
+  October 2026 the Bayesian 2-D surface. Each can place a doubly-confirmed POI above
+  either source's own score, which the linear blend cannot.
 - The flat `×0.7` on Overture-only confidence → replaced by the overture segment curve.
 - The OSM-only passthrough → replaced by the osm segment curve.
 
@@ -44,10 +85,11 @@ The pre-v4 pipeline shipped three engineering defaults, all now estimated:
 and the archived `conf_mean_uncalibrated`, so it is not dead — but it no longer
 influences the published probability.
 
-## The matched segment: the interaction index
+## History: the v4 matched interaction index (retired 2026-09-30)
 
-**Production since the October 2026 run** (`conflation.calibration.matched_index_mode:
-interaction`). Design and evidence:
+Planned for the October 2026 run and superseded before it by the Bayesian surface; kept
+as the record of the v4 matched method (`conflation.calibration.matched_index_mode`).
+Design and evidence:
 `~/data/library/writeups/2026-09-26-openpois-matched-segment-modes.md`; outputs in
 `conflation/20260902/calibration_eval_20260925/`.
 
@@ -104,7 +146,7 @@ D = 3. A cheaper route adds a new axis as a main effect only, with pairwise
 interactions where one is suspected. See the writeup's "Extending to three or more
 scores" section.
 
-## The estimator, in one paragraph
+## History: the v4 estimator (releases 20260730 and 20260902)
 
 The validation is a two-phase sample: phase 1 is an LLM verdict on every sampled POI
 (cheap, noisy), phase 2 is a human gold subsample drawn at known but very unequal rates
@@ -143,8 +185,7 @@ Se/Sp are reported as diagnostics only.
 - **Unnamed POIs are an extrapolation.** They are excluded from the validation frame
   (the verifier needs a name to search on), and are calibrated through the osm curve
   with `calibration_flag = 'unnamed_extrapolated'`.
-- **The band is computed on the published bins (`band_aggregation: bin`, since the
-  October 2026 run).** The index is refit inside each bootstrap replicate, which moves
+- **(v4) The band is computed on the published bins (`band_aggregation: bin`).** The index is refit inside each bootstrap replicate, which moves
   the index scale. Comparing replicates at a fixed index value would therefore report
   reparameterization as uncertainty. Instead, each replicate's own map is applied to
   the production POIs, and the band is the percentile of each replicate's mean over
@@ -156,12 +197,13 @@ Se/Sp are reported as diagnostics only.
   at the Overture atoms. The published bands are therefore still somewhat narrower
   than a true 95%.
 - **Scores are rounded to 6 dp before indexing or binning** (`calibration_fit.round_scores`,
-  both at fit and in `apply_surface`/`calibrate_frame`). The validation file splits each
+  both at fit and in `apply_surface`/`calibrate_frame`; the Bayesian grid metadata
+  carries `score_decimals: 6`). The validation file splits each
   Overture atom (0.919912, 0.990219) into three float representations that production
   does not have. Curves record `score_decimals: 6`, and deploy rounds **only** when
   that key is present: curves fit before rounding have unrounded edges, and rounding
   a score to 0.919912 would drop it below an edge at 0.9199122190…
-- **Fit bins edge values exactly as deploy serves them.** `build_lookup` assigns rows to
+- **(v4) Fit bins edge values exactly as deploy serves them.** `build_lookup` assigns rows to
   bins with deploy's `searchsorted(side = "right")` (`lookup_bins`). Before 2026-09 it
   averaged `lo ≤ s ≤ hi`, which counted a score sitting on an interior edge in the
   lower bin while deploy served it from the upper one. 37% of overture-segment rows sit
@@ -181,7 +223,7 @@ Se/Sp are reported as diagnostics only.
   design-weighted existence rate is 0.68 below 0.25, dips to 0.50 at 0.50–0.70, and
   only reaches 0.94 above 0.98. The shipped curve is monotone anyway — a published
   score whose ordering inverts the input would break threshold filtering — so
-  everything below ~0.70 flattens to a floor near 0.54. Expect the Overture curve to
+  everything below ~0.70 flattens to a floor (near 0.54 under v4). Expect the Overture curve to
   look like a floor plus a top-decile rise, and re-check the non-monotonicity each
   release rather than assuming it is stable.
 - **The curves condition on score alone, not category** — and that is the biggest
@@ -198,31 +240,34 @@ Se/Sp are reported as diagnostics only.
   prior-vs-current comparison, in-schema POIs only). **Decision rule (adopted
   2026-09-02):**
   - **Pass** — on matched ids, overall RMSE ≤ 0.10 **and** |mean bias| ≤ 0.03, **and**
-    at most 10% of POIs move by |Δ| > 0.1: do **not** re-run `fit_calibration`. Reuse
-    the most recent fitted curves verbatim via
+    at most 10% of POIs move by |Δ| > 0.1: do **not** refit (`make fit_calibration`).
+    Reuse the most recent curves verbatim via
     `apply_calibration.py --curves-dir <prior conflation>/calibration` (copy the curve
     parquets + metadata into the new version's `calibration/` dir with a provenance
-    note so the version stays self-contained).
+    note so the version stays self-contained; grid curves copy the same way), then run
+    `ht_review.py` and `make apply_manual_overrides`.
   - **Breach** — any criterion fails: the labels' `overture_score` x-axis can no longer
     be trusted. Re-export a new round from openpois-validator, bump
     `versions.calibration`, and refit before publishing.
   (Reference point: the 2026-08-19.0 release scored RMSE 0.036, bias +0.005,
   share|Δ|>0.1 = 2.0% — a comfortable pass. A turnover-model refit still forces a new
   round regardless, since it moves `osm_conf_mean`.)
-  - **Method-change override.** When the calibration *method* changes
-    (`matched_index_mode`, `band_aggregation`, or estimator code that changes the
-    curves), reuse is off even on a pass. Refit with `make fit_calibration` against the
-    current `versions.calibration` round. **The October 2026 run is such a release:**
-    the prior curves are pool-mode with the old band. Refit once. Later passes reuse
-    the October curves as usual.
+  - **Method-change override.** When the calibration *method* changes (the model,
+    its label layer, or code that changes the curves), reuse is off even on a pass.
+    **The October 2026 run is such a release** (v4 → Bayesian mixture). Later passes
+    reuse the October curves as usual.
 
 ## Files
 
 | Path | Role |
 |---|---|
-| [src/openpois/conflation/calibration_fit.py](../../src/openpois/conflation/calibration_fit.py) | the estimator: classes, inclusion, working models, difference estimator, matched indices (pool / additive / interaction) and cell surface, bootstrap, cross-fit |
-| [src/openpois/conflation/calibration.py](../../src/openpois/conflation/calibration.py) | deploy: curve index (any index form via `index_score`), `apply_curve` / `apply_surface`, edge rules, streamed rewrite |
-| [scripts/conflation/fit_calibration.py](../../scripts/conflation/fit_calibration.py) | fit driver → curves + `fit_report.md` + `ht_review_<round>.pdf` |
+| [src/openpois/conflation/calibration_bayes.py](../../src/openpois/conflation/calibration_bayes.py) | the production model: monotone splines, fixed-rate mixture layer, segment subsets, NUTS fit, acceptance rule |
+| [scripts/conflation/fit_bayes_calibration.py](../../scripts/conflation/fit_bayes_calibration.py) | one fit (`--segments`); draws, diagnostics, curves, deployed-impact preview |
+| [scripts/conflation/run_bayes_phase1.sh](../../scripts/conflation/run_bayes_phase1.sh) | `MODE=mixture`: the three production fits in parallel, then the report (`make fit_calibration`) |
+| [scripts/conflation/export_bayes_curves.py](../../scripts/conflation/export_bayes_curves.py) | acceptance gate + grid curves, metadata and `fit_report.md` (`make export_calibration`) |
+| [src/openpois/conflation/calibration_fit.py](../../src/openpois/conflation/calibration_fit.py) | the v4 estimator library; still used for design weights (`inclusion_by_class`, refined classes), bins and the HT check |
+| [src/openpois/conflation/calibration.py](../../src/openpois/conflation/calibration.py) | deploy: grid, surface and step lookups, edge rules, streamed rewrite |
+| [scripts/conflation/fit_calibration.py](../../scripts/conflation/fit_calibration.py) | v4 fit driver, **retired** 2026-09-30 |
 | [src/openpois/conflation/calibration_ht.py](../../src/openpois/conflation/calibration_ht.py) | design-weighted (HT) check of a deployed map: Hájek rates, bins, flags |
 | [scripts/conflation/ht_review.py](../../scripts/conflation/ht_review.py) | HT review PDF; standalone CLI for reused curves |
 | [scripts/conflation/apply_calibration.py](../../scripts/conflation/apply_calibration.py) | apply driver |
@@ -237,10 +282,16 @@ Se/Sp are reported as diagnostics only.
 ## Running it
 
 ```bash
-make calibrate            # fit_calibration + apply_calibration + plots
-make fit_calibration      # curves only (safe to iterate)
+make calibrate            # fit + export + apply + plots + HT review
+make fit_calibration      # the three Bayesian fits (MODE=mixture run_bayes_phase1.sh)
+make export_calibration   # acceptance gate + grid curves into conflation/<v>/calibration/
 make apply_calibration    # deploy only, needs curves
+make conflate_to_cd       # conflation through change detection, no calibration
 ```
+
+The three fits run in parallel (1,000 warmup and 1,000 samples × 4 chains each). The
+joint fit took about 50 minutes on the laptop; the separate fits are expected to be
+faster, and the first full-length run on openpois-01 times them. Run them there.
 
 Refresh the handoff first when the validation round changes:
 
@@ -252,7 +303,23 @@ Then bump `versions.calibration` in `config.yaml` to the new round.
 
 ## Reading the fit report
 
-`~/data/openpois/conflation/<version>/calibration/fit_report.md`. What to check:
+`~/data/openpois/conflation/<version>/calibration/fit_report.md`, written by
+`export_bayes_curves.py`. What to check:
+
+1. **Acceptance per segment**: every item of the §5.1 rule, and the fit time.
+2. **Forward rates (Se, Sp)** per segment, with their gold n and ESS, and the rounds
+   pooled.
+3. **Deployed impact** against the previous release: per-segment mean, mean absolute
+   change and share moving by more than 0.05 and 0.10.
+4. **The HT review** (`ht_review_<round>.pdf`, next section but one): the model-free
+   check of the deployed map.
+
+The fuller diagnostics (PPCs, rate by knot, key parameters, figures) are in the fit
+directory, `conflation/<version>/calibration_bayes/` (`fit_report.md` there).
+
+### v4 fit report (history)
+
+What the v4 report showed, for reading the 20260730 and 20260902 releases:
 
 1. **Kish ESS per segment** — precision follows the design, not the row count. A class
    audited at 1% carries a ~98× weight on few rows.
@@ -313,15 +380,16 @@ If a later round samples unverifiables instead of censusing them, their flat q w
 bias the bins, since their true rate rises with score (in simulation, 50% and 14% of
 bins flagged under an exact map). The curves were also fit on this gold.
 
-The check never fails a run (Nat, 2026-10-01). `fit_calibration.py` runs it on the
-curves it has just written (`--skip-ht-review` turns it off; an error is recorded in the
-report instead of raised). It puts a section into `fit_report.md` with per-view flag
-counts, calibration in the large and the correction rates. The PDF lands beside the
+The check never fails a run (Nat, 2026-10-01). `make calibrate` runs `ht_review.py` on
+the deployed curves after `apply_calibration`; it writes the report section as
+`ht_review_<round>.md` beside the curves, with per-view flag counts, calibration in the
+large and the correction rates. (The retired v4 `fit_calibration.py` ran it in-process.) The PDF lands beside the
 curves at `conflation/<version>/calibration/ht_review_<round>.pdf`, with the bin table
 (row and gold counts, corrected and gold-only rates) as `ht_review_<round>_bins.csv`.
 Its pages: a summary with the correction rates and the flagged bins; one reliability
 page per 1-D view (corrected rate with ±1 and ±2 SD bars, the gold-only rate as a faint
-marker, the deployed step lookup or, for matched deciles, the deployed value per row,
+marker, the deployed curve (grid line, or a step lookup for v4 curves) or, for matched
+deciles, the deployed value per row,
 and a gold-count strip); the matched heatmap of z with OSM slices at the two Overture
 atoms; the bin table. On a reuse month, when the curves are copied rather than fit, run
 it on its own:
@@ -338,10 +406,11 @@ monotone floor sits under the < 0.30 bin and above the 0.45–0.85 dip, and the 
 undershoots the 0.990219 atom (rate 0.936, model 0.827, z −6.3). Calibration in the
 large is within 0.003 on every segment.
 
-## Bayesian calibration prototype (under evaluation, not deployed)
+## Bayesian calibration: how it got here
 
-A Bayesian alternative to the v4 estimator was built and validated off the production
-path on round 20260730 (Phase 1, 2026-09-27 to 2026-09-30).
+The Bayesian model was built and validated as a prototype on round 20260730 (Phase 1,
+2026-09-27 to 2026-09-30), then made production on 2026-09-30 in its fixed-rate mixture
+form (the section above). The Phase 1 record:
 - **Model.** Monotone quadratic-spline curves per segment (2-D and doubly monotone for
   matched), fit in JAX / BlackJAX.
 - **Data layer.** The preferred "arm C" treats gold rows as labelled and non-gold rows
@@ -351,9 +420,6 @@ path on round 20260730 (Phase 1, 2026-09-27 to 2026-09-30).
   0.996 [0.990, 1.002].
 - **Open issue.** Its matched-surface bands under-cover (0.75).
 
-Nothing in the deploy path reads it. The only production-code change is an optional
-`adaptation_kwargs` passthrough in `openpois.models.jax_core`, with the default
-unchanged.
 
 | What | Where |
 |---|---|
@@ -362,4 +428,4 @@ unchanged.
 | Model code | `src/openpois/conflation/calibration_bayes.py` |
 | Scripts | `scripts/conflation/{fit,cv}_bayes_calibration.py`, `simulate_bayes_recovery.py`, `report_bayes_calibration.py`, `run_bayes_phase1.sh`, `bayes_calibration_common.py` |
 | Outputs | `~/data/openpois/conflation/20260730/calibration_eval_bayes_20260927/` (`fit_report.md`) |
-| Config | `conflation.calibration.pooled_rounds`: earlier validation rounds pooled into the prototype's fit and its silver-label rates, each under its own design (prototype only; production ignores it) |
+| Config | `conflation.calibration.bayes` (segments, chains, grids) and `conflation.calibration.pooled_rounds` (earlier validation rounds pooled into the fit and its label rates, each under its own design) |

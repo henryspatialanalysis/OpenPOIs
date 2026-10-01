@@ -99,7 +99,7 @@ Publishing from the remote: after Nat's local `source-coop login`, run
    1. `build_ghosts.py` — reconstruct ghost POIs from OSM history (`ghosts.parquet` under `versions.ghost_osm`).
    2. `conflate.py --output-suffix=baseline` — OSM × Overture matching, writes `conflated_baseline.parquet` (no-CD archive).
    3. `apply_change_detection.py` — shadow-match unmatched Overture against **same-entity** ghosts (name gate 70 on normalised names, rename-direction guard, 150 m full-snapshot survivor filter, ghosts ≤ 3 years old) and apply the per-`shared_label` δ penalty; writes `conflated_cd.parquet`. Any matcher change must clear the ≥ 70% precision release gate in docs/change-detection.md before publishing.
-   4. `fit_calibration.py` + `apply_calibration.py` + `plot_calibration.py` — fit the per-segment existence-confidence curves from the validation handoff and map every POI through them; writes the canonical `conflated.parquet`.
+   4. `make calibrate` — fit the three Bayesian mixture models (1-D Overture, 1-D OSM, 2-D matched; `MODE=mixture run_bayes_phase1.sh`), export grid curves through the §5.1 acceptance gate (`export_bayes_curves.py`), map every POI through them (`apply_calibration.py`), then the plots and the HT review; writes the canonical `conflated.parquet`. Run the fits on openpois-01, not the laptop. If the export refuses (a segment failed acceptance), stop and ask Nat.
    5. `apply_manual_overrides.py` — apply the Close triage CSV's `exclude` / `include` pins (`directories.manual_overrides`, versioned) in place over `conflated.parquet`. Runs **last** so a forced 0 / 1 is never re-scaled; a missing CSV is a logged no-op.
 
    ```bash
@@ -112,8 +112,10 @@ Publishing from the remote: after Nat's local `source-coop login`, run
    make build_ghosts        # ghosts only
    make conflate_baseline   # matching only (writes conflated_baseline.parquet)
    make apply_cd            # CD pass only (reads baseline, writes conflated_cd.parquet)
-   make calibrate           # fit + apply + plot (reads conflated_cd, writes conflated.parquet)
-   make fit_calibration     # curves only — safe to iterate, touches no POI data
+   make conflate_to_cd      # stages 1-3 only: stop after change detection (validation months)
+   make calibrate           # fit + export + apply + plot + HT review (reads conflated_cd, writes conflated.parquet)
+   make fit_calibration     # the three Bayesian fits only — touches no POI data
+   make export_calibration  # acceptance gate + grid curves into conflation/<v>/calibration/
    make apply_manual_overrides  # manual pins, in place over conflated.parquet (always last)
    ```
 
@@ -127,19 +129,24 @@ Publishing from the remote: after Nat's local `source-coop login`, run
    **Whether to fit at all is governed by the monthly confidence-drift gate**
    (`scripts/overture/compare_confidence.py`, run during the data pull; decision rule in
    [docs/confidence-calibration.md](../../docs/confidence-calibration.md)). On a
-   **pass** (the normal monthly case), do **not** run `fit_calibration` — reuse the most
-   recent fitted curves verbatim:
+   **pass** (the normal monthly case), do **not** refit — reuse the most recent fitted
+   curves verbatim, then run `scripts/conflation/ht_review.py` on them:
    ```bash
    # copy curves + metadata from the prior conflation version, with a provenance note
    python scripts/conflation/apply_calibration.py --input-suffix cd --output-suffix "" \
        --curves-dir ~/data/openpois/conflation/<prior version>/calibration
    ```
    **Method-change override:** if the calibration *method* changed since the curves
-   being reused were fit (`conflation.calibration.matched_index_mode`,
-   `band_aggregation`, or estimator code), refit with `make calibrate` against the
-   current `versions.calibration` even on a pass. **The October 2026 run is such a
-   release** (pool → interaction, anchored_kernel → bin band); later passes reuse the
-   October curves as usual.
+   being reused were fit (the model, its label layer, or code that changes the
+   curves), refit with `make calibrate` even on a pass. **The October 2026 run is such
+   a release** (v4 curves → Bayesian mixture); later passes reuse the October curves
+   as usual.
+
+   **Validation months** (a new round is being drawn, as in October 2026): run
+   `make conflate_to_cd`, hand `conflated_cd.parquet` to the validator, and run
+   `make calibrate && make apply_manual_overrides` after the handoff is exported and
+   `versions.calibration` (and `conflation.calibration.pooled_rounds`) are set. There
+   is no provisional calibration.
 
    On a **breach**, refresh the validation handoff, pin it, and refit:
    ```bash
@@ -147,13 +154,14 @@ Publishing from the remote: after Nat's local `source-coop login`, run
    # then set versions.calibration in config.yaml to that round, and run make calibrate
    ```
    The handoff lands in the gitignored `data/calibration/<round>/`. If it is missing,
-   `fit_calibration.py` fails fast rather than shipping uncalibrated data.
+   the fit fails fast rather than shipping uncalibrated data.
 
    Outputs:
    - `conflated.parquet` — canonical output that downstream steps consume (CD + calibration + manual overrides applied). `conf_mean`/`conf_lower`/`conf_upper` are calibrated P(exists and open); `conf_mean_uncalibrated` archives the post-CD value; `calibration_flag` records edge rules (`shadow_cd`, `unnamed_extrapolated`, `manual_exclude`, `manual_include`; `missing_conf` was retired in October 2026).
    - `conflated_cd.parquet` — post-CD, pre-calibration.
    - `conflated_baseline.parquet` — neither CD nor calibration; kept on disk for spot-checks.
-   - `calibration/` — fitted curves, per-segment metadata, and `fit_report.md`.
+   - `calibration/` — grid curves, per-segment metadata, `fit_report.md`, and the HT review.
+   - `calibration_bayes/` — the three Bayesian fits (draws, diagnostics, figures, their own report).
    - `ghosts.parquet` under `versions.ghost_osm` — see [docs/change-detection.md](../../../docs/change-detection.md).
    - `match_diagnostics.parquet`.
 

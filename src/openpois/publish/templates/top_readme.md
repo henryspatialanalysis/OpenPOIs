@@ -43,7 +43,7 @@ Overture Maps places. Key columns:
 | `name`, `brand` | Preferred display names |
 | `shared_label` | Harmonised category across the two source taxonomies |
 | `conf_mean` | **Calibrated probability that the POI exists and is currently open to the public** (see Confidence, below) |
-| `conf_lower`, `conf_upper` | 95% interval for the calibrated confidence |
+| `conf_lower`, `conf_upper` | 95% posterior interval for the calibrated confidence (too narrow for matched POIs; see Confidence) |
 | `conf_mean_uncalibrated` | The pre-calibration model value, retained for comparison |
 | `calibration_flag` | Null for the ordinary case; otherwise why this row was handled specially (see Confidence) |
 | `match_score`, `match_distance_m` | Diagnostics for the OSM × Overture link |
@@ -60,9 +60,12 @@ The `osm-parquet/` files contain the same OSM rows before conflation. This data 
 exists and is open to the public**, not a raw model score. It is produced by
 mapping each POI's source score(s) through a curve estimated from an independent
 validation sample of POIs whose real-world status was established by research
-and human review. Curves are fitted separately for each detection pattern — in
-both sources, OpenStreetMap only, Overture only — because those populations
-behave very differently.
+and human review. A separate Bayesian model is fitted for each detection pattern,
+because those populations behave very differently: a monotone surface over both
+scores for POIs in both sources, and a monotone curve over the one available
+score for OpenStreetMap-only and Overture-only POIs. `conf_mean` is the
+posterior mean and `conf_lower` / `conf_upper` the 95% posterior interval. Since
+the October 2026 release; earlier releases used binned curves.
 
 Three consequences worth knowing before you filter on it:
 
@@ -71,9 +74,11 @@ Three consequences worth knowing before you filter on it:
   flat downweight. `conf_mean_uncalibrated` holds the old-style value if you
   need to reproduce prior behaviour.
 - **The achievable range is narrower than 0–1**, because the calibration
-  reports the existence rate actually observed in each score band rather than
-  the source's nominal score. Overture-only rows, for example, span roughly
-  0.54–0.84.
+  reports the existence rate observed in the validation sample at each score
+  rather than the source's nominal score.
+- **The interval for POIs in both sources is too narrow.** In simulation it
+  covers the true value about 75% of the time rather than 95%; the 1-D intervals
+  are close to nominal. A fix is planned.
 - **`conf_mean` means something different in `osm-parquet/`.** There it is the
   OpenStreetMap turnover-model posterior — the probability the feature is still
   current given its edit history — and it is *not* calibrated against verified
@@ -87,6 +92,8 @@ Three consequences worth knowing before you filter on it:
 | *(null)* | Ordinary case: confidence read from the segment's calibration curve |
 | `shadow_cd` | Overture row demoted by OpenStreetMap-history change detection; keeps that value, no interval |
 | `unnamed_extrapolated` | Unnamed feature, outside the validation sample; calibrated by extrapolation |
+| `manual_exclude` | Hand-reviewed as not existing; confidence forced to 0 |
+| `manual_include` | Hand-reviewed as existing; confidence forced to 1 |
 
 ## Quickstart
 

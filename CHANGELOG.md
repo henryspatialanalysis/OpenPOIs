@@ -26,26 +26,28 @@
   renames collapse. The rolled history matched the September snapshot's node
   state better than the full build did (99.99% vs 99.91% timestamp match).
   Rolled history is not used for refits.
-- **Matched POIs are calibrated through a monotone interaction index.** The
-  matched segment's two source scores (`osm_conf_mean`, `overture_confidence`)
-  now enter a bilinear index on their rescaled logits, `a0 + a1 x + a2 y +
-  a3 x y`, constrained to be nondecreasing in both scores. It replaces the
-  log-odds pool, which it nests (`a3 = 0`), and lets OSM's evidence count for
-  more when Overture is uncertain: the substitution the validation data show.
-  Chosen from a five-way comparison on round 20260730 (pool, average, additive
-  isotonic, interaction, cell surface); see the 2026-09-26 writeup
-  "A monotone interaction index for combining two source confidences". The
-  published value of about 0.4% of matched POIs moves by more than 0.05.
-- **Confidence bands are computed on the published bins.** The bootstrap band
-  no longer re-smooths each replicate, which made the published 95% bands too
-  narrow (simulated coverage 0.76 matched, 0.87 OSM-only, 0.46
-  Overture-only). With the new aggregation coverage is 0.89 / 0.91 / 0.66,
-  and bands are about 10% wider; they remain somewhat narrower than a true
-  95% interval, most for Overture-only POIs.
-- **Calibration lookups bin edge values the way deploy serves them.** A score
-  sitting exactly on a bin edge is now averaged into the bin that serves it.
-  About a third of Overture-only POIs sit on an edge, so the Overture-only
-  curve shifts slightly at the October refit.
+- **Confidence is calibrated by three Bayesian monotone-spline models.** The
+  published `conf_mean` is the posterior mean of P(the POI exists and is open)
+  from one model per detection segment: a monotone curve over the Overture
+  confidence for Overture-only POIs, a monotone curve over the OSM turnover
+  score for OSM-only POIs, and a surface over both scores, monotone in each,
+  for matched POIs. The models are fitted in JAX
+  (`openpois.conflation.calibration_bayes`) to the validation sample. Gold
+  rows count as labelled; rows with only an LLM verdict enter through a
+  mixture likelihood whose sensitivity and specificity are fixed from the
+  gold, design-weighted. The July and October 2026 validation rounds are
+  pooled. `conf_lower` / `conf_upper` are the 95% posterior interval; for
+  matched POIs it is too narrow (about 0.75 coverage in simulation), a known
+  limitation to be fixed. This replaces the v4 binned curves of the July and
+  September releases, which are retired; the matched interaction index and
+  bin-level bands that had been planned for this release were superseded
+  before shipping. In cross-validation on round 20260730 the same model with
+  fixed fractional labels instead of the mixture tied the v4 curves (pooled
+  relative Brier 0.996, 95% interval 0.990 to 1.002); the mixture form has not
+  been cross-validated. Each release now also carries a design-weighted review of the
+  deployed map (`calibration/ht_review_<round>.pdf`), which compares it with
+  the validation sample's rates, silver labels corrected for
+  misclassification.
 - **Change detection demotes only same-entity ghosts.** The shadow matcher
   now requires the ghost's prior name / brand to match the Overture name /
   brand (`min_prior_name_match_score` 0 → 70 on normalised names: accents,
@@ -73,21 +75,7 @@
   to `conf_mean = conf_lower = conf_upper = 0` (`calibration_flag =
   'manual_exclude'`) and `include` rows to 1 (`'manual_include'`). Rows are
   kept, so schema and counts are unchanged; the two new flag values join
-  `shadow_cd`, `missing_conf` and `unnamed_extrapolated`.
-- **Evaluated, not deployed: a Bayesian monotone-spline calibration.** A
-  prototype replacement for the calibration curves, fitted in JAX
-  (`openpois.conflation.calibration_bayes`). It uses monotone quadratic
-  splines per segment, a doubly monotone surface for matched POIs, and LLM
-  verdicts on non-gold validation rows as fractional labels at fixed,
-  design-weighted gold concordance rates. In 10-fold cross-validation on
-  round 20260730 it ties the production curves (pooled relative Brier 0.996,
-  95% interval 0.990 to 1.002). Its matched 95% bands under-cover (0.75 in
-  simulation). **Published `conf_mean` is unchanged.** The October round will
-  pool with July in a refit, with a fixed-rate mixture likelihood as a test
-  model. The same work adds a standard design-weighted (Horvitz-Thompson)
-  review of each calibration run from October, and an optional
-  `adaptation_kwargs` passthrough in `openpois.models.jax_core` whose default
-  is unchanged.
+  `shadow_cd` and `unnamed_extrapolated`.
 
 ## 2026-09-02-v0
 

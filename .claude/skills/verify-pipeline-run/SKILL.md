@@ -107,8 +107,9 @@ Confirm `conf_mean`, `conf_lower`, `conf_upper` columns are populated for every 
 ~/data/openpois/conflation/{version}/
   conflated_cd.parquet          # pre-calibration (CD applied)
   conflated.parquet             # canonical, calibrated
-  calibration/fit_report.md     # read this first
-  calibration/{segment}_curve.parquet + _metadata.json
+  calibration/fit_report.md     # read this first (acceptance, rates, impact)
+  calibration/{segment}_curve.parquet + _metadata.json   # grid curves
+  calibration_bayes/            # the three fits: draws, diagnostics, figures
   calibration/ht_review_<round>.pdf   # design-weighted check of the deployed map
   calibration/biggest_movers.csv, shift_by_label.csv
   viz/calibration_{curves,reliability,shift}.png
@@ -132,8 +133,10 @@ each table means. Then check the deployed output:
     FROM read_parquet('{path}')"""))
   ```
 - **Monotonicity of the deployed map**: within a segment, a higher input score
-  must never yield a lower calibrated value. Bin the index and check for
-  inversions; there should be none.
+  must never yield a lower calibrated value. Check the grids directly (each 1-D
+  `conf_mean` column non-decreasing in `score`; the matched grid non-decreasing
+  along both axes), then bin the deployed scores for inversions; there should be
+  none.
 - **Flag counts are plausible**: `shadow_cd` should equal the change-detection
   row count exactly and `unnamed_extrapolated` the unnamed-OSM count. From
   October 2026 there is no `missing_conf` flag: an Overture score of 0.5 is an
@@ -145,23 +148,20 @@ each table means. Then check the deployed output:
   others) is the expected signature, not a defect (verified identical on
   20260730 and 20260902).
 - **Design-weighted (HT) check**: open `calibration/ht_review_<round>.pdf` (flag
-  counts are in `fit_report.md`; on a reuse month run
-  `scripts/conflation/ht_review.py`, which writes the PDF and `ht_review_<round>.md`
-  beside the copied curves). Read the share of bins beyond 1 and 2 SD against the 32%
+  counts are in `ht_review_<round>.md` beside it; `make calibrate` runs it, and on a
+  reuse month run `scripts/conflation/ht_review.py` beside the copied curves). Read the share of bins beyond 1 and 2 SD against the 32%
   and 5% chance baseline, and look at every bin beyond 2 SD. It never fails a run.
-- **Composite vs reference**: the fit report's Horvitz-Thompson reference curve
-  should sit inside the composite's band over most of the grid. A systematic gap
-  means the working model is wrong — investigate before publishing.
-- **Band redistribution is expected and large.** On 20260730 the `>90%` band
-  halved and `<30%` nearly emptied. Confirm the shift matches the fit report
-  rather than assuming a bug, but do sanity-check `shift_by_label.csv`: the
-  biggest movers should be explainable (stable OSM institutions down because the
-  OSM curve has a ceiling; Overture-only up because the flat ×0.7 is gone).
-- **The matched curve is the interaction index.** `matched_metadata.json` should show
-  `index_mode: interaction`, an `index` block with `form: interaction`, `score_decimals:
-  6` and `fit_config.band_aggregation: bin`. A metadata file with only a `pool` block
-  means stale pre-October curves were reused; refit (method-change override in
+- **The curves are the Bayesian mixture.** Every `<segment>_metadata.json` shows
+  `method: bayes_fixed_mixture`, `lookup: grid`, `score_decimals: 6` and an
+  `acceptance` block with `all: true` (and no `accepted: false`, which marks a test
+  export). The matched file also shows `index_mode: grid`. Curves with a `pool` or
+  `index` block are v4 curves: stale for October 2026 on (method-change override in
   docs/confidence-calibration.md).
+- **Deployed impact is explainable.** The fit report's deployed-impact table gives
+  each segment's mean and the share of POIs moving by more than 0.05 and 0.10
+  against the prior release. The October 2026 switch from v4 is a method change, so
+  shifts are expected; sanity-check `shift_by_label.csv` for movers that the curves
+  do not explain.
 - **Curves are release-specific.** If `snapshot_overture` or the turnover model
   moved but `versions.calibration` did not, the curves are stale — re-export the
   handoff from openpois-validator and refit.
