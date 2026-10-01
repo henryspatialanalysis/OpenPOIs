@@ -77,11 +77,18 @@ cmd_setup() {
         [ -L ~/data/openpois/logs ] \
             || ln -s ~/efs-mount/analysis/openpois/logs ~/data/openpois/logs
         ls -ld ~/repos/openpois ~/data/openpois/logs'
-    # environment.yml pins the package itself (openpois==0.0.0), which is not on
-    # PyPI: drop that line and install the checkout editable instead.
+    # environment.yml is exported from the laptop env, so its pip section pins
+    # editable installs of local repos that are not on PyPI: openpois itself
+    # (installed from the checkout below), and sga-walkability and versioned-config,
+    # which openpois does not import. Drop those lines. An env left half-built by a
+    # failed create is completed by `env update` rather than skipped.
     launch setup '
-        if ! conda env list | grep -q "^openpois "; then
-            sed "/^ *- openpois==/d" environment.yml > /tmp/openpois-environment.yml
+        sed -E "/^ *- (openpois|sga-walkability|versioned-config)==/d" \
+            environment.yml > /tmp/openpois-environment.yml
+        if conda env list | grep -q "^openpois "; then
+            ~/miniforge3/bin/mamba env update -n openpois \
+                -f /tmp/openpois-environment.yml || exit 1
+        else
             ~/miniforge3/bin/mamba env create -f /tmp/openpois-environment.yml \
                 || exit 1
         fi
