@@ -272,14 +272,29 @@ def adaptation_kwargs_from(args) -> dict | None:
 # Production curves (the comparator)
 # ---------------------------------------------------------------------------
 
-def load_production(curves_dir: Path = PRODUCTION_CURVES) -> dict:
+def load_production(curves_dir: Path = PRODUCTION_CURVES) -> dict | None:
+    """The v4 comparator curves, or None where they are not on disk.
+
+    They live only in the laptop's 20260902 evaluation directory. A production fit
+    (openpois-01, from October 2026) has no v4 comparator, so its comparison
+    columns come out NaN rather than failing the fit.
+    """
+    if not Path(curves_dir).is_dir():
+        print(f"No v4 comparator curves at {curves_dir}; comparisons are NaN.")
+        return None
     return {"curves": calibration.read_curves(curves_dir),
             "metadata": calibration.read_curve_metadata(curves_dir)}
 
 
-def production_values(production: dict, segment: str, osm = None,
+def production_values(production: dict | None, segment: str, osm = None,
                       overture = None) -> np.ndarray:
-    """The production lookup's conf_mean at the given raw scores."""
+    """The production lookup's conf_mean at the given raw scores.
+
+    NaN everywhere when there is no comparator (``production`` is None).
+    """
+    if production is None:
+        scores = osm if osm is not None else overture
+        return np.full(len(np.asarray(scores)), np.nan)
     curves, metadata = production["curves"], production["metadata"]
     meta = metadata[segment]
     decimals = meta.get("score_decimals")

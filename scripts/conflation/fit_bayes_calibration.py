@@ -358,7 +358,9 @@ def deployed_impact(grid_draws: dict, production: dict, conflated_path: Path,
                                   mean_1d[segment])
             prod = common.production_values(production, segment, osm = osm,
                                             overture = ov)
-            ok = np.isfinite(bayes) & np.isfinite(pub) & np.isfinite(prod)
+            ok = np.isfinite(bayes) & np.isfinite(pub)
+            if production is not None:
+                ok &= np.isfinite(prod)
             bayes, pub, prod = bayes[ok], pub[ok], prod[ok]
             a = acc[segment]
             a["n"] += int(ok.sum())
@@ -391,6 +393,11 @@ def deployed_impact(grid_draws: dict, production: dict, conflated_path: Path,
             "share_gt_0.10_vs_october": a["gt10_prod"] / n,
             "share_band_change_vs_october": a["band_changes_prod"] / n,
         }
+        if production is None:
+            # No v4 comparator on this host: say so rather than report zeros.
+            for key in out["segments"][segment]:
+                if key.endswith(("_october", "october_production")):
+                    out["segments"][segment][key] = float("nan")
     return out
 
 
