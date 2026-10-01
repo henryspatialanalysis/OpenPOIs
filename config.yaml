@@ -19,7 +19,7 @@ versions:
   # calibration (see .claude/docs/confidence-calibration.md). Produced by
   # openpois-validator's scripts/08_export_handoff.py; the curves are
   # release-specific and do not transport across Overture releases.
-  calibration: "20260730"
+  calibration: "20261001"
   source_coop: "2026-10-01-v0"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
   # Ghost POI dataset reconstructed from OSM history (one row per
   # detected previous-state event). Pinned to the same value as
@@ -702,7 +702,7 @@ conflation:
     # its own design weights. CV holds out and scores the current round only.
     # When versions.calibration moves to the October 2026 round, set
     # ["20260730"].
-    pooled_rounds: []
+    pooled_rounds: ["20260730"]
 
 # Settings for publishing snapshots to Source Cooperative
 # (https://source.coop/henryspatialanalysis/openpois). Source Coop is
