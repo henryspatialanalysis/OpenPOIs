@@ -17,11 +17,15 @@
 #          and its in-family coverage.
 # Stage 4: fit_report.md.
 #
-# MODE=mixture runs only the mixture's full fit (with the deployed-impact preview)
-# and the report, with the mixture as the report's main model. That is the monthly
-# update from October 2026 on (Nat, 2026-09-30): the comparison across arms is
-# done, and the month needs only the chosen model. MODE=full (default) runs every
-# stage.
+# MODE=mixture is the production calibration from October 2026 on (Nat,
+# 2026-09-30): three fixed-rate mixture fits, one per segment (tags
+# mixture_overture, mixture_osm, mixture_matched), run in parallel with
+# OMP_NUM_THREADS=2 each, then the report over all three. Under arm C with fixed
+# rates the joint posterior factorizes by segment, so the three fits are the
+# joint fit, each with its own step size and mass matrix. Any failed fit stops
+# the run. Its EVAL defaults to <conflation root>/<versions.conflation>/
+# calibration_bayes; export_bayes_curves.py turns the fits into deployable grid
+# curves. MODE=full (default) runs every stage (joint fits, evaluation only).
 #
 # Every stage is resumable: the Python scripts skip outputs that already exist
 # (CV folds, coverage rounds); full fits are skipped when summary.json exists,
@@ -31,14 +35,26 @@
 set -u
 REPO=~/repos/openpois
 PY=~/miniforge3/envs/openpois/bin/python
+MODE=${MODE:-full}
 # Output directory: override for a new run, e.g.
 #   EVAL=~/data/openpois/conflation/<round version>/calibration_eval_bayes_<date> bash run_bayes_phase1.sh
-EVAL=${EVAL:-~/data/openpois/conflation/20260730/calibration_eval_bayes_20260927}
+# MODE=mixture defaults to the run's own conflation version (read from config.yaml
+# as the remote stage runner does).
+if [ -z "${EVAL:-}" ]; then
+  if [ "$MODE" = mixture ]; then
+    VERSION=$(cd "$REPO" && $PY -c "import yaml; print(yaml.safe_load(open('config.yaml'))['versions']['conflation'])") \
+      || { echo "PIPELINE FAILED: cannot read versions.conflation"; exit 1; }
+    EVAL=~/data/openpois/conflation/$VERSION/calibration_bayes
+  else
+    EVAL=~/data/openpois/conflation/20260730/calibration_eval_bayes_20260927
+  fi
+fi
 mkdir -p "$EVAL/logs"
 LOGS=$EVAL/logs
 # Main fits get 1,000 + 1,000; CV / coverage / sensitivity fits need posterior
-# means and 95% bands only (execution log, decision 8).
-MAIN="--warmup 1000 --samples 1000 --chains 4"
+# means and 95% bands only (execution log, decision 8). MAIN may be overridden
+# for a short local check, e.g. MAIN="--warmup 200 --samples 200 --chains 2".
+MAIN=${MAIN:-"--warmup 1000 --samples 1000 --chains 4"}
 LIGHT="--warmup 600 --samples 400 --chains 4"
 PARALLEL=${PARALLEL:-5}
 # Flags of the arm A variant carried into CV (set from the structure tests).
@@ -48,8 +64,9 @@ ARM_A_TAG=${ARM_A_TAG:-armA_variant}
 # decision 16): the default is C,B.
 CV_ARMS=${CV_ARMS:-C,B}
 COV_PARALLEL=${COV_PARALLEL:-5}
-MODE=${MODE:-full}
 MIXTURE_TAG=armC_mixture
+# MODE=mixture: one fit per segment, tag mixture_<segment>.
+SEGMENTS="overture osm matched"
 export OMP_NUM_THREADS=3
 cd "$REPO"
 
@@ -71,11 +88,24 @@ fit() {  # fit <tag> <args...>
 }
 
 if [ "$MODE" = mixture ]; then
-  stamp "MODE mixture: fixed-rate mixture fit and report only"
-  fit "$MIXTURE_TAG" --arm C --label-noise fixed_mixture $MAIN --deployed-impact \
-    || { stamp "PIPELINE FAILED: $MIXTURE_TAG"; exit 1; }
+  stamp "MODE mixture: one fixed-rate mixture fit per segment, then the report ($EVAL)"
+  declare -A PIDS
+  for s in $SEGMENTS; do
+    ( export OMP_NUM_THREADS=2
+      fit "mixture_$s" --arm C --label-noise fixed_mixture --segments "$s" $MAIN \
+        --deployed-impact ) &
+    PIDS[$s]=$!
+  done
+  FAILED=""
+  for s in $SEGMENTS; do
+    wait "${PIDS[$s]}" || FAILED="$FAILED mixture_$s"
+    [ -f "$EVAL/fits/mixture_$s/summary.json" ] || FAILED="$FAILED mixture_$s"
+  done
+  if [ -n "$FAILED" ]; then
+    stamp "PIPELINE FAILED:$FAILED"; exit 1
+  fi
   $PY -u scripts/conflation/report_bayes_calibration.py --out-dir "$EVAL" \
-    --main "$MIXTURE_TAG" > "$LOGS/report.log" 2>&1 \
+    --main mixture_matched > "$LOGS/report.log" 2>&1 \
     || { stamp "PIPELINE FAILED: report"; exit 1; }
   stamp "PIPELINE DONE"
   exit 0
