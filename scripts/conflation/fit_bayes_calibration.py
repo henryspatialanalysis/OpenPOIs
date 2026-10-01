@@ -739,6 +739,9 @@ def main() -> None:
         "num_parameters": int(sum(np.prod(np.shape(v)) for v in
                                   cb.parameter_template(prepared).values())),
         "map_success": map_success,
+        "sampler": {"seed": args.seed, "target_accept": args.target_accept,
+                    "warmup": args.warmup, "samples": args.samples,
+                    "chains": args.chains},
         "fit_minutes": fit_minutes,
         "diagnostics": diag_summary,
         "curve_convergence": curve_summary,

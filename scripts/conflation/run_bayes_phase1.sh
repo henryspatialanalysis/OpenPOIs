@@ -104,9 +104,10 @@ if [ "$MODE" = mixture ]; then
   declare -A PIDS
   for s in $SEGMENTS; do
     ta=$(bayes_setting target_accept "$s")
+    sd=$(bayes_setting seed "$s")
     ( export OMP_NUM_THREADS=2
       fit "mixture_$s" --arm C --label-noise fixed_mixture --segments "$s" $MAIN \
-        ${ta:+--target-accept "$ta"} --deployed-impact ) &
+        ${ta:+--target-accept "$ta"} ${sd:+--seed "$sd"} --deployed-impact ) &
     PIDS[$s]=$!
   done
   FAILED=""

@@ -644,11 +644,18 @@ conflation:
       # each segment adapts a larger step size than the matched surface allowed
       # in the joint fit: on the July round at 0.80 the osm fit had 19
       # divergences and matched 12, failing the acceptance rule; at 0.99 osm had
-      # none (2026-10-01 tuning on openpois-01).
+      # none (2026-10-01 tuning on openpois-01). On the pooled October round
+      # matched at 0.99 had 1 divergence (chain 3) and failed; refit at 0.995
+      # with a new seed (Nat, 2026-10-01).
       target_accept:
         overture: null
         osm: 0.99
-        matched: 0.99
+        matched: 0.995
+      # NUTS seed per segment (null = fit_bayes_calibration.py's 20260927).
+      seed:
+        overture: null
+        osm: null
+        matched: 20261001
       grid_1d: 2001                 # 1-D curve nodes on [0, 1] (step 0.0005)
       grid_2d: 201                  # matched nodes per axis (step 0.005)
       # Fit outputs land in conflation/<version>/<eval_dir_name>/.
