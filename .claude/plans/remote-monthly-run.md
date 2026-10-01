@@ -164,6 +164,10 @@ fits well inside the 1-hour token. `creds clear` deletes the file after the publ
 
 ## 4. Monthly run procedure
 
+**October 2026 resume point:** the run is paused for the validation round; pick it up
+with [2026-10-run-resume.md](2026-10-run-resume.md), which has the state, the next
+commands and this run's lessons.
+
 Each long stage is launched with `openpois-remote.sh run <stage> -- <cmd>` and followed
 by one Monitor running `openpois-remote.sh watch <log>` (30-minute heartbeat for
 hours-long stages). The watch ends on the DONE line (which carries the exit code, also

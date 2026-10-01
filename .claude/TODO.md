@@ -8,6 +8,9 @@ Added 2026-09-30. The run skills (full-data-pull, conflate-snapshots, verify-pip
 point here: at the start of the October run, list these items to Nat and confirm which
 go in before any step runs. Details are in the linked items under **Upcoming**.
 
+**Resume point (2026-10-01):** the run is paused for validation round `20261001`; see
+[plans/2026-10-run-resume.md](plans/2026-10-run-resume.md).
+
 **Raised 2026-09-30.** Code for items 2, 4, 6 and 7 is done. The run happens on
 `feature/matched-index-modes`, here and on openpois-01, and the PR to main follows the
 run (Nat, 2026-09-30). Published calibration moves to the Bayesian mixture this month
