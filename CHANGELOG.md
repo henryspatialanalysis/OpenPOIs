@@ -4,6 +4,10 @@
 
 ### Methods changes
 
+- **`overture_categories_alternate` follows Overture's new taxonomy.** Overture
+  removed its deprecated `categories` field in release 2026-09-23.1, so the
+  column now holds `taxonomy.alternates`: the same idea (secondary categories),
+  in the new taxonomy's vocabulary. Matching never read it.
 - **An Overture confidence of exactly 0.5 is an ordinary score.** Earlier
   releases flagged these rows `calibration_flag = 'missing_conf'`, on the
   belief that conflation had imputed 0.5 for a missing provider confidence.

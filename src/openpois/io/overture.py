@@ -36,8 +36,9 @@ Data source: s3://overturemaps-us-west-2/release/ (public, no auth required).
 
 Category filtering uses the ``taxonomy.hierarchy`` array. The first element
 (``taxonomy.hierarchy[1]`` in SQL 1-based indexing) is the L0 category. The
-deprecated ``categories.primary`` field must NOT be used; it is removed in
-June 2026.
+deprecated ``categories`` struct is gone from release 2026-09-23.1 on, so
+``overture_categories_alternate`` now comes from ``taxonomy.alternates`` and carries
+the new taxonomy's vocabulary rather than the old category names.
 
 Memory knobs: ``duckdb_memory_limit`` and ``duckdb_threads`` are per
 DuckDB connection. ``workers`` parallelizes per-part downloads via a
@@ -337,7 +338,7 @@ def _download_one_part(
                 taxonomy.hierarchy[2] AS taxonomy_l1,
                 taxonomy.hierarchy[3] AS taxonomy_l2,
                 taxonomy.hierarchy[4] AS taxonomy_l3,
-                categories.alternate AS overture_categories_alternate,
+                taxonomy.alternates AS overture_categories_alternate,
                 names.primary AS overture_name,
                 brand.names.primary AS brand_name,
                 brand.wikidata AS brand_wikidata,
