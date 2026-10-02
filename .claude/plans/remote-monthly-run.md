@@ -43,7 +43,7 @@ all three with symlinks, so **no config or code change is needed** to run remote
 | OSM snapshot, Overture, incremental history downloads | Remote | Bandwidth-bound. us-west-2 has fast links to Geofabrik and is in-region for Overture. |
 | Drift gate, `check_history`, `make rate`, `build_type_affinity.py` | Remote | Needs the snapshots that are already there. |
 | `make conflate` (ghosts, baseline, CD, calibrate, overrides) | Remote | The memory problem this plan exists to solve. |
-| `summarize.py`, HT review PDF, `format_for_upload.py`, both PMTiles | Remote | Reads the 2.5 GB conflated file. |
+| `summarize.py`, HT review PDF, both `format_for_upload.py`, both PMTiles | Remote | Reads the 2.5 GB conflated file. |
 | Bayesian fixed-rate mixture fit (checklist item 4) | Remote | JAX, about 50 minutes (`MODE=mixture` of `run_bayes_phase1.sh`). The inputs are already there. |
 | **Validation round** (`openpois-validator`, LLM checks, human census, phone lane, review UI, handoff export) | **Local** | See the paragraph below. |
 | Publish to Source Coop | Remote | 7 GB at in-region speed, versus about 1h40m from home last month. |
@@ -205,8 +205,13 @@ Stop the instance (`ec2-openpois stop`) whenever the next step waits on a person
    `make apply_manual_overrides`, `summarize.py`, `summary`, the calibration invariants
    from `verify-pipeline-run` via `exec`, and `pull <v>`. **Nat** reviews the fit
    report, the HT PDF and the summaries, and gives the release decision.
-8. **Package.** `format_for_upload.py`, then both `prepare_pmtiles.py` runs.
-9. **Publish.** Nat's local `source-coop login`; `creds put`; the upload `--dry-run`, the
+8. **Package.** Both `format_for_upload.py` runs (`scripts/conflation/` and
+   `scripts/osm_snapshot/`; the upload reads both partitioned datasets), then both
+   `prepare_pmtiles.py` runs.
+9. **Publish.** The upload `--dry-run` first: it needs no credentials, so missing files
+   show up before the token clock starts. Then Nat's local `source-coop login` (on
+   2026-10-01 the cached token had expired within an hour, so log in just before);
+   `creds put`; the
    upload, the published-release checks; `creds clear`.
 10. **Wrap up.** `update-site` locally; TODO.md bookkeeping; PR the run branch to main
     (Nat approves); `prune`, check the list, `prune --apply`; `ec2-openpois stop`.

@@ -63,7 +63,8 @@ one Monitor, and end your turn while they run.
    `calibration/ht_review_20261001.pdf` and `run_summary.md`, and gives the release
    decision.
 6. **After Nat's go:**
-   - Package: `format_for_upload.py`, then both `prepare_pmtiles.py`.
+   - Package: both `format_for_upload.py` (conflation and osm_snapshot), then both
+     `prepare_pmtiles.py`.
    - Publish: Nat runs `source-coop login` locally; then `creds put`, the upload
      `--dry-run`, the upload, the published-release checks, and `creds clear`.
 7. **Wrap up:**
