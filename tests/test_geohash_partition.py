@@ -726,3 +726,62 @@ def test_chunked_partition_tolerates_all_null_list_chunks(tmp_path, filled_first
     phones = table.to_pandas().sort_values("osm_id")["phones"].tolist()
     filled = [p is not None and len(p) == 1 for p in phones]
     assert sum(filled) == n // 2
+
+
+@pytest.mark.parametrize("from_parquet", [True, False])
+def test_every_partition_shares_the_dataset_types(tmp_path, from_parquet):
+    """A whole-dataset read must work when one label lacks a column's values.
+
+    The 2026-10-01 release typed ``overture_categories_alternate`` ``null`` in
+    55 of 102 partitions (labels with no alternates) and ``osm_id`` ``double``
+    where a label had missing ids, so pyarrow and DuckDB could not read the
+    published dataset whole.
+    """
+    import duckdb
+    import pyarrow as pa
+    import pyarrow.dataset as pads
+    import pyarrow.parquet as pq
+
+    n = 30
+    rng = np.random.default_rng(5)
+    labels = ["Bookstore"] * 10 + ["Cafe"] * 10 + ["Park"] * 10
+    gdf = gpd.GeoDataFrame(
+        {
+            "shared_label": labels,
+            # Values only in Cafe; Bookstore and Park are null throughout.
+            "alternates": [None] * 10 + [["bakery"]] * 10 + [None] * 10,
+            # Missing ids only in Park, so pandas makes that partition float.
+            "osm_id": pd.array(list(range(20)) + [None] * 10, dtype = "Int64"),
+            "geometry": [Point(x, y) for x, y in zip(
+                rng.uniform(-120, -70, n), rng.uniform(25, 49, n))],
+        },
+        crs = "EPSG:4326",
+    )
+    out = tmp_path / "out"
+    if from_parquet:
+        src = tmp_path / "in.parquet"
+        gdf.to_parquet(src)
+        write_label_partitioned_from_parquet(
+            src, out, partition_col = "shared_label", geohash_precision = 6,
+            sort_col = "geohash", overwrite = True,
+        )
+    else:
+        write_label_partitioned_dataset(
+            add_geohash_column(gdf, precision = 6), out,
+            partition_col = "shared_label", sort_col = "geohash",
+            overwrite = True,
+        )
+    files = sorted(out.glob("*/*.parquet"))
+    schemas = [pq.read_schema(f) for f in files]
+    for name in ("alternates", "osm_id"):
+        assert len({str(s.field(name).type) for s in schemas}) == 1, name
+    assert pa.types.is_list(schemas[0].field("alternates").type)
+    assert pa.types.is_int64(schemas[0].field("osm_id").type)
+    table = pads.dataset(str(out), format = "parquet",
+                         partitioning = "hive").to_table()
+    assert table.num_rows == n
+    count = duckdb.sql(
+        f"SELECT count(alternates), count(osm_id) FROM read_parquet("
+        f"'{out}/*/*.parquet', hive_partitioning = 1)"
+    ).fetchone()
+    assert count == (10, 20)

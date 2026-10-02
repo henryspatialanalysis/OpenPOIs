@@ -253,10 +253,11 @@ def write_label_partitioned_dataset(
     groups = gdf.groupby(partition_col, sort = False, observed = True)
     n_partitions = len(groups)
     print(f"Writing {n_partitions} partitions to {output_dir} ...")
+    column_types = dataset_column_types(gdf[cols])
     for i, (value, group) in enumerate(groups):
         _write_one_partition(
             group, cols, output_dir, partition_col, value, sort_col,
-            chunk_rows,
+            chunk_rows, column_types = column_types,
         )
         if (i + 1) % 25 == 0:
             print(f"  {i + 1}/{n_partitions} partitions written...")
@@ -305,6 +306,35 @@ def _stream_schema(group, sort_indices: np.ndarray, cols: list,
     return schema
 
 
+def _typed_schema(schema: pa.Schema, column_types: dict = None) -> pa.Schema:
+    """``schema`` with each column in ``column_types`` set to that type.
+
+    Geometry and the columns the writer adds (bbox, geohash, the index) keep
+    the types the GeoParquet conversion gave them.
+    """
+    for name, data_type in (column_types or {}).items():
+        index = schema.get_field_index(name)
+        if index >= 0 and name != "geometry":
+            schema = schema.set(index, schema.field(index).with_type(data_type))
+    return schema
+
+
+def dataset_column_types(source) -> dict:
+    """{name: Arrow type} for every non-geometry column of a frame or schema.
+
+    A schema (a parquet file's) is taken as it is. A GeoDataFrame is inferred
+    once over all its rows, so a column only null within some partitions still
+    gets its real type.
+    """
+    if isinstance(source, pa.Schema):
+        schema = source
+    else:
+        frame = pd.DataFrame(source.drop(columns = source.geometry.name))
+        schema = pa.Schema.from_pandas(frame, preserve_index = False)
+    return {f.name: f.type for f in schema
+            if f.name != "geometry" and not _has_null_type(f.type)}
+
+
 def _conform(table: pa.Table, schema: pa.Schema) -> pa.Table:
     """Cast a chunk to the writer schema (null-typed columns to their type)."""
     if table.schema.equals(schema, check_metadata = False):
@@ -315,8 +345,18 @@ def _conform(table: pa.Table, schema: pa.Schema) -> pa.Table:
 
 
 def _write_one_partition(group, cols, output_dir: Path, partition_col: str,
-                         value, sort_col: str, chunk_rows: int) -> int:
-    """Write one Hive partition directory, geohash-sorted. Returns row count."""
+                         value, sort_col: str, chunk_rows: int,
+                         column_types: dict = None) -> int:
+    """Write one Hive partition directory, geohash-sorted. Returns row count.
+
+    ``column_types`` ({name: Arrow type}, from the whole dataset) fixes each
+    column's stored type, so every partition file agrees. Without it, a column
+    that is null throughout one partition is typed ``null`` there and a
+    nullable integer comes out ``double`` in some partitions only, and a read
+    of the whole dataset fails (2026-10-01: ``overture_categories_alternate``
+    was ``null`` in 55 of 102 conflated partitions, which broke pyarrow and
+    DuckDB reads of the published release).
+    """
     safe_value = urllib.parse.quote(str(value), safe = "")
     partition_dir = output_dir / f"{partition_col}={safe_value}"
     partition_dir.mkdir(parents = True, exist_ok = True)
@@ -335,8 +375,9 @@ def _write_one_partition(group, cols, output_dir: Path, partition_col: str,
         # as the old code path.
         sorted_slice = group.iloc[sort_indices][cols]
         table = _geopandas_to_arrow(
-            sorted_slice, write_covering_bbox = True,
+            sorted_slice, index = True, write_covering_bbox = True,
         )
+        table = _conform(table, _typed_schema(table.schema, column_types))
         pq.write_table(
             table, str(part_path),
             row_group_size = 100_000,
@@ -346,7 +387,8 @@ def _write_one_partition(group, cols, output_dir: Path, partition_col: str,
         # Large partitions: stream via ParquetWriter in row-group
         # chunks so the Arrow Table never coexists at full size
         # with the parent GeoDataFrame.
-        schema = _stream_schema(group, sort_indices, cols)
+        schema = _typed_schema(_stream_schema(group, sort_indices, cols),
+                               column_types)
 
         with pq.ParquetWriter(str(part_path), schema) as writer:
             for chunk_start in range(0, n_rows, chunk_rows):
@@ -473,6 +515,7 @@ def write_label_partitioned_from_parquet(
               f"{partition_col}")
     values = pd.unique(labels[~null_mask])
     read_columns = [c for c in all_columns if c != partition_col]
+    column_types = dataset_column_types(dataset.schema)
 
     print(f"Writing {len(values)} partitions to {output_dir} ...")
     written = 0
@@ -502,7 +545,7 @@ def write_label_partitioned_from_parquet(
         group.index = group.pop("__row_position").to_numpy()
         written += _write_one_partition(
             group, list(group.columns), output_dir, partition_col, value,
-            sort_col, chunk_rows,
+            sort_col, chunk_rows, column_types = column_types,
         )
         del group
         gc.collect()
