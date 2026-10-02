@@ -192,14 +192,14 @@ class TestDownloadHistoryPbf:
         output = tmp_path / "out.osh.pbf"
         output.write_bytes(b"fake")
         with patch(
-            "openpois.io.osm_history_pbf._load_cookie_session"
-        ) as mock_session:
+            "openpois.io.osm_history_pbf.download_resilient"
+        ) as mock_dl:
             result = download_history_pbf(
                 url="http://example.com/x.osh.pbf",
                 output_path=output,
                 overwrite=False,
             )
-        mock_session.assert_not_called()
+        mock_dl.assert_not_called()
         assert result == output
 
     def test_raises_if_cookie_file_missing(self, tmp_path):
@@ -213,33 +213,27 @@ class TestDownloadHistoryPbf:
                 overwrite=False,
             )
 
-    def test_downloads_via_streaming_session(self, tmp_path):
+    def test_delegates_to_resilient_download(self, tmp_path):
+        """The download runs through download_resilient with the cookie jar."""
         output = tmp_path / "subdir" / "out.osh.pbf"
-
-        mock_resp = MagicMock()
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_resp.headers = {"content-length": "5"}
-        mock_resp.iter_content = MagicMock(return_value=[b"hello"])
-
-        mock_session = MagicMock()
-        mock_session.get = MagicMock(return_value=mock_resp)
+        cookie = tmp_path / "cookies.txt"
 
         with patch(
-            "openpois.io.osm_history_pbf._load_cookie_session",
-            return_value=mock_session,
-        ):
+            "openpois.io.osm_history_pbf.download_resilient",
+            return_value=output,
+        ) as mock_dl:
             result = download_history_pbf(
                 url="http://example.com/x.osh.pbf",
                 output_path=output,
+                cookie_file=cookie,
                 overwrite=False,
             )
 
-        mock_session.get.assert_called_once_with(
-            "http://example.com/x.osh.pbf", stream=True, timeout=(30, None)
+        mock_dl.assert_called_once_with(
+            "http://example.com/x.osh.pbf", output, cookie_file=cookie,
+            overwrite=False, label="history PBF",
         )
         assert result == output
-        assert output.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -273,18 +267,26 @@ class TestFilterHistoryPbf:
                 "openpois.io.osm_history_pbf._resolve_osmium",
                 return_value="/usr/bin/osmium",
             ),
+            patch("openpois.io.osm_history_pbf._extract_poi_ids"),
         ):
             filter_history_pbf(
                 input_pbf, output_pbf, ["amenity", "shop"], overwrite=False
             )
 
-        cmd = mock_run.call_args[0][0]
-        assert cmd[1] == "tags-filter"
-        assert "--omit-referenced" in cmd
-        assert "--output-format=osh.pbf" in cmd
-        assert "nwr/amenity" in cmd
-        assert "nwr/shop" in cmd
-        assert mock_run.call_args[1].get("check") is True
+        # Two passes: a tag filter to find the POI ids, then every version
+        # of those ids (deletions included) from the raw history.
+        assert mock_run.call_count == 2
+        tagfilt, getid = (c.args[0] for c in mock_run.call_args_list)
+        assert tagfilt[1] == "tags-filter"
+        assert "--omit-referenced" in tagfilt
+        assert "--output-format=osh.pbf" in tagfilt
+        assert "nwr/amenity" in tagfilt
+        assert "nwr/shop" in tagfilt
+        assert getid[1] == "getid"
+        assert "--with-history" in getid
+        assert getid[-1] == str(input_pbf)
+        assert all(c.kwargs.get("check") is True
+                   for c in mock_run.call_args_list)
 
 
 # ---------------------------------------------------------------------------

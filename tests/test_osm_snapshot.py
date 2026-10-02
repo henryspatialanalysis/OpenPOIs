@@ -99,45 +99,49 @@ class TestDownloadPbf:
         assert result == output
 
     def test_downloads_when_no_file(self, tmp_path):
-        """Should call requests.get with stream=True and write content."""
+        """Delegates to download_resilient (parallel, resumable byte ranges)."""
         output = tmp_path / "subdir" / "out.pbf"
 
-        mock_resp = MagicMock()
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_resp.headers = {"content-length": "10"}
-        mock_resp.iter_content = MagicMock(return_value=[b"hellworld!"])
-
         with patch(
-            "openpois.io.osm_snapshot.requests.get", return_value=mock_resp
-        ) as mock_get:
+            "openpois.io.osm_snapshot.download_resilient", return_value = output
+        ) as mock_dl:
             result = download_pbf(
-                "http://example.com/file.pbf", output, overwrite=False
+                "http://example.com/file.pbf", output, overwrite = False
             )
 
-        mock_get.assert_called_once_with(
-            "http://example.com/file.pbf", stream=True, timeout=(30, None)
+        mock_dl.assert_called_once_with(
+            "http://example.com/file.pbf", output, overwrite = False,
+            label = "PBF",
         )
         assert result == output
-        assert output.exists()
 
     def test_overwrites_existing_file(self, tmp_path):
-        """Should call requests.get even if file already exists when overwrite=True."""
+        """overwrite=True is passed through, so an existing file is replaced."""
         output = tmp_path / "out.pbf"
         output.write_bytes(b"old content")
 
-        mock_resp = MagicMock()
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_resp.headers = {}
-        mock_resp.iter_content = MagicMock(return_value=[b"new"])
+        with patch(
+            "openpois.io.osm_snapshot.download_resilient", return_value = output
+        ) as mock_dl:
+            download_pbf("http://example.com/file.pbf", output, overwrite = True)
+
+        assert mock_dl.call_args.kwargs["overwrite"] is True
+
+    def test_latest_alias_downloads_the_resolved_dated_extract(self, tmp_path):
+        """A Geofabrik -latest URL is resolved before the download starts."""
+        output = tmp_path / "out.pbf"
+        latest = "https://download.geofabrik.de/north-america/us-latest.osm.pbf"
+        dated = "https://download.geofabrik.de/north-america/us-260929.osm.pbf"
 
         with patch(
-            "openpois.io.osm_snapshot.requests.get", return_value=mock_resp
-        ) as mock_get:
-            download_pbf("http://example.com/file.pbf", output, overwrite=True)
+            "openpois.io.osm_snapshot.resolve_geofabrik_latest",
+            return_value = dated,
+        ), patch(
+            "openpois.io.osm_snapshot.download_resilient", return_value = output
+        ) as mock_dl:
+            download_pbf(latest, output)
 
-        mock_get.assert_called_once()
+        assert mock_dl.call_args.args[0] == dated
 
 
 # ---------------------------------------------------------------------------
