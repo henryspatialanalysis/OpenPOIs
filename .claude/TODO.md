@@ -2,65 +2,48 @@
 
 Short running list of in-progress / upcoming work. Edit freely; trim older completed items when the list gets long. Date items `YYYY-MM-DD` when added.
 
-## Next monthly run: October 2026 checklist (raise every item before starting)
+## Next monthly run: November 2026 checklist (raise every item before starting)
 
-Added 2026-09-30. The run skills (full-data-pull, conflate-snapshots, verify-pipeline-run)
-point here: at the start of the October run, list these items to Nat and confirm which
-go in before any step runs. Details are in the linked items under **Upcoming**.
+Added 2026-10-02 from the October run. List these to Nat before any step runs.
 
-**Resume point (2026-10-01):** the run is paused for validation round `20261001`; see
-[plans/2026-10-run-resume.md](plans/2026-10-run-resume.md).
+0. **Pooling drift checks were skipped in October; one fails.** The pooling plan
+   (`.claude/plans/bayesian-monotone-calibration.md` ~l.1210) requires two checks before
+   pooling rounds: (1) per-round verdict rates, kept separate if they differ beyond
+   binomial error; (2) per-round gold rate by score bin, no pooling on a systematic gap.
+   Neither gated the 2026-10-01-v0 fit. Check (1) on the forward rates the mixture uses
+   (raw, design-weighted): Overture P(LLM exists | gone) 0.043 in July (ESS 379) against
+   0.155 in October (ESS 91), z = +2.85, the lineage cases (a different business at the
+   spot reads as "exists"); every other rate within about 1 SD (OSM P(exists | gone) z −2.2
+   on 0 events, ESS 11, not reliable). Check (2): the October Overture rows sit below the
+   pooled curve inside score bins (HT, z +3.9 October-only). Decide with Nat: per-round
+   forward rates in the mixture (per-row rates by round in `prepare_data`), and whether
+   the Overture curve is refit and re-published before November.
+1. **Change-detection precision sample (the deferred release gate).** 2026-10-01-v0
+   shipped without it (Nat, 2026-10-02; CHANGELOG records it as deferred). Vet ≥ 100
+   `shadow_cd` rows from a release; ≥ 70% must be really closed or moved.
+2. **The matched-surface band under-coverage** (Nat: before November). See "Bayesian
+   matched surface: close the under-coverage".
+3. **Urbanicity in the calibration model** (Nat, 2026-09-27: reconsider in November).
+4. **Matched sampler budget.** Under the all-verdict forward rates the matched fit
+   diverged once at target acceptance 0.995 (both seeds tried) and passed at 0.998 with
+   seed 20261002, taking 28 min. Expect that cost, or reparameterise; see the run log in
+   `conflation/20261001/calibration_bayes/`.
+5. **Set `publish.version_metadata` by hand** (Overture release, Geofabrik extract
+   date) until "Auto-capture the three per-version README fields" lands; on 2026-10-01
+   both were a month stale and only the README render caught it.
+6. **Package and publish order** (`.claude/plans/remote-monthly-run.md` §4 steps 8–9,
+   fixed 2026-10-02): both `format_for_upload.py` runs, the upload `--dry-run` before
+   the credentials, `source-coop login` just before `creds put` (the token lasted under
+   an hour), and a whole-dataset read in the published-release checks.
 
-**Raised 2026-09-30.** Code for items 2, 4, 6 and 7 is done. The run happens on
-`feature/matched-index-modes`, here and on openpois-01, and the PR to main follows the
-run (Nat, 2026-09-30). Published calibration moves to the Bayesian mixture this month
-(item 1).
+## October 2026 run: outcome (2026-10-02)
 
-1. **Calibrate with the Bayesian fixed-rate mixture** (Nat, 2026-09-30; replaces the
-   v4 refit, which is retired). Three models, fit separately: 1-D Overture-only, 1-D
-   OSM-only, 2-D matched. Bands are the 95% posterior intervals (matched under-coverage
-   documented). `make calibrate` fits, exports grid curves and deploys them; a segment
-   that fails the §5.1 acceptance rule stops the run for Nat. No provisional
-   calibration: `make conflate_to_cd` first, calibrate after the validation round.
-2. **Implement the standard Horvitz–Thompson check**: a PDF review document with
-   graphics, flagging bins more than ±1 SD off; it never fails the run. See "Standard
-   design-weighted (Horvitz–Thompson) check" (Nat, 2026-09-30 and 2026-10-01).
-3. **New validation data (≤ 1,000 LLM-checked rows).** It must be ready before the
-   calibration refit if it is to be used. See "October validation round: up to 1,000
-   new LLM checks". Sequencing: conflation and CD produce the October population → draw
-   the rows → validator LLM checks and a human census of new unverifiables → export the
-   handoff → bump `versions.calibration` → refit.
-4. **Pool the July and October rounds in the mixture fit** (Nat, 2026-09-30: the
-   other arms, CV, coverage and sensitivity runs are not repeated). Set
-   `conflation.calibration.pooled_rounds: ["20260730"]` when `versions.calibration`
-   moves to the October round; `make calibrate` then fits on both. See "Bayesian arm C:
-   pool the October round".
-5. ~~Re-test the matched interaction on the new round.~~ Obsolete with v4 retired
-   (Nat, 2026-09-30).
-6. **Fail early on Overture POIs without a confidence score** (Nat, 2026-09-30; code
-   done the same day). None has ever occurred: every 0.5 was a real provider score. The
-   ingest now stops on a missing or out-of-range value, and `missing_conf` is retired
-   (see the closed item under **Upcoming**).
-7. **Monotonicity check: merge sub-floor bins.** Code done 2026-09-30
-   (`calibration_fit.merge_thin_bins`); first used by the October fit report.
-8. **Check conflation merge-phase memory headroom** (needed before November; the
-   October peak RSS tells how urgent it is).
-9. **First run on openpois-01** (Nat, 2026-09-30). The national run moves to the AWS
-   instance, driven by `scripts/remote/openpois-remote.sh`; October holds the publish for
-   the new validation round (item 3). Procedure: `.claude/plans/remote-monthly-run.md` §4.
-   Before the national run, do the one-time `setup` / `sync feature/matched-index-modes`
-   / `seed`, a `make conflate TEST=1` smoke run that exercises `run`, `watch` and `pull`,
-   and one full-length `MODE=mixture` fit on the July round alone to time it and check
-   the acceptance rule at production settings (not deployed).
-10. **Re-read the site's band prose at `update-site`.** `site/public/about.html`
-   describes confidence bands and per-band POI shares from the v4 curves; check it
-   against the October Bayesian values (`.claude/docs/data-versioning.md`).
-
-**Before November** (not October):
-- **The matched-surface band under-coverage in the Bayesian model** (Nat: skip in
-  October, pick up before November). See "Bayesian matched surface: close the
-  under-coverage".
-- **Urbanicity in the calibration model** (Nat, 2026-09-27: reconsider in November).
+Released as `2026-10-01-v0` from `feature/matched-index-modes` on openpois-01. Items 1–4,
+6, 7, 9 and 10 of the October checklist done; 5 obsolete. Item 8: `conflate_to_cd`
+peaked at 21.9 GB RSS on the 61 GiB instance, so the headroom item is about the laptop
+only. Calibration needed one model fix (forward rates over all verdicts, 03e4fa0) and
+two matched refits; the published parquet was briefly unreadable whole (fixed 67cc114,
+re-uploaded). Details in CHANGELOG and the items below.
 
 ## In progress
 
@@ -71,51 +54,10 @@ run (Nat, 2026-09-30). Published calibration moves to the Bayesian mixture this 
   triage lane writes its rows, then place the file there or point
   `conflation.manual_overrides.path` at it, before the first run that should apply pins.
 
-- [ ] **Stale download-test mocks — 5 failures.** Added 2026-07-25. `tests/test_osm_history_pbf.py` (3) and `tests/test_osm_snapshot.py` (2) fail because their mocks predate the "Resilient parallel download" refactor (5024b5b): two patch the removed `openpois.io.osm_history_pbf._load_cookie_session`; one mocks the osmium filter step without creating the intermediate `*-tagfilt` file the code now reads; two mock the request layer the snapshot downloader no longer goes through (they hit the stub URL for real and 404). Pre-existing — surfaced while validating the 2026-07-24 conflation spill fix, unrelated to it. Fix is to update the mocks/fixtures to the current download API.
-
 ## Upcoming
 
 - [x] **Obsolete 2026-09-30 (v4 retired; Nat).** **October 2026 run: refit calibration once (method change).** Added 2026-09-26. `matched_index_mode` is now `interaction` and `band_aggregation` is `bin`, so the prior curves (pool-mode, old band) must not be reused even if the Overture drift gate passes. Run `make fit_calibration` against `versions.calibration: 20260730`, then check `fit_report.md`: the interaction coefficients should be close to the round-20260730 fit (a3 ≈ −11, `a1+a3` active) and matched curve metadata should show `index_mode: interaction`, `score_decimals: 6`. The overture curve also shifts at this refit because of the `build_lookup` edge fix. See the "Method-change override" in [docs/confidence-calibration.md](docs/confidence-calibration.md).
 - [ ] **Close the remaining band under-coverage (smoothing bias).** Added 2026-09-26. With `band_aggregation: bin`, simulated coverage of the nominal 95% band is 0.89 (matched), 0.91 (osm), 0.66 (overture). What remains is kernel smoothing bias where the curve bends, worst at the Overture atoms (0.919912, 0.990219). Candidates: an atom-aware bandwidth, or giving each atom its own cell in the overture curve. Re-check with `scripts/conflation/simulate_band_coverage.py --truths osm_1d,overture_1d`. Until then the published bands are narrower than a true 95%.
-- [ ] **Standard design-weighted (Horvitz–Thompson) check in every calibration run.** Added 2026-09-30 (Nat; implement in the October run). A model-free guard against bias in whatever calibration model is deployed. It applies to the v4 curves now and to the Bayesian arm C if it is adopted. Phase 1 showed why it is needed: arm C runs about +0.01 high on Overture and matched when silver labels are treated as exact, and arm A ran −0.035 low on matched. The HT rate caught both. Design:
-  - **Estimator.** Per segment, the Hájek rate in each bin: Σ w·y / Σ w over gold rows, with w = 1/π_class from `calibration_fit.inclusion_by_class`. Report it with the Kish ESS, SE = √(r(1−r)/ESS) and a 95% CI.
-  - **Bins.** Atom-aware bins (`calibration_fit.atom_aware_edges`), merged until each holds at least 20 gold rows; this also fixes the sub-floor-bin issue in the item below. Matched gets a coarse 2-D cell grid (the atoms × OSM quartiles) plus raw-score deciles.
-  - **Comparison.** Set it against the deployed map's mean over the same phase-1 rows. The discrepancy is d = model − HT rate, in units of the bin's SD.
-  - **Never fails the run** (Nat, 2026-10-01). It is a review aid: nothing in the pipeline gates on it.
-  - **Flag rule** (Nat, 2026-10-01). Mark a bin when |d| > 1 SD, where SD = √(r(1−r)/n) is the binomial SD of the bin's exists/checked ratio r. Mark |d| > 2 SD more strongly.
-    - Use the design-weighted r with n = Kish ESS: the raw ratio is biased because phase 2 oversamples gone and unverifiable verdicts. Show the raw ratio and raw n beside it. (Confirmed by Nat, 2026-10-01, with the 32% / 5% chance-baseline reporting below.)
-    - For a bin with r = 0 or 1, use the Jeffreys-smoothed r for the SD only, (r·n + 0.5)/(n + 1), so that the SD is not zero.
-    - Even a perfectly calibrated map has about 32% of bins beyond 1 SD and 5% beyond 2 SD. The document states that, and reports the share flagged against it.
-    - Also report calibration-in-the-large per segment: the overall HT rate against the model's mean.
-  - **Review document: `calibration/ht_review_<round>.pdf`**, built with matplotlib `PdfPages` (no new dependency; python-docx is not installed).
-    - Page 1: a summary table per segment (bins, share beyond 1 and 2 SD against 32% and 5%, calibration in the large) and the flagged bins listed.
-    - One page per 1-D segment: a reliability-style plot of the HT rate with ±1 SD and ±2 SD bars at the bin midpoints, the deployed curve or step lookup overlaid, flagged bins highlighted, and a strip of gold counts per bin.
-    - Matched: a heatmap of d/SD on the 2-D cells, plus OSM slices at the two Overture atoms.
-    - Last page: the bin table (edges, raw n, gold n, ESS, raw and weighted r, SD, model, d/SD).
-  - **Reporting.** Link the PDF, and give the flag counts, in `fit_report.md` and the monthly run summary, and point the verify-pipeline-run skill at it.
-  - **Reuse.** `calibration_fit.ht_reference_curve` and `axis_monotonicity_table`, plus the Phase 1 helpers `scripts/conflation/bayes_calibration_common.binned_ht_rates` and the `rate_by_knot` check in `fit_bayes_calibration.posterior_predictive_checks`. The latter already does the z-test.
-- [ ] **October validation round: up to 1,000 new LLM checks.** Added 2026-09-30 (design in `.claude/plans/bayesian-monotone-calibration.md` §8; decisions 2026-09-27/28). Work lives in `openpois-validator`; it starts once the October conflation (after change detection) produces the population.
-  - **Draw.** Up to 1,000 new phase-1 rows (non-shadow, named) in strata of segment × knot interval (knot-cell groups for matched), allocated n_h ∝ N_h · posterior SD. Put a floor of 30 in the prior-dominated regions (matched Overture < 0.90, OSM < 0.58, Overture segment < 0.35) and extra weight on the matched high-Overture band. Record the inclusion probabilities.
-  - **Checks.** Run the same LLM protocol (scores stay blind), recording `template_version`. **No drift anchor.**
-  - **Gold.** A human or desk census of every new LLM-unverifiable, which arm C requires. Phase-2 draws stay uniform within verdict class.
-  - **Covariates.** Collect `shared_label` group and urbanicity on every row.
-  - **Output.** Export as a new round `data/calibration/<round>/`.
-  - **Optional preposterior check.** 3 allocations × 5 synthetic draws, about 2–3 h.
-- [ ] **Bayesian arm C: pool the October round.** Added 2026-09-30, extended 2026-10-01 (Nat; prototype, not published). The fixed-rate arm C (`ModelSpec.label_noise = "fixed"`, design doc §3.5b) and round pooling (decision 20) are wired in but have never been fitted.
-  - **Main model:** fractional labels as wired (M15c'), with q constant in score within each segment × verdict cell (Nat, 2026-10-01: do not vary q by score).
-  - **Test model: the fixed-rate mixture** (Nat, 2026-10-01; design doc §3.5c). Build before the October fit:
-    - `label_noise = "fixed_mixture"`: the likelihood log[p·Se + (1−p)(1−Sp)] for "exists" and log[p(1−Se) + (1−p)Sp] for "gone", with Se and Sp passed in as data (the asymmetric branch of `pointwise_log_likelihood`, without sampling them).
-    - Forward rates per segment, design-weighted from the same training gold as q (pooled rounds, per-round weights, held-out gold excluded in CV), Jeffreys-smoothed so that Se = 1.000 on Overture and matched does not make a "gone" verdict certain. The same code as `forward_silver_rates` in `simulate_bayes_recovery.py`, moved into `calibration_bayes` beside `silver_label_rates`.
-    - Tests: Se = Sp = 1 gives the Bernoulli on the label; value and gradient match a numpy reference; the rates respect the holdout.
-    - Runs: a full fit tagged `armC_mixture`, and CV beside arm C and B (`CV_ARMS=C,B` plus a second C pass with `--tag-suffix _mixture --label-noise fixed_mixture`), the in_family coverage scenario, and the per-tercile check of design doc §3.5c against both models.
-    - Compare: pooled and per-segment relative Brier and LPD (paired bootstrap), band width, in-family coverage (the mixture's wider bands may help matched, §12 item 1), and the Overture "exists" tercile pattern.
-  - **Setup.** When `versions.calibration` moves to the October round, set `conflation.calibration.pooled_rounds: ["20260730"]`. Both rounds' phase-1 rows then enter the curve fit, and both rounds' gold enters the rates P(exists | segment, verdict), each round under its own design weights. CV holds out and scores October only.
-  - **Drift checks first.** (1) LLM drift: per-round rates (`calibration_bayes.silver_label_rates` on each round alone); if a (segment, verdict) rate differs beyond binomial error, or the LLM template changed, keep the rates separate. (2) Curve drift: each round's design-weighted gold rate by score bin; a systematic gap means the score's meaning moved, so do not pool the rounds.
-  - **Output directory.** Use a fresh one, e.g. `~/data/openpois/conflation/<october conflation version>/calibration_eval_bayes_<date>/`. Without `--out-dir` the scripts default to `calibration_eval_bayes_20260927/` under the handoff's conflation version.
-  - **Fit.** `python -u scripts/conflation/fit_bayes_calibration.py --out-dir <dir> --arm C --tag armC --deployed-impact` (about 50 min). Check that the log's first line lists both rounds, and that `fit_report.md`'s silver-rates section names them.
-  - **October scope (Nat, 2026-09-30).** Only the mixture: `MODE=mixture EVAL=<dir> bash scripts/conflation/run_bayes_phase1.sh` fits `armC_mixture` with the deployed-impact preview and writes the report with it as the main model. The Fit and Rerun steps below are the full evaluation, kept for a later month that needs it (`MODE=full` now also runs the mixture's CV pass and coverage as stage 3b).
-  - **Rerun.** `EVAL=<dir> bash scripts/conflation/run_bayes_phase1.sh`: CV (arms C and B), the coverage study (in_family, realistic, category, step) and the sensitivity runs; then `report_bayes_calibration.py --out-dir <dir>`. It skips outputs that exist, so the fit above is reused.
-  - **Expected.** About 0.01 lower than the first run on Overture and matched, and closer to the Horvitz–Thompson rates.
 - [ ] **Bayesian matched surface: close the under-coverage (before November).** Added 2026-09-30 (Nat: skip in October, pick up before November).
   - **Finding.** The matched 95% posterior band covers 0.75 in-family, and 0.67 in the flat high-Overture region; Overture is 0.95 and OSM 0.91.
   - **Diagnosis.** The band width matches sampling noise (half-width 0.018 against 1.96 × SD = 0.0165). Coverage fails through pointwise smoothing bias (corr(coverage, |bias| / half-width) = −0.96). The bias is worst where the true surface climbs steeply to its ~0.94–0.96 ceiling (−0.03 to −0.09).
@@ -134,7 +76,7 @@ run (Nat, 2026-09-30). Published calibration moves to the Bayesian mixture this 
 - [ ] **Decide whether `.env.json` credential support should be retired.** Added 2026-07-30. Source Coop now issues credentials only through the `source-coop` CLI (OIDC/STS), so the static-file path in `openpois.io.credentials` is a fallback that can no longer be populated from the dashboard. It still works if someone pastes a valid block, and keeping it costs little, but leaving two paths invites the confusion that cost time on 2026-07-30: a stale `.env.json` plus the old direct-S3 addressing produced `InvalidAccessKeyId`, which reads like a bad key rather than a wrong access path. If it is kept, the loader should at least say which source it used (it now does) and the config comment should note the file is legacy.
 - [ ] **`publish.credentials_file` is now only referenced by the fallback path.** Added 2026-07-30. Harmless, but worth a look next time the publish config is touched: `upload_to_source_coop.py` still resolves and passes it even though the CLI normally wins.
 
-- [ ] **Condition the calibration curves on category, not score alone.** Added 2026-07-30. The biggest known weakness of the v4 calibration. The OSM curve tops out near 0.87 because ~22% of even the highest-scoring OSM records are LLM-unverifiable and only ~65% of those are real — and that ceiling is applied to every category equally, so stable institutional labels get pulled *down*: `Place of Worship` 0.92 → 0.85, with `School`, `Post Office` and `Public Safety` similar (see `calibration/shift_by_label.csv`). A long-established, frequently-edited church does not share an unnamed pitch's unverifiability profile, but a segment-marginal curve cannot tell them apart. Fix is to condition the class-mix term on a coarse category grouping, or model verifiability directly as a covariate. Needs more gold per cell than round 20260730 has; the 2,500-per-segment sample was balanced on category but not sized for per-category curves. See [docs/confidence-calibration.md](docs/confidence-calibration.md) and the 2026-07-30 v4 writeup §8. **Downstream evidence 2026-09-23** (wtm.ingest cutoff revisit, 233 POIs): category misfit removed 17 of 154 existing places, and Seattle's Overture-only 0.75–0.85 records were real only ~40–65% of the time against a national match — so a geography term (metro turnover) belongs in the same conditioning discussion as category.
+- [ ] **Condition the calibration curves on category, not score alone.** Added 2026-07-30. The biggest known weakness of the v4 calibration. The OSM curve tops out near 0.87 because ~22% of even the highest-scoring OSM records are LLM-unverifiable and only ~65% of those are real — and that ceiling is applied to every category equally, so stable institutional labels get pulled *down*: `Place of Worship` 0.92 → 0.85, with `School`, `Post Office` and `Public Safety` similar (see `calibration/shift_by_label.csv`). A long-established, frequently-edited church does not share an unnamed pitch's unverifiability profile, but a segment-marginal curve cannot tell them apart. Fix is to condition the class-mix term on a coarse category grouping, or model verifiability directly as a covariate. Needs more gold per cell than round 20260730 has; the 2,500-per-segment sample was balanced on category but not sized for per-category curves. See [docs/confidence-calibration.md](docs/confidence-calibration.md) and the 2026-07-30 v4 writeup §8. **Downstream evidence 2026-09-23** (wtm.ingest cutoff revisit, 233 POIs): category misfit removed 17 of 154 existing places, and Seattle's Overture-only 0.75–0.85 records were real only ~40–65% of the time against a national match — so a geography term (metro turnover) belongs in the same conditioning discussion as category. **2026-10-02:** pooled design-weighted gold shows Overture-only POIs scored below ~0.29 exist more often (0.67) than those at 0.29–0.85 (0.40–0.49); a monotone score-only curve has to average that out, which category or source covariates might explain.
 - [x] **Missing Overture confidence: premise retired.** Closed 2026-09-30; replaces the
   "Emit `overture_confidence_imputed`" and "Measure the missing-confidence stratum"
   items. No Overture snapshot has ever had a missing confidence, so every 0.5 was a
@@ -161,7 +103,7 @@ run (Nat, 2026-09-30). Published calibration moves to the Bayesian mixture this 
 - [ ] **`amenity=recycling` needs a `recycling_type` guard, not a crosswalk row.** Added 2026-07-27. Omitted wholesale in the 2026-07-27 wildcard review because 11,064 of its 15,168 rows are `recycling_type=container` (97% unnamed kerbside bins) against only 2,722 `centre` (26% unnamed, genuine destinations). The `(osm_key, osm_value)` crosswalk cannot express the split, so the centres are collateral damage. Fix needs either a third crosswalk dimension or a targeted pre-label rule keyed on the `recycling_type` column, which is already in `download.osm.extract_keys`. Same shape of problem as the `social_facility` subtag split.
 - [ ] **Fix link rot in the agent docs.** Added 2026-07-27. `time-varying-models.md`, `turnover-model-methodology.md` and others link to repo paths as `src/openpois/...` / `config.yaml`, which from `.claude/docs/` resolve to `.claude/docs/src/...` and 404. ~87 broken relative links across files not touched by the 2026-07 conflation work. They should be `../../src/openpois/...` and `../../config.yaml`. Mechanical fix; a link-check in CI would stop it recurring.
 - [ ] **Per-region calibration knob for the change-detection penalty.** Added 2026-05-19. Today `conflation.change_detection.default_delta` is a single global scalar (with per-`shared_label` overrides from the fitted turnover model). The model was fit on national OSM-history data, so the per-group δ values are a national average of OSM editor reliability. That assumption breaks in regions where OSM is sparse or stale — e.g., a "Restaurant deletion" in a rural county where OSM has low edit traffic may not be an actual closure, just an unmaintained entry. We should add a release-valve: allow `default_delta` (and ideally the per-`shared_label` deltas) to be overridden per state (or per Census place/county). Cleanest landing spot is a new optional CSV at `directories.model_output.regional_overrides` keyed by `(state_fips, shared_label) → delta_override`, and `change_detection.load_delta_lookup` would merge it in after the national values. Until we have a vetted set from a non-Seattle region we don't have data to calibrate this, but the hook should be in place. Tracking against the asymmetric-blindness problem documented in the May 2026 plan at `~/.claude/plans/our-current-deduplication-strategy-wild-graham.md`.
-- [ ] **Auto-capture the three per-version README fields** so the publish step doesn't need `publish.version_metadata` overrides. Added 2026-04-24. Today `build_version_readme` in [src/openpois/publish/build_readme.py](../src/openpois/publish/build_readme.py) falls back to config overrides or best-effort guesses; aim is for the pipeline to write authoritative values alongside the data it produces, and the publish step to just read them.
+- [ ] **Auto-capture the three per-version README fields** so the publish step doesn't need `publish.version_metadata` overrides. Added 2026-04-24. Today `build_version_readme` in [src/openpois/publish/build_readme.py](../src/openpois/publish/build_readme.py) falls back to config overrides or best-effort guesses; aim is for the pipeline to write authoritative values alongside the data it produces, and the publish step to just read them. **2026-10-02:** both overrides were a month stale for `2026-10-01-v0` (Overture `2026-08-19.0`, OSM `2026-09-01`) and were caught only by rendering the README; the OSM extract date is in the download log (`us-YYMMDD.osm.pbf`).
     - *OSM snapshot date* — `scripts/osm_snapshot/download.py` should write a `~/data/openpois/snapshots/osm/<version>/download_metadata.json` containing `{"downloaded_at": "<ISO date>", "pbf_url": "..."}` after the PBF download completes. `_resolve_osm_snapshot_date` then reads that file before falling back to the version string.
     - *Overture release* — `scripts/overture/download.py` already resolves a concrete release (pinned or auto-detected) inside `download_overture_snapshot`; currently only the `.parts/<release>/` directory records it and `.parts/` is deleted on success. Surface the resolved release by writing `~/data/openpois/snapshots/overture/<version>/download_metadata.json` with `{"release": "2026-04-15.0", ...}` before the cleanup step. `_resolve_overture_release` reads that file ahead of the `.parts/` heuristic.
     - *Turnover-model commit* — `scripts/models/osm_turnover.py` should capture `git rev-parse HEAD` at training time and either (a) extend `config.write_self("model_output")` to include a `git_commit` entry or (b) drop a `git_commit.txt` next to the model artifacts. `_resolve_model_commit` reads that value instead of the publish-time HEAD, which is the right fingerprint if code has changed between training and publishing.
@@ -173,10 +115,33 @@ run (Nat, 2026-09-30). Published calibration moves to the Bayesian mixture this 
 - [ ] **Mirror the Overture crosswalk-liveness check on the OSM side.** Added 2026-07-27. `compare_taxonomy.py` §6 now flags crosswalk rows naming Overture values that no longer exist. Nothing does the equivalent for `taxonomy_crosswalk_openstreetmap.csv` against the tag values actually present in the snapshot, so a deprecated or retagged OSM value would rot silently. Also worth reporting unmapped-but-common values under the value-scoped keys (`historic`, `craft`, `landuse`), since those now go unlabeled rather than falling to a wildcard.
 - [ ] **Walmart Supercenter duplicates reported by Close users (big-box conflation).** Added 2026-09-25. Two Close location reports flag one real Walmart appearing twice, one OSM object plus a second record: Ithaca, NY (OSM way/107643102; Close dest_ids 9574710 and 3746065, both "Walmart Supercenter", 0 m apart; reported 2025-01-16, report `a7830b6a-b95b-4ea1-b981-4bf66724a631`) and Huntsville, AL (OSM way/728262122; reported in the June 2026 batch, report `9b12a0ec-904a-4dc6-b1a9-98c199851d0f`; the reviewer found only one OSM Walmart there, so the second row came from conflation, not OSM). **Neither reproduces in 2026-09-02-v0**: Ithaca now has one Walmart Supercenter (the OSM way; 3746065 is gone) and Huntsville one matched OSM+Overture Walmart (conf 0.986), so the July match-scoring rework most likely merged them; both Close reports were closed as fixed upstream on 2026-09-25. Open work: confirm the mechanism, then guard it. Big-box stores are mapped as large OSM building ways whose Overture point can sit far from the way's centroid, so the same store can fall outside `max_radius_m`, and department listings ("Walmart Pharmacy", "Walmart Auto Care Center") are legitimate separate rows that a naive fix would wrongly merge. Candidate guard: distance to the OSM way outline (or point-in-polygon) rather than to its centroid for building-way matches, plus a QA count of same-brand, same-name pairs within 100 m per release. Stopgap if one resurfaces: an `apply_manual_overrides` exclude on the Overture unified_id, carrying the report id.
 - [ ] **Ways (and relations) as ghost sources.** Added 2026-09-24. `build_ghosts.py` emits nodes only because the per-version parquets carry node `lat`/`lon` as pseudo-tags but no way geometry, so a deleted / `disused:`-retagged / renamed building way never produces a ghost even though named ways are now first-class survivors on the other side of the rule (the 150 m full-snapshot survivor filter). The same-entity rule made named lifecycle ghosts admissible (F2b), which makes the gap visible: a shop mapped as a building way that gets `disused:shop=*` is invisible to change detection. Needs a position source for prior way versions — either replay node refs from the history PBF at ghost-build time (osmium `--with-history` keeps them) or persist a per-(way, version) centroid during `osm_history_pbf` ingestion. Measure the share of `disused:*` / deleted POI ways in the history first to size the payoff.
+- [ ] **HT review: add gold-only z per bin.** Added 2026-10-02. The corrected rate gives
+  every silver row one q per (segment, verdict), flat across score, while the true
+  P(exists | verdict, s) rises with s; that bends the corrected rate toward "map too low
+  at low scores, too high at high scores" and produced most of the October Overture
+  flags. The gold-only Hajek rate is already in the bin table; flag on it too (Kish ESS
+  SD), or model q(s) per verdict.
+- [ ] **Coverage-study generator still uses Se/Sp among definitive verdicts.** Added
+  2026-10-02. `simulate_bayes_recovery.py` draws verdicts from `raw_se`/`raw_sp` plus
+  separate unverifiable rates, which is self-consistent but no longer the production
+  mixture (rates over all verdicts since 03e4fa0). Re-check matched coverage under the
+  production likelihood before quoting the 0.75 figure again.
+- [ ] **Commit or drop `tests/test_calibration_ht.py`'s per-round test.** Added 2026-10-02.
+  Uncommitted in the working tree: checks that a stacked multi-round table gets
+  per-round design weights in the HT correction rates (passes on current code).
 
 ## Recently done
 
 _(trim after a few weeks)_
+- [x] **October 2026 release `2026-10-01-v0`** — 2026-10-02. Bayesian mixture calibration
+  pooled over rounds 20260730 + 20261001, HT review in every run, validation round
+  20261001 (1,000 rows, 329 gold), all on openpois-01. Mid-run fixes: forward rates over
+  all verdicts (03e4fa0); per-segment NUTS seed (c4bfbb2); partition writer typed from
+  the dataset schema (1122ab5, 67cc114) after mixed types made the first upload
+  unreadable as a whole for ~18 min; dry run without credentials (9e83f48); OSM
+  partitioning added to the package step (fb548e7); README version labels (bcd2efe).
+- [x] **Stale download-test mocks — 5 failures** — 2026-10-02 (8004090). Tests now patch
+  `download_resilient` and cover the two-pass history filter.
 
 - [x] **Two non-POI exclusions: residential landuse + wildcard inclusion sets** — 2026-07-28. `access=private` only catches features a mapper tagged, so the 2026-07 validation round still found the OSM-only segment dominated by unnamed imagery-traced features on private land. Added a second, mapper-independent rule: `landuse=residential` polygons, extracted by their own osmium pass (the POI ingest filter value-scopes `landuse`), against which unnamed POIs of scoped private-prone types are dropped — 250,905 rows (5.00%), half of all unnamed swimming pools. Investigating it surfaced an unrelated leak: the `amenity`/`office`/`leisure`/`tourism` `*` crosswalk rows were publishing 157,460 rows the taxonomy had no opinion about, mostly street furniture and `office=yes`; replaced with explicit rows on a destination-vs-object criterion (165 kept, 82 omitted of the 247 values seen ≥20 times), dropping a further 61,764. Only `shop` and `healthcare` keep a catch-all. Shipped together as conflation `20260730` (14,613,331 rows); the ledger reconciles exactly once the 3,466 matched-to-Overture-only demotions are accounted for. See [docs/conflation-match-status-by-label-20260728.md](docs/conflation-match-status-by-label-20260728.md), the two verification items above, and the "Exclusion" section of [docs/data-sources.md](docs/data-sources.md).
 - [x] **Conflation taxonomy overhaul + match-scoring rework** — 2026-07-27. Single-source `shared_label`s went 32 → 1 (only `Car Rental`, which has no Overture category). Root causes were two silent defects, not missing crosswalk rows: `conflate.py` loaded 4 of 9 OSM tag columns so 817k labelled POIs were dropped by `drop_unlabeled`; and the Overture crosswalk had rotted to 45% dead rows after Overture's Feb/Mar-2026 restructure, with L0 catch-alls hiding it from the monthly QA check. Crosswalk rewritten (246 rows, 0 stale, L0-fallback share 10.5% → 2.97%), 9 labels added, `historic=*` value-scoped, `amenity=marketplace` split by name. Then the matcher: type score replaced by a derived affinity table, `compute_identifier_scores` implemented (it was a stub returning 0.5 for every pair), per-pair weight sets, `min_match_score` 0.50 → 0.70 off a precision-by-band review. Score range went from a degenerate 0.5-0.9 to 0.7-1.0. See [docs/match-scoring.md](docs/match-scoring.md), [docs/type-affinity-metric.md](docs/type-affinity-metric.md) and the dated match-status tables.
