@@ -118,8 +118,10 @@ def main() -> None:
         config.get("publish", "credentials_file")
     ).expanduser()
 
-    creds = load_source_coop_credentials(creds_file)
-    client = None if args.dry_run else make_client(creds)
+    # A dry run writes nothing, so it needs no credentials: it can check the
+    # upload list before the short-lived Source Coop token is minted.
+    client = (None if args.dry_run
+              else make_client(load_source_coop_credentials(creds_file)))
 
     mode = "DRY RUN — no uploads" if args.dry_run else "LIVE UPLOAD"
     print(f"[{mode}] bucket=s3://{bucket}/  prefix={repo_prefix}/  version={version}")
