@@ -2,12 +2,17 @@
 """
 Apply fitted existence-confidence calibration curves to a conflated dataset.
 
-Reads a change-detected conflated parquet plus the per-segment curves written
-by ``fit_calibration.py``, and writes a conflated parquet whose ``conf_mean`` /
-``conf_lower`` / ``conf_upper`` are calibrated probabilities that the POI
-exists and is open. The pre-calibration value is archived in
-``conf_mean_uncalibrated`` and each edge rule is recorded in
-``calibration_flag``.
+Reads a change-detected conflated parquet plus the per-segment curves, and
+writes a conflated parquet whose ``conf_mean`` / ``conf_lower`` /
+``conf_upper`` are calibrated probabilities that the POI exists and is open.
+The pre-calibration value is archived in ``conf_mean_uncalibrated`` and each
+edge rule is recorded in ``calibration_flag``.
+
+From October 2026 the curves are the Bayesian fixed-rate mixture grids written
+by ``scripts/conflation/export_bayes_curves.py`` (``lookup: grid`` in the
+metadata). v4 step and surface curves from the retired
+``fit_calibration.py`` still apply, so older curve directories can be
+replayed.
 
 Runs AFTER change detection: the CD penalty multiplies ``conf_mean`` by a
 per-label delta, and calibrating first would leave a calibrated probability
@@ -19,7 +24,8 @@ Config keys used:
 
 Prerequisites:
   - make apply_cd (or apply_change_detection.py) has produced the input
-  - scripts/conflation/fit_calibration.py has written the segment curves
+  - scripts/conflation/export_bayes_curves.py has written the segment curves
+    (make fit_calibration export_calibration)
 
 Output file(s):
   - the suffixed conflated parquet (default: canonical conflated.parquet)
@@ -93,24 +99,38 @@ def main() -> None:
     metadata = calibration.read_curve_metadata(curves_dir)
     pool_params = calibration.pool_params_from_metadata(metadata)
     index_modes = calibration.index_modes_from_metadata(metadata)
+    score_decimals = calibration.score_decimals_from_metadata(metadata)
 
     print(f"Calibration curves: {curves_dir}")
     for segment, lookup in sorted(curves.items()):
         meta = metadata.get(segment, {})
+        if calibration.is_grid_lookup(lookup):
+            shape = (
+                f"{lookup['osm_score'].nunique()} x "
+                f"{lookup['overture_score'].nunique()} nodes (bilinear)"
+                if calibration.is_grid_surface(lookup)
+                else f"{len(lookup)} nodes (linear)"
+            )
+            print(f"  {segment}: grid, {shape}, "
+                  f"method = {meta.get('method', 'unknown')}, "
+                  f"tag = {meta.get('tag', 'unknown')}")
+            continue
         print(f"  {segment}: {len(lookup)} bins, "
               f"index = {meta.get('score_definition', 'unknown')}")
     for segment, pool in sorted((pool_params or {}).items()):
-        if pool:
+        if pool and pool.get("form", "pool") == "pool":
             print(f"    {segment} pool: intercept {pool['intercept']:.4f}, "
                   f"osm {pool['coef_osm']:.4f}, "
                   f"overture {pool['coef_overture']:.4f} "
                   f"({pool['method']})")
+        elif pool:
+            print(f"    {segment} index: {pool['form']} ({pool['method']})")
     print(f"Input:  {input_path}")
     print(f"Output: {output_path}")
 
     calibration.apply_calibration(
         input_path, output_path, curves, pool_params = pool_params,
-        index_modes = index_modes,
+        index_modes = index_modes, score_decimals = score_decimals,
     )
     print(f"Done in {time.time() - started:.1f}s")
 

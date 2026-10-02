@@ -116,18 +116,23 @@ def _nuts_sample_core(
     num_samples: int,
     key: jrd.KeyArray,
     show_progress: bool = False,
+    adaptation_kwargs: dict | None = None,
 ) -> tuple:
     """
     Pure sampling body for one NUTS chain: warmup + scan. No prints.
 
     Returns ``(states.position, sampler_info, warmup_params)``. Factored out
     of ``nuts_sample`` so it can be ``vmap``ped for multi-chain runs.
+    ``adaptation_kwargs`` is passed to ``blackjax.window_adaptation`` (e.g.
+    ``target_acceptance_rate``, ``is_mass_matrix_diagonal``); ``None`` keeps
+    BlackJAX's defaults.
     """
     warmup_key, sample_key = jrd.split(key = key, num = 2)
     warmup = blackjax.window_adaptation(
         algorithm = blackjax.nuts,
         logdensity_fn = log_density,
         progress_bar = show_progress,
+        **(adaptation_kwargs or {}),
     )
     (state, warmup_params), _ = warmup.run(
         rng_key = warmup_key,
@@ -154,6 +159,7 @@ def nuts_sample(
     num_samples: int = 1_000,
     key: jrd.KeyArray | None = None,
     verbose: bool = False,
+    adaptation_kwargs: dict | None = None,
 ) -> tuple:
     """
     Draw posterior samples via BlackJAX NUTS + window adaptation (1 chain).
@@ -169,6 +175,10 @@ def nuts_sample(
             and print a short banner before the sampling scan begins. Sampling
             itself runs as a single ``jax.lax.scan`` so it stays silent — the
             summary is printed by the caller after ``fit()``.
+        adaptation_kwargs: Optional keyword arguments for
+            ``blackjax.window_adaptation`` (e.g. ``target_acceptance_rate``,
+            ``is_mass_matrix_diagonal``). ``None`` keeps BlackJAX's defaults
+            (0.8 and a diagonal mass matrix).
 
     Returns:
         ``(param_draws, sampler_info, warmup_params)`` — posterior draws as a
@@ -189,6 +199,7 @@ def nuts_sample(
         num_samples = num_samples,
         key = key,
         show_progress = show_progress,
+        adaptation_kwargs = adaptation_kwargs,
     )
     if verbose:
         step_size = float(warmup_params["step_size"])
@@ -229,6 +240,7 @@ def nuts_sample_multichain(
     key: jrd.KeyArray | None = None,
     init_jitter: float = 0.05,
     verbose: bool = False,
+    adaptation_kwargs: dict | None = None,
 ) -> tuple:
     """
     Draw posterior samples via NUTS on ``num_chains`` chains in parallel.
@@ -236,6 +248,8 @@ def nuts_sample_multichain(
     Each chain gets its own window-adapted step size + mass matrix and its
     own jittered starting position (i.i.d. N(0, ``init_jitter``) added to
     ``init_position``). Chains are vmapped so they share one XLA compile.
+    ``adaptation_kwargs`` is forwarded to ``blackjax.window_adaptation`` as in
+    ``nuts_sample``.
 
     Returns:
         ``(chain_draws, chain_info, chain_warmup)`` — same shapes as
@@ -255,6 +269,7 @@ def nuts_sample_multichain(
             num_samples = num_samples,
             key = key,
             verbose = verbose,
+            adaptation_kwargs = adaptation_kwargs,
         )
         # Add a leading singleton chain axis so downstream code is shape-uniform.
 
@@ -289,6 +304,7 @@ def nuts_sample_multichain(
             num_samples = num_samples,
             key = k,
             show_progress = False,
+            adaptation_kwargs = adaptation_kwargs,
         )
 
     return jax.vmap(_run_chain)(chain_keys, stacked_init)

@@ -16,6 +16,9 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import geopandas as gpd
+import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from shapely.geometry import box
 
@@ -23,6 +26,7 @@ from openpois.io import overture as overture_module
 from openpois.io.overture import (
     _list_overture_part_keys,
     build_overture_s3_path,
+    check_overture_confidence,
     download_overture_snapshot,
     get_latest_release_date,
 )
@@ -244,6 +248,12 @@ class TestListOvertureParts:
 # ---------------------------------------------------------------------------
 
 
+def _write_fake_snapshot(path, confidence = (0.9, 0.5)) -> None:
+    """Stand-in for the final DuckDB COPY: just the column the check reads."""
+    table = pa.table({"confidence": pa.array(confidence, type = pa.float64())})
+    pq.write_table(table, path)
+
+
 def _fake_part_key(i: int, release: str = "2026-02-18.0") -> str:
     return f"release/{release}/theme=places/type=place/part-{i:05d}.parquet"
 
@@ -267,7 +277,7 @@ class TestDownloadOvertureSnapshot:
             self._write_dummy_intermediate(intermediate_path)
 
         def fake_finalize(output_path, **_kwargs):
-            Path(output_path).write_bytes(b"final")
+            _write_fake_snapshot(output_path)
 
         with patch.object(
             overture_module,
@@ -316,7 +326,7 @@ class TestDownloadOvertureSnapshot:
             self._write_dummy_intermediate(intermediate_path)
 
         def fake_finalize(output_path, **_kwargs):
-            Path(output_path).write_bytes(b"final")
+            _write_fake_snapshot(output_path)
 
         with patch.object(
             overture_module,
@@ -356,7 +366,7 @@ class TestDownloadOvertureSnapshot:
             self._write_dummy_intermediate(intermediate_path)
 
         def fake_finalize(output_path, **_kwargs):
-            Path(output_path).write_bytes(b"final")
+            _write_fake_snapshot(output_path)
 
         with patch.object(
             overture_module,
@@ -438,7 +448,7 @@ class TestDownloadOvertureSnapshot:
             self._write_dummy_intermediate(intermediate_path)
 
         def fake_finalize(output_path, **_kwargs):
-            Path(output_path).write_bytes(b"final")
+            _write_fake_snapshot(output_path)
 
         with patch.object(
             overture_module,
@@ -481,7 +491,7 @@ class TestDownloadOvertureSnapshot:
             self._write_dummy_intermediate(intermediate_path)
 
         def fake_finalize(output_path, **_kwargs):
-            Path(output_path).write_bytes(b"final")
+            _write_fake_snapshot(output_path)
 
         with patch.object(
             overture_module,
@@ -539,7 +549,7 @@ class TestDownloadOvertureSnapshot:
             self._write_dummy_intermediate(intermediate_path)
 
         def fake_finalize(output_path, **_kwargs):
-            Path(output_path).write_bytes(b"final")
+            _write_fake_snapshot(output_path)
 
         with patch.object(
             overture_module,
@@ -569,3 +579,58 @@ class TestDownloadOvertureSnapshot:
 
         assert mock_download.call_count == len(many_keys)
         assert output.exists()
+
+
+class TestCheckOvertureConfidence:
+    def test_accepts_valid_scores_including_one_half(self):
+        check_overture_confidence(np.array([0.0, 0.5, 0.91, 1.0]))
+
+    @pytest.mark.parametrize(
+        "values, missing, out_of_range",
+        [
+            ([0.9, np.nan], 1, 0),
+            ([0.9, None], 1, 0),
+            (["0.9", "high"], 1, 0),
+            ([0.9, 1.2, -0.1], 0, 2),
+        ],
+    )
+    def test_rejects_missing_and_out_of_range(self, values, missing, out_of_range):
+        with pytest.raises(ValueError) as err:
+            check_overture_confidence(values, label = "test")
+        assert f"{missing:,} of {len(values):,} rows have no confidence" in str(err.value)
+        assert f"{out_of_range:,} are outside [0, 1]" in str(err.value)
+
+    def test_download_fails_on_a_snapshot_with_missing_confidence(self, tmp_path):
+        """The check runs before cleanup, so the parts stay for inspection."""
+        output = tmp_path / "overture.parquet"
+
+        def fake_download_one_part(intermediate_path, **_kwargs):
+            intermediate_path.parent.mkdir(parents = True, exist_ok = True)
+            intermediate_path.write_bytes(b"dummy")
+
+        def fake_finalize(output_path, **_kwargs):
+            _write_fake_snapshot(output_path, confidence = (0.9, None))
+
+        with patch.object(
+            overture_module, "_list_overture_part_keys",
+            return_value = [_fake_part_key(0)],
+        ), patch.object(
+            overture_module, "_download_one_part",
+            side_effect = fake_download_one_part,
+        ), patch.object(
+            overture_module, "_finalize_snapshot_in_duckdb",
+            side_effect = fake_finalize,
+        ):
+            with pytest.raises(ValueError, match = "no confidence"):
+                download_overture_snapshot(
+                    output_path = output,
+                    taxonomy_allowlist = [("eat_and_drink", None)],
+                    boundary_gdf = _rect_boundary_gdf(-125.0, 24.0, -66.0, 50.0),
+                    coarse_bboxes = [
+                        {"xmin": -125.0, "ymin": 24.0, "xmax": -66.0, "ymax": 50.0}
+                    ],
+                    bucket = "overturemaps-us-west-2",
+                    s3_region = "us-west-2",
+                    release_date = "2026-02-18.0",
+                )
+        assert any(tmp_path.rglob("part-00000.parquet"))

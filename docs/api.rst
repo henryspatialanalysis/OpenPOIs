@@ -42,9 +42,12 @@ validation sample. Implements a model-assisted difference estimator on the
 validation's two-phase design: a low-dimensional working model for
 P(exists | verdict class, score) predicts every phase-1 row, and the
 design-weighted residuals of the human-labeled subsample correct it. The matched
-segment's two source scores are combined by a fitted log-odds pool rather than a
-fixed blend. Uncertainty comes from a verdict-class-stratified two-phase
-bootstrap.
+segment's two source scores are combined by a monotone bilinear interaction index
+(fitted on the rescaled logits under constraints that keep it nondecreasing in
+both scores) rather than a fixed blend; the log-odds pool, an additive isotonic
+index and a doubly-monotone cell surface remain available for comparison.
+Uncertainty comes from a verdict-class-stratified two-phase bootstrap whose band is
+computed directly on the published bins.
 
 .. automodule:: openpois.conflation.calibration_fit
    :members:
@@ -61,6 +64,22 @@ records the edge rules (change-detection-demoted rows, imputed Overture
 confidence, unnamed POIs) in a ``calibration_flag`` column.
 
 .. automodule:: openpois.conflation.calibration
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+openpois.conflation.calibration_bayes (experimental)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A Bayesian alternative to the calibration estimator, under evaluation and not used in
+published data. Each segment gets a monotone, range-bounded quadratic B-spline of its
+score(s); the matched segment's surface is doubly monotone without constraining the
+sign of the interaction. The curves are fit in JAX with BlackJAX NUTS. The preferred
+data layer treats human-labeled rows as labelled, and the remaining rows' LLM verdicts
+as fractional labels whose accuracy, P(exists | segment, verdict), comes from the
+design-weighted human labels and is passed in as data.
+
+.. automodule:: openpois.conflation.calibration_bayes
    :members:
    :undoc-members:
    :show-inheritance:

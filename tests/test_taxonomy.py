@@ -10,6 +10,7 @@ from openpois.conflation.taxonomy import (
     MARKETPLACE_LABELS,
     assign_osm_shared_label,
     assign_overture_shared_label,
+    build_osm_tag_filter_expressions,
     classify_marketplace_name,
     compute_osm_l0_bits,
     compute_overture_l0_bits,
@@ -20,7 +21,9 @@ from openpois.conflation.taxonomy import (
     load_osm_crosswalk,
     load_overture_crosswalk,
     load_top_level_matches,
+    matches_osm_tag_filter,
     normalize_marketplace_name,
+    parse_osm_tag_filter_expressions,
 )
 
 
@@ -973,3 +976,40 @@ class TestMarketplaceNames:
             ["shop", "amenity"],
         )
         assert list(labels) == ["Farmers Market", "Market", "Supermarket"]
+
+
+# --- ingest filter parse / match -------------------------------------------
+
+def test_parse_osm_tag_filter_expressions():
+    parsed = parse_osm_tag_filter_expressions(
+        ["nwr/shop", "nwr/landuse=cemetery,religious"]
+    )
+    assert parsed == {
+        "shop": None, "landuse": frozenset({"cemetery", "religious"}),
+    }
+
+
+@pytest.mark.parametrize(
+    "tags, expected",
+    [
+        ({"shop": "bakery"}, True),                  # wildcard key
+        ({"landuse": "cemetery"}, True),             # scoped value
+        ({"landuse": "residential"}, False),         # scoped key, other value
+        ({"highway": "traffic_signals"}, False),
+        ({"landuse": "residential", "shop": "x"}, True),
+        ({}, False),
+    ],
+)
+def test_matches_osm_tag_filter(tags, expected):
+    parsed = parse_osm_tag_filter_expressions(
+        ["nwr/shop", "nwr/landuse=cemetery,religious"]
+    )
+    assert matches_osm_tag_filter(tags, parsed) is expected
+
+
+def test_filter_parse_round_trips_crosswalk_expressions():
+    exprs = build_osm_tag_filter_expressions(load_osm_crosswalk())
+    parsed = parse_osm_tag_filter_expressions(exprs)
+    assert parsed["shop"] is None
+    assert matches_osm_tag_filter({"amenity": "restaurant"}, parsed)
+    assert not matches_osm_tag_filter({"amenity": "bench"}, parsed)

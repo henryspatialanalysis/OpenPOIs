@@ -62,7 +62,11 @@ def _yyyymmdd_to_iso(value: str) -> str:
 
 
 def _resolve_osm_snapshot_date(config) -> str:
-    """YYYY-MM-DD date of the OSM download used for this release."""
+    """YYYY-MM-DD date of the Geofabrik extract used for this release.
+
+    ``publish.version_metadata.osm_snapshot_date`` pins it; the fallback,
+    ``versions.snapshot_osm``, is the download date, a day or two later.
+    """
     override = _meta(config, "osm_snapshot_date")
     if override:
         return str(override)

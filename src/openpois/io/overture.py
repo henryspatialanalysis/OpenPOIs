@@ -36,8 +36,9 @@ Data source: s3://overturemaps-us-west-2/release/ (public, no auth required).
 
 Category filtering uses the ``taxonomy.hierarchy`` array. The first element
 (``taxonomy.hierarchy[1]`` in SQL 1-based indexing) is the L0 category. The
-deprecated ``categories.primary`` field must NOT be used; it is removed in
-June 2026.
+deprecated ``categories`` struct is gone from release 2026-09-23.1 on, so
+``overture_categories_alternate`` now comes from ``taxonomy.alternates`` and carries
+the new taxonomy's vocabulary rather than the old category names.
 
 Memory knobs: ``duckdb_memory_limit`` and ``duckdb_threads`` are per
 DuckDB connection. ``workers`` parallelizes per-part downloads via a
@@ -55,7 +56,50 @@ from pathlib import Path
 
 import duckdb
 import geopandas as gpd
+import numpy as np
+import pandas as pd
+import pyarrow.parquet as pq
 import requests
+
+
+# -----------------------------------------------------------------------------
+# Confidence check
+# -----------------------------------------------------------------------------
+
+def check_overture_confidence(confidence, label: str = "Overture") -> None:
+    """Raise if any Overture ``confidence`` is missing or outside [0, 1].
+
+    Every Overture place carries a provider confidence: none of the snapshots
+    ingested from 2026-06 to 2026-08 had a null. A missing or out-of-range value
+    is an ingest artefact, so the pipeline stops rather than inventing a score
+    downstream (``merge.py`` used to fill 0.5). A value of exactly 0.5 is a
+    genuine provider score, not a placeholder.
+
+    Args:
+        confidence: Array-like of confidence values; non-numeric entries count
+            as missing.
+        label: Names the data in the error message.
+    """
+    values = pd.to_numeric(
+        pd.Series(np.asarray(confidence, dtype = object)), errors = "coerce"
+    ).to_numpy(dtype = float)
+    n_missing = int(np.isnan(values).sum())
+    n_out_of_range = int(((values < 0) | (values > 1)).sum())
+    if n_missing or n_out_of_range:
+        raise ValueError(
+            f"{label}: {n_missing:,} of {len(values):,} rows have no confidence "
+            f"and {n_out_of_range:,} are outside [0, 1]. Overture supplies a "
+            "confidence for every place, so this is an ingest artefact; fix the "
+            "snapshot rather than imputing a score."
+        )
+
+
+def check_overture_snapshot_confidence(path: str | Path) -> None:
+    """Run ``check_overture_confidence`` over a snapshot's column on disk."""
+    column = pq.read_table(path, columns = ["confidence"]).column("confidence")
+    check_overture_confidence(
+        column.to_numpy(zero_copy_only = False), label = f"Overture snapshot {path}"
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -294,7 +338,7 @@ def _download_one_part(
                 taxonomy.hierarchy[2] AS taxonomy_l1,
                 taxonomy.hierarchy[3] AS taxonomy_l2,
                 taxonomy.hierarchy[4] AS taxonomy_l3,
-                categories.alternate AS overture_categories_alternate,
+                taxonomy.alternates AS overture_categories_alternate,
                 names.primary AS overture_name,
                 brand.names.primary AS brand_name,
                 brand.wikidata AS brand_wikidata,
@@ -564,6 +608,10 @@ def download_overture_snapshot(
         threads = max(int(duckdb_threads), 4),
         temp_directory = temp_directory,
     )
+
+    # Fail before cleanup, so a bad snapshot never reaches conflation and the
+    # parts stay on disk for inspection.
+    check_overture_snapshot_confidence(output_path)
 
     # Cleanup on success only. Leaving intermediates on failure is intentional
     # so the next run can resume.

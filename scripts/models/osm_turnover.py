@@ -51,6 +51,7 @@ import numpy as np
 import pandas as pd
 from config_versioned import Config
 
+from openpois.io.osm_history_incremental import require_full_history
 from openpois.models import dispersion, metrics
 from openpois.models.model_fitter import ModelFitter
 from openpois.models.osm_models import get_model_class
@@ -196,7 +197,19 @@ if __name__ == "__main__":
             "Use 1.0 to fit on the full dataset (no POI subsampling)."
         ),
     )
+    parser.add_argument(
+        "--allow-incremental-history",
+        action = "store_true",
+        help = (
+            "Fit on observations from a history rolled forward from daily "
+            "diffs (ghost-grade: same-day edits collapsed, no changeset/user)."
+        ),
+    )
     args = parser.parse_args()
+    if args.observations is None:
+        require_full_history(
+            config.get_dir_path("osm_data"), args.allow_incremental_history,
+        )
 
     model_version = args.model_version
     model_dir = config.get_dir_path("model_output", custom_version = model_version)

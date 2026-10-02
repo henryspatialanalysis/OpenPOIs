@@ -43,6 +43,20 @@ print("Longitude extent:", osm.geometry.x.min(), "→", osm.geometry.x.max())
 
 Then for the conflated output, also check `shared_label` distribution per territory — if one territory is >50% dominated by a single `shared_label`, suspect either a conflation bug or you accidentally pulled independent Samoa (the country, separate `samoa-latest.osm.pbf` extract — *not* American Samoa).
 
+## OSM history (ghost input)
+
+```bash
+make check_history   # scripts/osm_data/check_history_vs_snapshot.py
+```
+
+For each snapshot node last edited before the history's `coverage_end`, the
+history's last version must have the same timestamp and name. **PASS at ≥ 99.5%
+timestamp match.** Baseline: the full `20260902` build vs its snapshot scored
+99.905% (1,721,435 nodes; 1,640 missing from history; names 100%). A drop on an
+incremental run means missed diffs or a bad fold, so rebuild with
+`history_mode: full`. Also read `osm_data/<v>/history_coverage.json`: `mode`,
+`coverage_end` and `chain_length` (warns at 12).
+
 ## Model output
 
 ```
@@ -93,8 +107,10 @@ Confirm `conf_mean`, `conf_lower`, `conf_upper` columns are populated for every 
 ~/data/openpois/conflation/{version}/
   conflated_cd.parquet          # pre-calibration (CD applied)
   conflated.parquet             # canonical, calibrated
-  calibration/fit_report.md     # read this first
-  calibration/{segment}_curve.parquet + _metadata.json
+  calibration/fit_report.md     # read this first (acceptance, rates, impact)
+  calibration/{segment}_curve.parquet + _metadata.json   # grid curves
+  calibration_bayes/            # the three fits: draws, diagnostics, figures
+  calibration/ht_review_<round>.pdf   # design-weighted check of the deployed map
   calibration/biggest_movers.csv, shift_by_label.csv
   viz/calibration_{curves,reliability,shift}.png
 ```
@@ -117,25 +133,35 @@ each table means. Then check the deployed output:
     FROM read_parquet('{path}')"""))
   ```
 - **Monotonicity of the deployed map**: within a segment, a higher input score
-  must never yield a lower calibrated value. Bin the index and check for
-  inversions; there should be none.
+  must never yield a lower calibrated value. Check the grids directly (each 1-D
+  `conf_mean` column non-decreasing in `score`; the matched grid non-decreasing
+  along both axes), then bin the deployed scores for inversions; there should be
+  none.
 - **Flag counts are plausible**: `shadow_cd` should equal the change-detection
-  row count exactly, `unnamed_extrapolated` the unnamed-OSM count, and
-  `missing_conf` the count of Overture rows at exactly 0.5.
+  row count exactly and `unnamed_extrapolated` the unnamed-OSM count. From
+  October 2026 there is no `missing_conf` flag: an Overture score of 0.5 is an
+  ordinary score, and a missing one fails the ingest.
 - **Shadow rows untouched**: every `shadow_matched` row must satisfy
   `conf_mean = conf_mean_uncalibrated`, and shadow rows are the **only** rows
   where `conf_lower > conf_mean` — CD demotes the mean and leaves the interval
   as written, so this inversion on exactly the `shadow_cd` rows (and zero
   others) is the expected signature, not a defect (verified identical on
   20260730 and 20260902).
-- **Composite vs reference**: the fit report's Horvitz-Thompson reference curve
-  should sit inside the composite's band over most of the grid. A systematic gap
-  means the working model is wrong — investigate before publishing.
-- **Band redistribution is expected and large.** On 20260730 the `>90%` band
-  halved and `<30%` nearly emptied. Confirm the shift matches the fit report
-  rather than assuming a bug, but do sanity-check `shift_by_label.csv`: the
-  biggest movers should be explainable (stable OSM institutions down because the
-  OSM curve has a ceiling; Overture-only up because the flat ×0.7 is gone).
+- **Design-weighted (HT) check**: open `calibration/ht_review_<round>.pdf` (flag
+  counts are in `ht_review_<round>.md` beside it; `make calibrate` runs it, and on a
+  reuse month run `scripts/conflation/ht_review.py` beside the copied curves). Read the share of bins beyond 1 and 2 SD against the 32%
+  and 5% chance baseline, and look at every bin beyond 2 SD. It never fails a run.
+- **The curves are the Bayesian mixture.** Every `<segment>_metadata.json` shows
+  `method: bayes_fixed_mixture`, `lookup: grid`, `score_decimals: 6` and an
+  `acceptance` block with `all: true` (and no `accepted: false`, which marks a test
+  export). The matched file also shows `index_mode: grid`. Curves with a `pool` or
+  `index` block are v4 curves: stale for October 2026 on (method-change override in
+  docs/confidence-calibration.md).
+- **Deployed impact is explainable.** The fit report's deployed-impact table gives
+  each segment's mean and the share of POIs moving by more than 0.05 and 0.10
+  against the prior release. The October 2026 switch from v4 is a method change, so
+  shifts are expected; sanity-check `shift_by_label.csv` for movers that the curves
+  do not explain.
 - **Curves are release-specific.** If `snapshot_overture` or the turnover model
   moved but `versions.calibration` did not, the curves are stale — re-export the
   handoff from openpois-validator and refit.
@@ -174,4 +200,4 @@ print(d.count_rows(), len(d.schema.names))
 
 ## Recording issues
 
-Anything anomalous goes into [.claude/TODO.md](../../TODO.md) under **In progress** so follow-ups don't drop.
+Anything anomalous goes into [.claude/TODO.md](../../TODO.md) under **In progress** so follow-ups don't drop. Also tick off (or carry forward) the items in TODO.md's "Next monthly run … checklist" that this run was meant to cover. From October 2026, the calibration QA includes the standard Horvitz–Thompson check: per-bin design-weighted gold rates against the deployed map, in the review PDF `calibration/ht_review_<round>.pdf`. It never fails a run. Bins more than ±1 SD off are marked for Nat's review; about 32% of bins cross 1 SD by chance, so read the share flagged against that. See TODO.md.

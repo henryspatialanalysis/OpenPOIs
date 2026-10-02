@@ -38,10 +38,22 @@ Config keys used (config.yaml):
     download.osm.verbose              — print progress
     directories.osm_data              — output directory (versioned)
 
+Incremental mode (``download.osm.history_mode: incremental``) skips the
+full-history download: it rolls ``download.osm.incremental_history.base_version``
+forward with Geofabrik's public daily diffs through ``end_date``, writing the
+same two Parquets (ghost-grade only; see
+``openpois.io.osm_history_incremental``). ``--plan-only`` prints the diff
+sequences each feed would fetch and exits without downloading.
+
 Output files (in osm_data directory):
-    osm_versions.parquet — one row per element version
-    osm_changes.parquet  — one row per per-version tag change (Added/Changed/Deleted)
+    osm_versions.parquet   — one row per element version
+    osm_changes.parquet    — one row per per-version tag change (Added/Changed/Deleted)
+    history_coverage.json  — full vs incremental, coverage end, sequences reached
+
+Usage:
+    python scripts/osm_data/download_history.py [--plan-only]
 """
+import argparse
 import datetime
 
 from config_versioned import Config
@@ -49,6 +61,14 @@ from config_versioned import Config
 from openpois.conflation.taxonomy import (
     build_osm_tag_filter_expressions,
     load_osm_crosswalk,
+)
+from openpois.io.osm_history_incremental import (
+    HistoryCoverage,
+    plan_sequences,
+    read_coverage,
+    replication_state_getter,
+    roll_osm_history,
+    write_coverage,
 )
 from openpois.io.osm_history_pbf import HistoryExtract, download_osm_history
 
@@ -76,12 +96,17 @@ OVERWRITE_FILTER = config.get("download", "osm", "overwrite_filter")
 OVERWRITE_PARSE = config.get("download", "osm", "overwrite_parse")
 CHUNK_SIZE = config.get("download", "osm", "chunk_size")
 VERBOSE = config.get("download", "osm", "verbose")
+HISTORY_MODE = config.get("download", "osm", "history_mode")
+INCREMENTAL = config.get("download", "osm", "incremental_history")
 
 SAVE_DIR = config.get_dir_path("osm_data")
 SAVE_DIR.mkdir(parents = True, exist_ok = True)
 
 OUTPUT_VERSIONS = config.get_file_path("osm_data", "osm_versions")
 OUTPUT_CHANGES = config.get_file_path("osm_data", "osm_changes")
+BASE_DIR = config.get_dir_path(
+    "osm_data", custom_version = INCREMENTAL["base_version"]
+)
 
 # One HistoryExtract per Geofabrik full-history PBF. Order is preserved
 # through to the concat step; keep the US-mainland extract first since it
@@ -145,7 +170,8 @@ EXTRACTS = [
 # Main workflow
 # -----------------------------------------------------------------------------
 
-if __name__ == "__main__":
+def run_full() -> None:
+    """Download, filter and parse the full-history PBFs (the original path)."""
     download_osm_history(
         extracts = EXTRACTS,
         output_versions_path = OUTPUT_VERSIONS,
@@ -185,3 +211,89 @@ if __name__ == "__main__":
             if p.exists():
                 print(f"Removing intermediate {p} ...")
                 p.unlink()
+        write_coverage(SAVE_DIR, HistoryCoverage(
+            mode = "full",
+            coverage_end = END_DATE.replace(tzinfo = datetime.timezone.utc),
+            filter_exprs = list(TAG_FILTER_EXPRS),
+        ))
+
+
+def plan_incremental() -> None:
+    """Print the diff sequences each feed would fetch; download nothing."""
+    coverage = read_coverage(BASE_DIR)
+    print(
+        f"Base {INCREMENTAL['base_version']}: mode {coverage.mode}, "
+        f"coverage_end {coverage.coverage_end.isoformat()}, "
+        f"chain length {coverage.chain_length}"
+    )
+    end_utc = END_DATE.replace(tzinfo = datetime.timezone.utc)
+    if end_utc <= coverage.coverage_end:
+        print(
+            f"WARNING: end_date {end_utc.isoformat()} is not after the base "
+            "coverage; advance download.osm.end_date. Planning to the newest "
+            "diff instead."
+        )
+        end_utc = None
+    for name, url in INCREMENTAL["replication_urls"].items():
+        get_state = replication_state_getter(url)
+        newest = get_state(None)
+        if newest is None:
+            print(f"  {name}: feed unavailable ({url})")
+            continue
+        plan = plan_sequences(
+            get_state, coverage.coverage_end, end_utc,
+            last_sequence = coverage.extracts.get(name, {}).get("last_sequence"),
+        )
+        if plan is None:
+            print(f"  {name}: nothing new (server newest {newest.sequence})")
+            continue
+        print(
+            f"  {name}: sequences {plan.start}-{plan.end} "
+            f"({plan.end - plan.start + 1} files, through "
+            f"{plan.end_timestamp.isoformat()}; server newest "
+            f"{newest.sequence} at {newest.timestamp.isoformat()})"
+        )
+
+
+def run_incremental() -> None:
+    """Roll the base run's parquets forward with the daily diffs."""
+    roll_osm_history(
+        base_dir = BASE_DIR,
+        base_version = INCREMENTAL["base_version"],
+        out_dir = SAVE_DIR,
+        out_versions_path = OUTPUT_VERSIONS,
+        out_changes_path = OUTPUT_CHANGES,
+        replication_urls = INCREMENTAL["replication_urls"],
+        tag_filter_exprs = TAG_FILTER_EXPRS,
+        end_date = END_DATE.replace(tzinfo = datetime.timezone.utc),
+        max_chain_months = INCREMENTAL["max_chain_months"],
+        keep_diffs = INCREMENTAL["keep_diffs"],
+        verbose = VERBOSE,
+    )
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description = __doc__.split("\n\n")[0])
+    parser.add_argument(
+        "--plan-only",
+        action = "store_true",
+        help = "Incremental mode: print the diff sequences to fetch and exit.",
+    )
+    args = parser.parse_args()
+
+    print(f"History mode: {HISTORY_MODE}")
+    if HISTORY_MODE == "full":
+        if args.plan_only:
+            raise SystemExit("--plan-only applies to history_mode: incremental")
+        run_full()
+    elif HISTORY_MODE == "incremental":
+        if args.plan_only:
+            plan_incremental()
+            raise SystemExit(0)
+        run_incremental()
+    else:
+        raise ValueError(
+            f"download.osm.history_mode must be 'full' or 'incremental', "
+            f"got {HISTORY_MODE!r}"
+        )
+    config.write_self("osm_data")

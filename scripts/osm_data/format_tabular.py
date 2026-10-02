@@ -53,10 +53,13 @@ Output file (in osm_data directory):
         column for reference.
 """
 
+import argparse
+
 import duckdb
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+
 from config_versioned import Config
 
 from openpois.conflation.taxonomy import (
@@ -65,6 +68,7 @@ from openpois.conflation.taxonomy import (
     load_osm_crosswalk,
 )
 from openpois.io import census_areas, indicators
+from openpois.io.osm_history_incremental import require_full_history
 from openpois.osm.format_observations import format_observations_window
 
 
@@ -147,6 +151,15 @@ def build_element_indicator_map(msa_gdf, classified_places_gdf) -> pd.DataFrame:
 # ----------------------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description = "Format OSM history observations.")
+    parser.add_argument(
+        "--allow-incremental-history",
+        action = "store_true",
+        help = "Format a history rolled forward from daily diffs (ghost-grade).",
+    )
+    args = parser.parse_args()
+    require_full_history(SAVE_DIR, args.allow_incremental_history)
+
     # Stage 2b: DuckDB window functions (bucketed for bounded memory), producing
     # observations byte-for-byte identical to the legacy state machine (gated by
     # tests/test_format_observations.py) but ~2-3x faster.

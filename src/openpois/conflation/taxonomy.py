@@ -151,6 +151,46 @@ def build_osm_tag_filter_expressions(
     return exprs
 
 
+def parse_osm_tag_filter_expressions(
+    exprs: list[str],
+) -> dict[str, frozenset[str] | None]:
+    """Parse ``nwr/<key>`` / ``nwr/<key>=<v1>,<v2>`` filter expressions.
+
+    Inverse of :func:`build_osm_tag_filter_expressions`, for code that has to
+    apply the same ingest filter in Python rather than through osmium (the
+    incremental history roll-forward).
+
+    Returns:
+        ``{key: None}`` for a whole-key match, ``{key: frozenset(values)}``
+        for a value-scoped key.
+    """
+    parsed: dict[str, frozenset[str] | None] = {}
+    for expr in exprs:
+        body = expr.split("/", 1)[1] if "/" in expr else expr
+        if "=" in body:
+            key, values = body.split("=", 1)
+            parsed[key] = frozenset(v for v in values.split(",") if v)
+        else:
+            parsed[body] = None
+    return parsed
+
+
+def matches_osm_tag_filter(
+    tags: dict[str, str],
+    parsed_exprs: dict[str, frozenset[str] | None],
+) -> bool:
+    """True when ``tags`` pass the ingest filter parsed by
+    :func:`parse_osm_tag_filter_expressions` (any one key matching is
+    enough, as with ``osmium tags-filter``)."""
+    for key, values in parsed_exprs.items():
+        value = tags.get(key)
+        if value is None:
+            continue
+        if values is None or value in values:
+            return True
+    return False
+
+
 def get_osm_exclusions(
     osm_crosswalk: pd.DataFrame,
 ) -> dict[str, set[str]]:

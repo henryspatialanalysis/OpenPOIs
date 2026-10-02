@@ -1,31 +1,35 @@
 # Versioned directories (used with config.get_dir_path())
 versions:
-  osm_data: "20260902"
+  osm_data: "20261001"
   model_output: "20260727_by_shared_label"
-  snapshot_osm: "20260902"
+  snapshot_osm: "20261001"
   # 2026-08-19.0 release. The July 20260722* dirs stay on disk as the
   # method-paper basis and the prior-month baseline for
   # scripts/overture/compare_confidence.py (tax2/tax3 = same release,
   # widened-allowlist re-pulls; tax3 adds brand_wikidata).
-  snapshot_overture: "20260819"
+  snapshot_overture: "20260923"
   # 20260730 (kept, July release) added the two private-property / non-POI
   # exclusions: the residential-landuse spatial rule (250,905 unnamed POIs)
   # and the wildcard -> inclusion-set taxonomy change (61,764 unlabeled
   # rows). 20260902 is the first run with min_shadow_match_score 0.70 and
   # the August Overture taxonomy fixes (beauty_service rename,
   # food_delivery_service move).
-  conflation: "20260902"
+  conflation: "20261001"
   # Validation round whose condensed handoff drives the confidence
   # calibration (see .claude/docs/confidence-calibration.md). Produced by
   # openpois-validator's scripts/08_export_handoff.py; the curves are
   # release-specific and do not transport across Overture releases.
-  calibration: "20260730"
-  source_coop: "2026-09-02-v0"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
+  calibration: "20261001"
+  source_coop: "2026-10-01-v0"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
   # Ghost POI dataset reconstructed from OSM history (one row per
   # detected previous-state event). Pinned to the same value as
   # ``osm_data`` since it is derived from the same history parquets,
   # and regenerated together with the monthly snapshot refresh.
-  ghost_osm: "20260902"
+  ghost_osm: "20261001"
+  # Hand-curated exclude/include pins applied after calibration (see
+  # conflation.manual_overrides). Rows are appended by the Close triage
+  # lane; bump the version when the file is re-baselined, not per row.
+  manual_overrides: "20260924"
 
 # Settings for downloading data
 download:
@@ -43,7 +47,7 @@ download:
       coastline_buffer_m: 100
   osm:
     start_date: 2016-01-01
-    end_date: 2026-08-19
+    end_date: 2026-09-23
     # Snapshot extracts. Geofabrik publishes a dedicated PBF for PR and USVI
     # under north-america/us/, but the western-Pacific inhabited territories
     # (Guam, Northern Mariana Islands, American Samoa) have no per-territory
@@ -68,6 +72,30 @@ download:
     usvi_history_pbf_url: "https://osm-internal.download.geofabrik.de/north-america/us/us-virgin-islands-internal.osh.pbf"
     american_oceania_history_pbf_url: "https://osm-internal.download.geofabrik.de/australia-oceania/american-oceania-internal.osh.pbf"
     history_cookie_file: "~/data/openpois/.creds/geofabrik_cookies.txt"
+    # How scripts/osm_data/download_history.py builds versions.osm_data:
+    #   full        - download the full-history PBFs above (~23 GB) and parse.
+    #                 Required for any turnover-model refit.
+    #   incremental - roll incremental_history.base_version forward with
+    #                 Geofabrik's public daily diffs (~0.4 GB/month). Output is
+    #                 ghost-grade only: same-day edits are collapsed and there is
+    #                 no user/changeset, so format_tabular / osm_turnover refuse
+    #                 it. Diffs are kept ~131 days, so a base older than that
+    #                 needs a full run. See .claude/plans/incremental-ghost-history.md.
+    history_mode: "incremental"
+    incremental_history:
+      # osm_data version to roll forward (the previous month's run).
+      base_version: "20260902"
+      # Warn once this many incremental runs are chained without a full build.
+      max_chain_months: 12
+      # Keep the downloaded .osc.gz files under osm_data/<v>/diffs/.
+      keep_diffs: false
+      # Public replication feeds, keyed like the history extracts. The US
+      # mainland feed must come first.
+      replication_urls:
+        us: "https://download.geofabrik.de/north-america/us-updates/"
+        pr: "https://download.geofabrik.de/north-america/us/puerto-rico-updates/"
+        usvi: "https://download.geofabrik.de/north-america/us/us-virgin-islands-updates/"
+        american_oceania: "https://download.geofabrik.de/australia-oceania/american-oceania-updates/"
     overwrite_download: true
     overwrite_filter: true
     overwrite_parse: true
@@ -133,7 +161,7 @@ download:
       'website','wikidata','wikipedia'
     ]
   overture:
-    release_date: "2026-08-19.0"  # pin for determinism; null = auto-detect latest
+    release_date: "2026-09-23.1"  # pin for determinism; null = auto-detect latest
     s3_bucket: "overturemaps-us-west-2"
     s3_region: "us-west-2"
     # DuckDB resource caps for the per-part S3 scans and the final polygon
@@ -343,6 +371,9 @@ directories:
       # scripts/models/make_holdout_folds.py and reused by every OOS run so
       # all model specifications are scored on identical folds.
       holdout_folds: holdout_folds.parquet
+      # Provenance of this history run (full vs incremental, replication
+      # sequences reached); see openpois.io.osm_history_incremental.
+      coverage: history_coverage.json
   model_output:
     versioned: true
     path: ~/data/openpois/osm_turnover_model
@@ -424,6 +455,15 @@ directories:
     path: ~/data/openpois/ghost_osm
     files:
       ghosts: ghosts.parquet
+  # Manual confidence overrides (columns: unified_id, overture_id, action,
+  # reason, date, report_id). Read by scripts/conflation/
+  # apply_manual_overrides.py, the last stage of `make conflate`. A
+  # missing file is a no-op.
+  manual_overrides:
+    versioned: true
+    path: ~/data/openpois/manual_overrides
+    files:
+      overrides: manual_overrides.csv
   # Fixed validation input for the confidence calibration, exported from
   # openpois-validator. Lives in the repo tree but is gitignored: the labels
   # are the validation moat. Versioned on ``versions.calibration``.
@@ -528,59 +568,149 @@ conflation:
     # current 20260727_by_shared_label fit (logit_delta_0 = -1.807;
     # recomputed 2026-09-01, unchanged at this precision).
     default_delta: 0.141
-    # Hard gate on Overture-name vs ghost-prior-name token_set_ratio
-    # (0-100), applied *before* the composite-score-based shadow
-    # matcher. The default 0 keeps the loose matcher: any spatial +
-    # type + composite match above ``min_shadow_match_score`` will
-    # fire, even when Overture's name doesn't lexically match the
-    # OSM ghost. This is intentional. A higher value would only
-    # fire when Overture is showing the *same name* OSM closed,
-    # which we explored in May 2026 (decision rule A) and rejected
-    # because it loses the bulk of real closures where Overture has
-    # already updated to a different current name at a churned
-    # address (Sleep Train → Roosevelt Square etc.). Knob retained
-    # for future data-quality-only modes; leave at 0 for production
-    # change detection.
-    min_prior_name_match_score: 0
+    # Same-entity name gate: the token_set_ratio (0-100) a ghost's prior
+    # name / brand must reach against the Overture name / brand — both
+    # sides normalised (accents, case, punctuation, legal suffixes, a
+    # trailing category token) — before a shadow match can fire; token
+    # subset / superset pairs pass too. Both names are always required,
+    # so unnamed ghosts never demote anything.
+    #
+    # 70 deliberately REVERSES the May-2026 "decision rule A" choice,
+    # which kept this at 0 so that a differently named current business
+    # at a churned address (Sleep Train -> Roosevelt Square) would still
+    # be demoted. The September-2026 web-verified sample of 57 shadow_cd
+    # rows measured 31% precision for that loose matcher (different-name
+    # demotions 76% spurious: the listing was still open), so the rule
+    # is now precision over recall: demote only when OSM closed the
+    # *same* business Overture still shows. Do not lower without re-
+    # running the >= 70% precision release gate in docs/change-detection.md.
+    min_prior_name_match_score: 70
+    # Ghosts whose event_timestamp is older than this are dropped when
+    # apply_change_detection.py loads ghosts.parquet (the build itself
+    # stays a pure history product). Pre-2021 deletions were 90% spurious
+    # as closure evidence in the September-2026 sample. 0 keeps all.
+    max_ghost_age_years: 3
     suppress_if_current_survivor:
-      # Belt-and-suspenders post-filter: drop the penalty if a
-      # *current* OSM POI within radius_m has name token_set_ratio
-      # >= threshold against the Overture name. Catches cases where
-      # the POI is still in OSM under different geometry (e.g.,
-      # node remapped to a building way) and the primary matcher
-      # missed it. Kept enabled because it's cheap and orthogonal
-      # to min_prior_name_match_score.
+      # Post-filter: drop the penalty if a *current* OSM element within
+      # radius_m has name token_set_ratio >= threshold against the
+      # Overture name (both normalised). Catches the POI that survives in
+      # OSM under different geometry — a node merged into a building
+      # way, a duplicate cleanup, a respelling — which the primary
+      # matcher missed. Widened 50 -> 150 m on 2026-09-24: the sample's
+      # misses (Blue Harbor Bank, Clark University Campus Store, Girl
+      # Scouts of Nassau County, Mendocino Masonic Hall) were named ways
+      # 50-150 m from the Overture point.
       enabled: true
-      radius_m: 50
+      radius_m: 150
       name_similarity_threshold: 70
-  # Existence-confidence calibration (the v4 estimator; see
-  # .claude/docs/confidence-calibration.md and the 2026-07-30 v4 writeup).
-  # Fitted from the validation handoff pinned by ``versions.calibration``,
-  # then applied to every conflated POI after change detection.
+      # Candidate set is the FULL filtered osm_snapshot.parquet (nodes,
+      # ways and relations by centroid; directories.snapshot_osm.snapshot)
+      # rather than only the rated POIs, so building ways count as
+      # survivors. false falls back to the rated snapshot.
+      use_full_snapshot: true
+  # Hand-curated confidence pins, applied by apply_manual_overrides.py as
+  # the LAST stage of `make conflate` (after calibration, so a forced
+  # conf_mean is never re-scaled). CSV columns: unified_id, overture_id,
+  # action (exclude | include), reason, date, report_id. `exclude` forces
+  # conf_mean/lower/upper = 0 with calibration_flag 'manual_exclude';
+  # `include` forces them to 1 with 'manual_include'. This is the fix path
+  # for Overture-only closures / wrong POIs at any threshold; rows are
+  # appended by the Close triage lane with the report id.
+  manual_overrides:
+    enabled: true
+    # Explicit CSV path. null resolves the versioned default,
+    # directories.manual_overrides/<versions.manual_overrides>/
+    # manual_overrides.csv. A missing file is a no-op (logged).
+    path: null
+  # Existence-confidence calibration (see
+  # .claude/docs/confidence-calibration.md). From October 2026 production is
+  # three Bayesian monotone-spline fits with the fixed-rate mixture label layer
+  # (``bayes`` below), exported as grid curves and applied to every conflated
+  # POI after change detection. The v4 estimator (fit_calibration.py) is
+  # retired; its keys stay because the HT review, the CV comparator and the
+  # evaluation scripts still read them.
   calibration:
+    # The production fit: ``make fit_calibration`` (run_bayes_phase1.sh,
+    # MODE=mixture) fits each segment separately with arm C and
+    # label_noise = fixed_mixture, then ``make export_calibration``
+    # (export_bayes_curves.py) writes the grid curves to
+    # conflation/<version>/calibration/ if every segment passes acceptance.
+    bayes:
+      segments: [overture, osm, matched]
+      warmup: 1000                  # NUTS iterations per chain
+      samples: 1000
+      chains: 4
+      # NUTS target acceptance per segment (null = BlackJAX's 0.80). Fit alone,
+      # each segment adapts a larger step size than the matched surface allowed
+      # in the joint fit: on the July round at 0.80 the osm fit had 19
+      # divergences and matched 12, failing the acceptance rule; at 0.99 osm had
+      # none (2026-10-01 tuning on openpois-01). On the pooled October round
+      # matched at 0.99 had 1 divergence (chain 3) and failed; refit at 0.995
+      # with a new seed (Nat, 2026-10-01). With the forward rates over all
+      # verdicts, 0.995 again had 1 divergence (chain 3); 0.998 and a new seed.
+      target_accept:
+        overture: null
+        osm: 0.99
+        matched: 0.998
+      # NUTS seed per segment (null = fit_bayes_calibration.py's 20260927).
+      seed:
+        overture: null
+        osm: null
+        matched: 20261002
+      grid_1d: 2001                 # 1-D curve nodes on [0, 1] (step 0.0005)
+      grid_2d: 201                  # matched nodes per axis (step 0.005)
+      # Fit outputs land in conflation/<version>/<eval_dir_name>/.
+      eval_dir_name: calibration_bayes
     # Minimum gold labels for a refined (verdict x LLM-confidence) cell to
     # keep its own rate; thinner cells merge into the parent verdict class.
+    # Still read by the HT review's correction rates.
     min_cell_gold: 25
     # Cross the LLM verdict with the LLM's own verdict confidence. Worth it
     # on round 20260730: LLM-exists splits 449/450 correct at high confidence
     # against 141/148 at medium.
     refine_by_confidence: true
-    # How the matched segment's two source scores become one curve index:
-    #   pool    - fitted log-odds pool (3 params estimated from matched gold)
-    #   average - unweighted mean of the two scores (no params)
-    # Measured on round 20260730 by scripts/conflation/compare_matched_index.py
-    # (5-fold cross-fit, pool refit inside each fold): the average is worse on
-    # both proper scoring rules (Brier +0.0021, log score +0.0186, both CIs
-    # excluding zero) and loses ~43% of the discrimination (DSC 0.0043 vs
-    # 0.0074), stable across 6 fold/seed settings. It does buy a tighter band
-    # (median 0.109 vs 0.180) since there are no coefficients to refit per
-    # bootstrap replicate. Re-measure before switching.
-    matched_index_mode: pool
+    # RETIRED (v4) from here to band_alpha: matched_index_mode,
+    # band_aggregation, pool_min_coef, grid_points, curve_output_bins,
+    # bootstrap_reps and band_alpha set the v4 fit. Do not delete them: the
+    # Bayesian scripts' shared FitConfig (bayes_calibration_common.py), the CV
+    # comparator, simulate_band_coverage.py and the matched-mode evaluation
+    # scripts still read them.
+    # How the matched segment combines its two source scores (see
+    # .claude/docs/confidence-calibration.md, "The matched segment"):
+    #   interaction - monotone bilinear logistic index in rescaled logits,
+    #                 a0 + a1 x + a2 y + a3 x y with Gupta constraints (4 params)
+    #   pool        - constrained log-odds pool (3 params; production to 2026-09)
+    #   additive | surface | average - compared and not adopted
+    # Chosen 2026-09-26 from the five-mode comparison on round 20260730
+    # (~/data/library/writeups/2026-09-26-openpois-matched-segment-modes.md):
+    # it captures the substitutive "either source suffices" structure the pool
+    # cannot represent, nests the pool (a3 = 0), and was never measurably worse
+    # than the pool on either proper score across 24 cross-fit runs.
+    matched_index_mode: interaction
+    # How the 1-D pipeline's bootstrap band reaches the published bins:
+    #   bin             - each replicate's map averaged over the production POIs
+    #                     in each published bin (adopted 2026-09-26)
+    #   anchored_kernel - pre-2026-09 method; re-smoothed each replicate, which
+    #                     shrank and off-centred the band (simulated coverage of
+    #                     a nominal 95% band: 0.76 matched, 0.87 osm, 0.46
+    #                     overture; 0.89 / 0.91 / 0.66 with "bin").
+    band_aggregation: bin
+    # Lower bound on every slope/edge-derivative of a fitted matched index.
+    pool_min_coef: 0.001
     grid_points: 200
     curve_output_bins: 40           # equal-mass value bins in the lookup
     bootstrap_reps: 500
     band_alpha: 0.05                # 95% pointwise band
-    rng_seed: 20260730
+    rng_seed: 20260730              # also read by the Bayesian scripts
+    # Production (October 2026 on): earlier validation rounds pooled with the
+    # current one (versions.calibration) in the Bayesian fit; see
+    # .claude/plans/bayesian-monotone-calibration.md, execution log decision
+    # 23. Their phase-1 rows join the curve fit and their gold joins the fixed
+    # silver-label rates P(exists | segment, LLM verdict), each round under
+    # its own design weights. CV holds out and scores the current round only.
+    # When versions.calibration moves to the October 2026 round, set
+    # ["20260730"].
+    pooled_rounds: ["20260730"]
 
 # Settings for publishing snapshots to Source Cooperative
 # (https://source.coop/henryspatialanalysis/openpois). Source Coop is
@@ -601,8 +731,8 @@ publish:
   # Values surfaced in the per-version README. Set each round until the
   # pipeline captures them automatically — see .claude/TODO.md.
   version_metadata:
-    osm_snapshot_date: "2026-09-01"   # YYYY-MM-DD Geofabrik download date
-    overture_release: "2026-08-19.0"  # Overture Maps release ID, https://docs.overturemaps.org/release-calendar/
+    osm_snapshot_date: "2026-09-29"   # YYYY-MM-DD Geofabrik extract date
+    overture_release: "2026-09-23.1"  # Overture Maps release ID, https://docs.overturemaps.org/release-calendar/
     model_commit: null                # null → use current git HEAD; set a short SHA to pin
   # PMTiles generation — multi-zoom archive z10–z14 for both OSM and conflated.
   # Site's View.minZoom is 10 (full-metro view). z10–z14 are served directly

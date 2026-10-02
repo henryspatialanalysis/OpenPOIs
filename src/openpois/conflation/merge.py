@@ -32,6 +32,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import shapely
 
+from openpois.io.overture import check_overture_confidence
+
 
 def _pick_geometries(
     osm_geoms: np.ndarray,
@@ -148,10 +150,10 @@ def _build_matched_gdf(
 
     osm_conf = osm_gdf["conf_mean"].to_numpy()[oi].astype(float)
     ov_conf_raw = overture_gdf["confidence"].to_numpy()[vi]
+    check_overture_confidence(ov_conf_raw, label = "Overture (merge)")
     ov_conf = pd.to_numeric(
         ov_conf_raw, errors = "coerce"
     ).astype(float)
-    ov_conf = np.where(np.isnan(ov_conf), 0.5, ov_conf)
     osm_higher = osm_conf >= ov_conf
 
     # Dual-source string fields — blended primary + per-source
@@ -426,10 +428,10 @@ def _build_unmatched_overture_gdf(
     names = overture_gdf["overture_name"].to_numpy()[idx]
     brand_arr = _col_or_null(overture_gdf, "brand_name", idx)
     ov_conf_raw = overture_gdf["confidence"].to_numpy()[idx]
+    check_overture_confidence(ov_conf_raw, label = "Overture (merge)")
     ov_conf = pd.to_numeric(
         ov_conf_raw, errors = "coerce"
     ).astype(float)
-    ov_conf = np.where(np.isnan(ov_conf), 0.5, ov_conf)
     geoms = overture_gdf.geometry.to_numpy()[idx]
 
     ov_addr_st = _col_or_null(

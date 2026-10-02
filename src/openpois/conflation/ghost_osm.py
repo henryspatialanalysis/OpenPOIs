@@ -30,23 +30,27 @@ Event detection rule, per version of one element (priority order):
    carried a name.
 2. ``lifecycle_prefix_added`` — a ``disused:*`` / ``was:*`` /
    ``demolished:*`` / ``abandoned:*`` / ``removed:*`` / ``razed:*``
-   key appeared (Added or Changed). Only fires when the prior state
-   was un-named (named lifecycle changes are usually retagging
-   cleanup, not real removals).
+   key appeared (Added or Changed). Fires regardless of name (the
+   no-prior-name gate was dropped 2026-09-24; the shadow matcher's
+   mandatory name gate now decides whether a named ghost is used).
 3. ``primary_tag_deleted`` — a POI tag key (the configured
-   ``filter_keys``) was Deleted this version. Same no-prior-name
-   gate as ``lifecycle_prefix_added``.
+   ``filter_keys``) was Deleted this version. Fires regardless of
+   name, as above.
 4. ``substantial_rename`` — ``name`` changed and the
    ``rapidfuzz.fuzz.token_set_ratio`` between the prior and new name
    falls below ``name_change_similarity_threshold``, and neither
    name is a token-level subset/superset of the other.
 
 The four signals are checked in priority order; at most one ghost is
-emitted per (element, version).
+emitted per (element, version). Every ghost also records ``new_name``
+— the element's name *after* the version — so the shadow matcher can
+tell a rename Overture already carries (new name == Overture name)
+from a rename that left Overture stale.
 """
 from __future__ import annotations
 
 import re
+import unicodedata
 from pathlib import Path
 
 import duckdb
@@ -94,6 +98,112 @@ def _is_token_subset_or_superset(a: str, b: str) -> bool:
     if not ta or not tb:
         return False
     return ta.issubset(tb) or tb.issubset(ta)
+
+
+# Trailing tokens that carry legal form, not identity ("Superchef Brands
+# Llc", "The Hair Co."). Dropped from the end of a normalised name while
+# more than one token remains.
+LEGAL_SUFFIX_TOKENS = frozenset(
+    {"inc", "llc", "ltd", "co", "corp", "corporation", "company"}
+)
+
+# Generic trailing category tokens ("Walgreens Pharmacy", "Corner Store").
+# Dropped only pairwise, and only when what remains still matches — see
+# ``names_match``.
+CATEGORY_SUFFIX_TOKENS = frozenset(
+    {
+        "pharmacy", "bank", "library", "cafe", "coffee", "restaurant",
+        "market", "store", "shop", "salon",
+    }
+)
+
+_CO_ABBREVIATION = re.compile(r"\bco\.")
+
+
+def normalise_name(name: str | None) -> str:
+    """Canonical form of a POI name for same-entity comparison.
+
+    NFKD accent strip ("Café" → "cafe"), lowercase, punctuation → space,
+    ``co.`` → ``company`` (so "The Hair Co." meets "Hair Company"), then
+    trailing legal-form tokens (``inc``, ``llc``, ``ltd``, ``co``,
+    ``corp``, ``corporation``, ``company``) are dropped while more than
+    one token remains. ``st.`` is left alone. Returns "" for None / NaN
+    / empty input. Shared by the shadow matcher's name gate and the
+    current-OSM-survivor filter so both compare the same string.
+    """
+    if name is None:
+        return ""
+    if not isinstance(name, str):
+        # pandas NaN / pd.NA / numpy scalars
+        try:
+            if pd.isna(name):
+                return ""
+        except (TypeError, ValueError):
+            pass
+        name = str(name)
+    if not name:
+        return ""
+    s = unicodedata.normalize("NFKD", name)
+    s = "".join(c for c in s if not unicodedata.combining(c)).lower()
+    s = _CO_ABBREVIATION.sub("company", s)
+    tokens = [t for t in _NAME_TOKEN_SPLIT.split(s) if t]
+    while len(tokens) > 1 and tokens[-1] in LEGAL_SUFFIX_TOKENS:
+        tokens.pop()
+    return " ".join(tokens)
+
+
+def strip_trailing_category_token(name_norm: str) -> str:
+    """Drop one trailing category token from a normalised name.
+
+    "walgreens pharmacy" → "walgreens"; "pharmacy" stays "pharmacy"
+    (a bare category token is kept so the name never empties).
+    """
+    tokens = name_norm.split()
+    if len(tokens) > 1 and tokens[-1] in CATEGORY_SUFFIX_TOKENS:
+        tokens = tokens[:-1]
+    return " ".join(tokens)
+
+
+def names_match(a: str | None, b: str | None, threshold: float = 70.0) -> bool:
+    """Same-entity test for two POI names (the shadow matcher's name gate).
+
+    Both names are passed through ``normalise_name``; an empty side never
+    matches. The pair matches when ``rapidfuzz.fuzz.token_set_ratio`` of
+    the normalised names is ≥ ``threshold`` or one token set contains the
+    other. A trailing category token (``pharmacy``, ``bank``, ``cafe``,
+    …) is handled in two ways:
+
+    - when **both** names end in one, it is dropped from both and the
+      comparison runs on what remains — a shared generic token is not
+      evidence, so "Plaza Pharmacy" / "CVS Pharmacy" (80 on the raw
+      token-set ratio) does not match, while "Walgreens Pharmacy" /
+      "Walgreens Pharmacy" and "Bob's Salon" / "Bob's Market" do;
+    - when only **one** name ends in one, it is dropped only if the
+      remaining tokens still match the other name as a whole
+      (``token_sort_ratio`` ≥ ``threshold``, which — unlike the set
+      ratio — does not treat a subset as a perfect match). So
+      "Walgreens" / "Walgreens Pharmacy" matches, but "Joe's Coffee
+      House" / "Joe's Cafe" (67; remainder "joe s" is not the whole
+      name) does not.
+    """
+    na = normalise_name(a)
+    nb = normalise_name(b)
+    if not na or not nb:
+        return False
+    sa = strip_trailing_category_token(na)
+    sb = strip_trailing_category_token(nb)
+    if sa != na and sb != nb:
+        return (
+            fuzz.token_set_ratio(sa, sb) >= threshold
+            or _is_token_subset_or_superset(sa, sb)
+        )
+    if fuzz.token_set_ratio(na, nb) >= threshold:
+        return True
+    if _is_token_subset_or_superset(na, nb):
+        return True
+    if (sa, sb) == (na, nb):
+        return False
+    return fuzz.token_sort_ratio(sa, sb) >= threshold
 
 
 def _load_filtered_changes(
@@ -208,28 +318,26 @@ def _scan_all_changes(
         - ``hard_delete`` fires whenever ``visible`` transitions to
           ``false`` — the OSM element was deleted outright. Strongest
           signal; fires regardless of name presence.
-        - ``lifecycle_prefix_added`` / ``primary_tag_deleted`` are
-          emitted only when the prior state had **no name**. A type
-          change on a named POI is noisy (often just retagging /
-          cleanup); for un-named POIs (playgrounds, ATMs, benches)
-          the type change is the only available "this is gone"
-          signal, so we keep those.
+        - ``lifecycle_prefix_added`` / ``primary_tag_deleted`` fire
+          regardless of whether the prior state carried a name. The
+          shadow matcher's mandatory name gate decides whether a
+          named ghost is ever used against an Overture row.
         - ``substantial_rename`` requires both names to be present,
           token_set_ratio below ``name_threshold``, AND that neither
           name is a token-level subset/superset of the other —
           guards "Walgreens" ↔ "Walgreens Pharmacy" type cases.
+
+        Every emitted ghost records ``new_name`` — the element's name
+        after this version (None when the name was deleted).
         """
         event_type: str | None = None
-        has_prior_name = bool(prior_name_snapshot)
 
         if visibility_deleted:
             event_type = "hard_delete"
         elif added_lifecycle_keys:
-            if not has_prior_name:
-                event_type = "lifecycle_prefix_added"
+            event_type = "lifecycle_prefix_added"
         elif deleted_poi_keys:
-            if not has_prior_name:
-                event_type = "primary_tag_deleted"
+            event_type = "primary_tag_deleted"
         elif (
             name_changed
             and prior_name_snapshot
@@ -262,6 +370,7 @@ def _scan_all_changes(
                 "event_type": event_type,
                 "prior_name": prior_name_snapshot,
                 "prior_brand": prior_snapshot.get("brand"),
+                "new_name": new_name,
                 "ghost_lat": lat_f,
                 "ghost_lon": lon_f,
                 **{k: prior_snapshot.get(k) for k in poi_keys},
@@ -351,9 +460,9 @@ def build_ghosts(
     Returns:
         GeoDataFrame with one row per ghost, columns:
             ghost_id, osm_id, osm_type, osm_version_after, event_type,
-            event_timestamp, prior_name, prior_brand, shared_label,
-            geometry, plus one column per ``poi_keys`` entry carrying
-            the prior tag value (used by
+            event_timestamp, prior_name, prior_brand, new_name,
+            shared_label, geometry, plus one column per ``poi_keys``
+            entry carrying the prior tag value (used by
             ``assign_osm_shared_label``).
     """
     poi_keys_t = tuple(poi_keys)
@@ -402,6 +511,7 @@ def build_ghosts(
             "event_timestamp": pd.Series(dtype = "datetime64[ns, UTC]"),
             "prior_name": pd.Series(dtype = object),
             "prior_brand": pd.Series(dtype = object),
+            "new_name": pd.Series(dtype = object),
             "shared_label": pd.Series(dtype = object),
         }
         for k in poi_keys_t:
@@ -455,7 +565,7 @@ def build_ghosts(
     column_order = [
         "ghost_id", "osm_id", "osm_type",
         "osm_version_after", "event_type", "event_timestamp",
-        "prior_name", "prior_brand", "shared_label",
+        "prior_name", "prior_brand", "new_name", "shared_label",
         *poi_keys_t,
     ]
     return gpd.GeoDataFrame(

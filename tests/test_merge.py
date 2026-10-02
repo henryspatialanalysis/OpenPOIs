@@ -326,6 +326,67 @@ class TestMergeMatchedPois:
         assert ov_only["osm_type"].isna().all()
 
 
+class TestMissingOvertureConfidence:
+    """A missing Overture confidence is an ingest artefact: merge refuses it
+    instead of filling a placeholder (it used to impute 0.5).
+    """
+
+    @staticmethod
+    def _frames(confidence):
+        osm = gpd.GeoDataFrame(
+            {
+                "osm_id": [1], "osm_type": ["node"],
+                "name": ["Cafe"], "brand": [None],
+                "conf_mean": [0.9], "conf_lower": [0.85],
+                "conf_upper": [0.95],
+            },
+            geometry = [Point(-122.33, 47.60)],
+            crs = "EPSG:4326",
+        )
+        overture = gpd.GeoDataFrame(
+            {
+                "overture_id": ["v1", "v2"],
+                "overture_name": ["Cafe", "Deli"],
+                "brand_name": [None, None],
+                "confidence": confidence,
+            },
+            geometry = [Point(-122.33, 47.60), Point(-122.34, 47.61)],
+            crs = "EPSG:4326",
+        )
+        return osm, overture
+
+    @pytest.mark.parametrize("matched_idx", [0, 1])
+    def test_raises_on_nan_confidence(self, matched_idx):
+        # Row 0 has no confidence. matched_idx 0 puts it in a matched pair;
+        # 1 leaves it Overture-only.
+        osm, overture = self._frames([np.nan, 0.8])
+        m = pd.DataFrame(
+            {
+                "osm_idx": [0], "overture_idx": [matched_idx],
+                "distance_m": [0.0], "composite_score": [0.9],
+            }
+        )
+        with pytest.raises(ValueError, match = "no confidence"):
+            merge_matched_pois(
+                osm, overture, m,
+                np.array(["Cafe"]), np.array(["Cafe", "Cafe"]),
+            )
+
+    def test_one_half_is_kept_as_a_score(self):
+        osm, overture = self._frames([0.5, 0.5])
+        m = pd.DataFrame(
+            {
+                "osm_idx": [0], "overture_idx": [0],
+                "distance_m": [0.0], "composite_score": [0.9],
+            }
+        )
+        result = merge_matched_pois(
+            osm, overture, m,
+            np.array(["Cafe"]), np.array(["Cafe", "Cafe"]),
+        )
+        assert (result["overture_confidence"].dropna() == 0.5).all()
+
+
 class TestMetadataPullThrough:
     """The conflated schema must surface addresses, contact info,
     ``access``, and Overture-only lists with source-specific

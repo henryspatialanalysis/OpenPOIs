@@ -8,6 +8,35 @@ description: Use when the user wants to match rated OSM POIs with Overture POIs 
 Taxonomy-aware matching between rated OSM and Overture, then partition and
 upload for web consumption.
 
+> **Before any step: raise the next-run checklist.** Open
+> [.claude/TODO.md](../../TODO.md) → "Next monthly run … checklist". List every item to
+> Nat, and confirm which go into this run before starting. Items are added there so that
+> none depends on anyone remembering them.
+
+## Remote run (openpois-01)
+
+Since October 2026 the national run executes on the AWS instance `openpois-01`
+(r7i.2xlarge, 64 GiB; SSH alias `ec2-openpois`), not on the laptop, whose 24 GB WSL cap
+the conflation peak had nearly reached. The commands in this skill are unchanged; they
+run there through `scripts/remote/openpois-remote.sh`, which launches each stage
+detached (`run <stage> -- <cmd>`), heartbeats it for a Monitor (`watch <log>`), and
+pulls the tier-1 results back into the same local paths (`pull <version>`). Start and
+stop the instance with `~/bin/ec2-openpois start|stop`; stop it whenever the next step
+waits on Nat.
+
+- Config changes are made **locally** on the month's run branch (`run/YYYY-MM`), pushed,
+  and pulled with `openpois-remote.sh sync run/YYYY-MM`. Never edit on the remote.
+- Last month's outputs that this run reads (history base, prior Overture snapshot,
+  `conflated.parquet` + `calibration/`, the pinned model) stay on the remote disk between
+  runs; `openpois-remote.sh prune --apply` removes everything else after the publish.
+- Validation stays local: `pull <version> --conflated` brings down the 2.5 GB file that
+  `openpois-validator` draws from, and `push-handoff <round>` sends the handoff back.
+- Procedure and rationale: [plans/remote-monthly-run.md](../../plans/remote-monthly-run.md).
+
+Publishing from the remote: after Nat's local `source-coop login`, run
+`openpois-remote.sh creds put` (writes the temporary credentials to the remote
+`.env.json` fallback), publish, then `openpois-remote.sh creds clear`.
+
 ## Prerequisites
 
 - Rated OSM snapshot (`osm_snapshot_rated.parquet`) at `versions.snapshot_osm` — produced by [skills/full-data-pull](../full-data-pull/SKILL.md) step 3.
@@ -66,11 +95,12 @@ upload for web consumption.
 
 3. **Sync taxonomy if crosswalks changed** — run the [sync-taxonomy](../sync-taxonomy/SKILL.md) skill. It regenerates `site/public/taxonomy.html` and `site/src/taxonomy.generated.js`, and detects drift in the hand-maintained display labels.
 
-4. **Run the conflation pipeline.** The canonical entry point is `make conflate`, which orchestrates four stages so every national run gets both the OSM-history change-detection penalty and the confidence calibration automatically (see [docs/change-detection.md](../../../docs/change-detection.md) and [docs/confidence-calibration.md](../../docs/confidence-calibration.md)):
+4. **Run the conflation pipeline.** The canonical entry point is `make conflate`, which orchestrates five stages so every national run gets the OSM-history change-detection penalty, the confidence calibration and the manual overrides automatically (see [docs/change-detection.md](../../../docs/change-detection.md) and [docs/confidence-calibration.md](../../docs/confidence-calibration.md)):
    1. `build_ghosts.py` — reconstruct ghost POIs from OSM history (`ghosts.parquet` under `versions.ghost_osm`).
    2. `conflate.py --output-suffix=baseline` — OSM × Overture matching, writes `conflated_baseline.parquet` (no-CD archive).
-   3. `apply_change_detection.py` — shadow-match unmatched Overture against the ghosts and apply the per-`shared_label` δ penalty; writes `conflated_cd.parquet`.
-   4. `fit_calibration.py` + `apply_calibration.py` + `plot_calibration.py` — fit the per-segment existence-confidence curves from the validation handoff and map every POI through them; writes the canonical `conflated.parquet`.
+   3. `apply_change_detection.py` — shadow-match unmatched Overture against **same-entity** ghosts (name gate 70 on normalised names, rename-direction guard, 150 m full-snapshot survivor filter, ghosts ≤ 3 years old) and apply the per-`shared_label` δ penalty; writes `conflated_cd.parquet`. Any matcher change must clear the ≥ 70% precision release gate in docs/change-detection.md before publishing.
+   4. `make calibrate` — fit the three Bayesian mixture models (1-D Overture, 1-D OSM, 2-D matched; `MODE=mixture run_bayes_phase1.sh`), export grid curves through the §5.1 acceptance gate (`export_bayes_curves.py`), map every POI through them (`apply_calibration.py`), then the plots and the HT review; writes the canonical `conflated.parquet`. Run the fits on openpois-01, not the laptop. If the export refuses (a segment failed acceptance), stop and ask Nat.
+   5. `apply_manual_overrides.py` — apply the Close triage CSV's `exclude` / `include` pins (`directories.manual_overrides`, versioned) in place over `conflated.parquet`. Runs **last** so a forced 0 / 1 is never re-scaled; a missing CSV is a logged no-op.
 
    ```bash
    make conflate            # full CONUS; peak RSS measured 21.9 GB on 20260902
@@ -82,37 +112,56 @@ upload for web consumption.
    make build_ghosts        # ghosts only
    make conflate_baseline   # matching only (writes conflated_baseline.parquet)
    make apply_cd            # CD pass only (reads baseline, writes conflated_cd.parquet)
-   make calibrate           # fit + apply + plot (reads conflated_cd, writes conflated.parquet)
-   make fit_calibration     # curves only — safe to iterate, touches no POI data
+   make conflate_to_cd      # stages 1-3 only: stop after change detection (validation months)
+   make calibrate           # fit + export + apply + plot + HT review (reads conflated_cd, writes conflated.parquet)
+   make fit_calibration     # the three Bayesian fits only — touches no POI data
+   make export_calibration  # acceptance gate + grid curves into conflation/<v>/calibration/
+   make apply_manual_overrides  # manual pins, in place over conflated.parquet (always last)
    ```
 
    **Calibration must follow change detection, never precede it** — CD multiplies
    `conf_mean` by δ (≈0.14), so calibrating first would leave a calibrated probability
-   scaled by δ.
+   scaled by δ. **Manual overrides must follow calibration**: a standalone
+   `make calibrate` (or the `apply_calibration.py` reuse command below) rewrites
+   `conflated.parquet` and silently drops the pins, so re-run
+   `make apply_manual_overrides` afterwards.
 
    **Whether to fit at all is governed by the monthly confidence-drift gate**
    (`scripts/overture/compare_confidence.py`, run during the data pull; decision rule in
    [docs/confidence-calibration.md](../../docs/confidence-calibration.md)). On a
-   **pass** (the normal monthly case), do **not** run `fit_calibration` — reuse the most
-   recent fitted curves verbatim:
+   **pass** (the normal monthly case), do **not** refit — reuse the most recent fitted
+   curves verbatim, then run `scripts/conflation/ht_review.py` on them:
    ```bash
    # copy curves + metadata from the prior conflation version, with a provenance note
    python scripts/conflation/apply_calibration.py --input-suffix cd --output-suffix "" \
        --curves-dir ~/data/openpois/conflation/<prior version>/calibration
    ```
+   **Method-change override:** if the calibration *method* changed since the curves
+   being reused were fit (the model, its label layer, or code that changes the
+   curves), refit with `make calibrate` even on a pass. **The October 2026 run is such
+   a release** (v4 curves → Bayesian mixture); later passes reuse the October curves
+   as usual.
+
+   **Validation months** (a new round is being drawn, as in October 2026): run
+   `make conflate_to_cd`, hand `conflated_cd.parquet` to the validator, and run
+   `make calibrate && make apply_manual_overrides` after the handoff is exported and
+   `versions.calibration` (and `conflation.calibration.pooled_rounds`) are set. There
+   is no provisional calibration.
+
    On a **breach**, refresh the validation handoff, pin it, and refit:
    ```bash
    cd ~/repos/openpois-validator && python scripts/08_export_handoff.py
    # then set versions.calibration in config.yaml to that round, and run make calibrate
    ```
    The handoff lands in the gitignored `data/calibration/<round>/`. If it is missing,
-   `fit_calibration.py` fails fast rather than shipping uncalibrated data.
+   the fit fails fast rather than shipping uncalibrated data.
 
    Outputs:
-   - `conflated.parquet` — canonical output that downstream steps consume (CD + calibration applied). `conf_mean`/`conf_lower`/`conf_upper` are calibrated P(exists and open); `conf_mean_uncalibrated` archives the post-CD value; `calibration_flag` records edge rules.
+   - `conflated.parquet` — canonical output that downstream steps consume (CD + calibration + manual overrides applied). `conf_mean`/`conf_lower`/`conf_upper` are calibrated P(exists and open); `conf_mean_uncalibrated` archives the post-CD value; `calibration_flag` records edge rules (`shadow_cd`, `unnamed_extrapolated`, `manual_exclude`, `manual_include`; `missing_conf` was retired in October 2026).
    - `conflated_cd.parquet` — post-CD, pre-calibration.
    - `conflated_baseline.parquet` — neither CD nor calibration; kept on disk for spot-checks.
-   - `calibration/` — fitted curves, per-segment metadata, and `fit_report.md`.
+   - `calibration/` — grid curves, per-segment metadata, `fit_report.md`, and the HT review.
+   - `calibration_bayes/` — the three Bayesian fits (draws, diagnostics, figures, their own report).
    - `ghosts.parquet` under `versions.ghost_osm` — see [docs/change-detection.md](../../../docs/change-detection.md).
    - `match_diagnostics.parquet`.
 

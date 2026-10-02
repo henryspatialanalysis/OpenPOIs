@@ -33,7 +33,7 @@ import pyarrow.parquet as pq
 from rapidfuzz import fuzz
 from sklearn.neighbors import BallTree
 
-from openpois.conflation.ghost_osm import _is_token_subset_or_superset
+from openpois.conflation.ghost_osm import names_match, normalise_name
 from openpois.conflation.match import (
     compute_match_scores,
     find_spatial_candidates,
@@ -103,6 +103,33 @@ def _to_str_array(s: pd.Series) -> np.ndarray:
     return s.fillna("").astype(str).to_numpy()
 
 
+def filter_ghosts_by_age(
+    ghosts: gpd.GeoDataFrame,
+    max_age_years: float | None,
+    now: pd.Timestamp | None = None,
+) -> gpd.GeoDataFrame:
+    """Drop ghosts whose ``event_timestamp`` is older than ``max_age_years``.
+
+    Applied at run time (not in ``build_ghosts``) so ``ghosts.parquet``
+    stays a pure history product. The September-2026 sample found
+    pre-2021 deletions 90% spurious as closure evidence — after three
+    years the Overture listing has had every chance to be re-surveyed.
+    Ghosts with a missing timestamp are kept (no evidence of age).
+    ``None`` / ``<= 0`` disables the filter.
+    """
+    if max_age_years is None or max_age_years <= 0 or len(ghosts) == 0:
+        return ghosts
+    if "event_timestamp" not in ghosts.columns:
+        return ghosts
+    now = pd.Timestamp.now(tz = "UTC") if now is None else now
+    if now.tzinfo is None:
+        now = now.tz_localize("UTC")
+    cutoff = now - pd.Timedelta(days = float(max_age_years) * 365.25)
+    ts = pd.to_datetime(ghosts["event_timestamp"], utc = True, errors = "coerce")
+    keep = ts.isna() | (ts >= cutoff)
+    return ghosts.loc[keep.to_numpy()].reset_index(drop = True)
+
+
 def find_shadow_matches(
     unmatched_overture: gpd.GeoDataFrame,
     ghosts: gpd.GeoDataFrame,
@@ -115,6 +142,7 @@ def find_shadow_matches(
     type_weight: float,
     identifier_weight: float,
     min_prior_name_match_score: float = 0.0,
+    verbose: bool = False,
 ) -> pd.DataFrame:
     """Run a single-pass match between Overture rows and ghost rows.
 
@@ -128,13 +156,26 @@ def find_shadow_matches(
     equality — the change-detection penalty is conservative and
     should only fire when taxonomy genuinely matches.
 
-    ``min_prior_name_match_score`` is an additional hard gate on the
-    Overture-name vs ghost-prior-name token_set_ratio (0–100). When
-    > 0, candidate pairs below that threshold are dropped *before*
-    the composite-score-based selection runs. Subset/superset pairs
-    pass regardless. Set this to require a strong direct name match
-    (e.g. 70) and you'll trade most of the recall for much higher
-    precision. Default 0 disables the gate.
+    **Same-entity name gate (mandatory).** A candidate pair survives
+    only when the ghost and the Overture row are the same business:
+    ``names_match`` (max over name×name, brand×brand, name×brand,
+    brand×name on ``normalise_name``-d strings — token_set_ratio ≥
+    ``min_prior_name_match_score`` or token subset/superset, with the
+    trailing-category-token fallback) must hold for at least one of
+    the four pairs. Unnamed ghosts and unnamed Overture rows never
+    match: the brand pairs are only consulted once both names exist.
+    ``min_prior_name_match_score`` is the ratio threshold (config
+    → 70; 0 still requires both names but accepts any ratio).
+
+    **Rename direction.** A ``substantial_rename`` ghost is skipped when
+    its ``new_name`` already matches the Overture name (Overture
+    carries the rename: Plaza Pharmacy → CVS Pharmacy), so a rename
+    demotes only when the *prior* name matches and the new one does
+    not.
+
+    Rationale: the 57-POI September-2026 sample found the loose matcher
+    (any nearby ghost of the same type) 31% precise; demoting only the
+    same-entity case is the release rule from 2026-09-24.
     """
     if len(unmatched_overture) == 0 or len(ghosts) == 0:
         return pd.DataFrame(
@@ -177,40 +218,66 @@ def find_shadow_matches(
     ov_brands = _to_str_array(unmatched_overture["brand"])
     ghost_names = _to_str_array(ghosts["prior_name"])
     ghost_brands = _to_str_array(ghosts["prior_brand"])
+    ghost_events = _to_str_array(ghosts["event_type"])
+    if "new_name" in ghosts.columns:
+        ghost_new_names = _to_str_array(ghosts["new_name"])
+    else:
+        # Ghost builds predating 2026-09-24 carry no new_name; the
+        # rename-direction guard is then a no-op.
+        ghost_new_names = np.full(len(ghosts), "", dtype = object)
 
     ov_labels = _to_str_array(unmatched_overture["shared_label"])
 
-    # Optional pre-gate: drop candidate pairs whose Overture-name vs
-    # ghost-prior-name token_set_ratio is below the configured floor.
-    # Subset/superset pairs pass regardless (a short subset like
-    # "CVS" vs "CVS Pharmacy" can dip below threshold on token-set
-    # ratio but is obviously the same business). This is the "tighten
-    # matcher" alternative — when set high (e.g. 70) it trades most
-    # recall for high precision and removes the need for downstream
-    # suppression rules.
-    if min_prior_name_match_score > 0 and not candidates.empty:
-        cand_osm_idx = candidates["osm_idx"].to_numpy()
-        cand_ov_idx = candidates["overture_idx"].to_numpy()
-        keep = np.zeros(len(candidates), dtype = bool)
-        for i in range(len(candidates)):
-            gname = ghost_names[cand_osm_idx[i]]
-            oname = ov_names[cand_ov_idx[i]]
-            if not gname or not oname:
+    # Mandatory same-entity gate, applied before composite scoring.
+    cand_osm_idx = candidates["osm_idx"].to_numpy()
+    cand_ov_idx = candidates["overture_idx"].to_numpy()
+    keep = np.zeros(len(candidates), dtype = bool)
+    n_unnamed = 0
+    n_name_fail = 0
+    n_rename_carried = 0
+    for i in range(len(candidates)):
+        gi = cand_osm_idx[i]
+        oi = cand_ov_idx[i]
+        gname = ghost_names[gi]
+        oname = ov_names[oi]
+        # Unnamed never matches (either side).
+        if not normalise_name(gname) or not normalise_name(oname):
+            n_unnamed += 1
+            continue
+        gbrand = ghost_brands[gi]
+        obrand = ov_brands[oi]
+        if not (
+            names_match(gname, oname, min_prior_name_match_score)
+            or names_match(gbrand, obrand, min_prior_name_match_score)
+            or names_match(gname, obrand, min_prior_name_match_score)
+            or names_match(gbrand, oname, min_prior_name_match_score)
+        ):
+            n_name_fail += 1
+            continue
+        # Rename direction: Overture already carries the new name.
+        if ghost_events[gi] == "substantial_rename":
+            new_name = ghost_new_names[gi]
+            if new_name and names_match(
+                new_name, oname, min_prior_name_match_score,
+            ):
+                n_rename_carried += 1
                 continue
-            if _is_token_subset_or_superset(gname, oname):
-                keep[i] = True
-                continue
-            sim = fuzz.token_set_ratio(gname, oname)
-            if sim >= min_prior_name_match_score:
-                keep[i] = True
-        candidates = candidates.loc[keep].reset_index(drop = True)
-        if candidates.empty:
-            return pd.DataFrame(
-                columns = [
-                    "osm_idx", "overture_idx",
-                    "composite_score", "distance_m",
-                ]
-            )
+        keep[i] = True
+    if verbose:
+        print(
+            f"  Name gate: {len(candidates):,} candidate pairs -> "
+            f"{int(keep.sum()):,} kept "
+            f"(unnamed {n_unnamed:,}, name mismatch {n_name_fail:,}, "
+            f"rename already in Overture {n_rename_carried:,})"
+        )
+    candidates = candidates.loc[keep].reset_index(drop = True)
+    if candidates.empty:
+        return pd.DataFrame(
+            columns = [
+                "osm_idx", "overture_idx",
+                "composite_score", "distance_m",
+            ]
+        )
 
     # All-zero L0 bits → only exact shared_label match scores 1.0
     # (broad-group bitmask overlap collapses to 0 because all bits
@@ -238,29 +305,6 @@ def find_shadow_matches(
     )
 
     matches = select_best_matches(scored, min_score = min_match_score)
-    if matches.empty:
-        return matches[
-            ["osm_idx", "overture_idx", "composite_score", "distance_m"]
-        ].reset_index(drop = True)
-
-    # Second-stage subset/superset filter: drop matches where the
-    # Overture name is just a token-level subset/superset of the
-    # ghost's prior name (e.g. "Walgreens" ↔ "Walgreens Pharmacy",
-    # "CVS" ↔ "CVS Pharmacy"). These are obviously the same entity
-    # even when token_set_ratio dips below the threshold on short
-    # names, so we don't want to penalize Overture for them.
-    osm_idx_arr = matches["osm_idx"].to_numpy().astype(int)
-    ov_idx_arr = matches["overture_idx"].to_numpy().astype(int)
-    keep = np.ones(len(matches), dtype = bool)
-    for i in range(len(matches)):
-        gname = ghost_names[osm_idx_arr[i]]
-        oname = ov_names[ov_idx_arr[i]]
-        if gname and oname and _is_token_subset_or_superset(gname, oname):
-            keep[i] = False
-
-    if not keep.all():
-        matches = matches.iloc[keep].reset_index(drop = True)
-
     return matches[
         ["osm_idx", "overture_idx", "composite_score", "distance_m"]
     ].reset_index(drop = True)
@@ -273,7 +317,7 @@ def apply_current_survivor_filter(
     matches: pd.DataFrame,
     unmatched_overture: gpd.GeoDataFrame,
     *,
-    rated_snapshot_path: Path,
+    snapshot_path: Path,
     radius_m: float,
     name_similarity_threshold: float,
     test_bbox: dict | None = None,
@@ -283,14 +327,25 @@ def apply_current_survivor_filter(
     """Drop shadow matches where the POI is still present in the live
     OSM snapshot under a different geometry / spelling.
 
-    For each Overture row in ``matches``, find the live rated-snapshot
-    POIs within ``radius_m`` and check whether any name token-set-
-    matches the Overture name at ≥ ``name_similarity_threshold``. If
-    so, drop the match — the primary matcher just missed it.
+    For each Overture row in ``matches``, find the live-snapshot
+    elements within ``radius_m`` and check whether any name token-set-
+    matches the Overture name at ≥ ``name_similarity_threshold``
+    (both sides passed through ``normalise_name``). If so, drop the
+    match — the POI survives in OSM and the primary matcher just
+    missed it (a node→way merge, a duplicate cleanup, a respelling).
+
+    ``snapshot_path`` should be the **full** filtered
+    ``osm_snapshot.parquet`` (nodes, ways and relations, by centroid),
+    not only the rated POIs: the September-2026 sample's misses were
+    mostly named building ways 50–150 m from the Overture point (Blue
+    Harbor Bank, Clark University Campus Store, Girl Scouts of Nassau
+    County, Mendocino Masonic Hall), which is why the radius is 150 m.
+    Any GeoParquet with ``geometry`` + ``name`` works, so the rated
+    snapshot remains a valid (narrower) input.
 
     Scales to nationwide via:
 
-    - A single BallTree over rated-snapshot centroids (haversine
+    - A single BallTree over snapshot centroids (haversine
       metric) instead of a DuckDB cross-join. Build is O(M log M),
       query is O(log M) per match. The earlier DuckDB
       ``ST_Distance_Sphere`` implementation also returned distances
@@ -332,8 +387,8 @@ def apply_current_survivor_filter(
     # name gate anyway, typically halves the tree size.
     if verbose:
         print(
-            f"    Loading rated snapshot centroids from "
-            f"{rated_snapshot_path} ..."
+            f"    Loading snapshot centroids from "
+            f"{snapshot_path} ..."
         )
     bbox_clause = ""
     if test_bbox is not None:
@@ -352,7 +407,7 @@ def apply_current_survivor_filter(
                     ST_X(ST_Centroid(geometry)) AS lon,
                     ST_Y(ST_Centroid(geometry)) AS lat,
                     COALESCE(name, '') AS name
-                FROM read_parquet('{rated_snapshot_path}')
+                FROM read_parquet('{snapshot_path}')
             )
             SELECT lon, lat, name
             FROM centroids
@@ -395,8 +450,17 @@ def apply_current_survivor_filter(
     # ---------------- per-match query + name check ----------------
     ov_lons = unmatched_overture.geometry.x.to_numpy()[ov_idx_arr]
     ov_lats = unmatched_overture.geometry.y.to_numpy()[ov_idx_arr]
-    ov_names = _to_str_array(unmatched_overture["name"])[ov_idx_arr]
+    ov_names = np.array(
+        [
+            normalise_name(v)
+            for v in _to_str_array(unmatched_overture["name"])[ov_idx_arr]
+        ],
+        dtype = object,
+    )
     radius_rad = radius_m / _EARTH_RADIUS_M
+    # Snapshot names are normalised lazily, once per distinct string hit,
+    # rather than across the whole ~4.5 M-row snapshot up front.
+    snap_norm_cache: dict[str, str] = {}
 
     suppress_idx_set: set[int] = set()
     n_pairs_scored = 0
@@ -425,7 +489,13 @@ def apply_current_survivor_filter(
                 continue
             global_i = start + local_i
             for snap_i in idx_arr:
-                snap_name = snap_names[snap_i]
+                raw = snap_names[snap_i]
+                if not raw:
+                    continue
+                snap_name = snap_norm_cache.get(raw)
+                if snap_name is None:
+                    snap_name = normalise_name(raw)
+                    snap_norm_cache[raw] = snap_name
                 if not snap_name:
                     continue
                 n_pairs_scored += 1
@@ -593,9 +663,11 @@ def apply_shadow_match(
     default_delta: float,
     test_bbox: dict | None = None,
     rated_snapshot_path: Path | None = None,
+    full_snapshot_path: Path | None = None,
     survivor_filter: dict | None = None,
     min_prior_name_match_score: float = 0.0,
     drop_unlabeled: bool = False,
+    max_ghost_age_years: float | None = None,
     verbose: bool = True,
 ) -> dict:
     """Post-process a conflated dataset with the change-detection penalty.
@@ -620,6 +692,20 @@ def apply_shadow_match(
         test_bbox: If set, filter ghosts to this bbox before matching
             (useful for the Seattle A/B test so the matcher's
             candidate search isn't dominated by national-scale ghosts).
+        rated_snapshot_path: Rated OSM snapshot; the survivor filter's
+            candidate set when ``survivor_filter["use_full_snapshot"]``
+            is false or ``full_snapshot_path`` is not given.
+        full_snapshot_path: The full filtered ``osm_snapshot.parquet``
+            (nodes + ways + relations); preferred survivor-filter
+            candidate set when ``survivor_filter["use_full_snapshot"]``
+            is true.
+        survivor_filter: ``suppress_if_current_survivor`` config block
+            (``enabled``, ``radius_m``, ``name_similarity_threshold``,
+            ``use_full_snapshot``).
+        min_prior_name_match_score: Threshold for the mandatory
+            same-entity name gate (see ``find_shadow_matches``).
+        max_ghost_age_years: Ghosts with an ``event_timestamp`` older
+            than this are dropped before matching (``None`` keeps all).
         verbose: Print progress.
 
     Returns:
@@ -667,6 +753,15 @@ def apply_shadow_match(
     ghosts = gpd.read_parquet(ghosts_path)
     if verbose:
         print(f"  {len(ghosts):,} ghosts")
+
+    if max_ghost_age_years is not None and max_ghost_age_years > 0:
+        n_before = len(ghosts)
+        ghosts = filter_ghosts_by_age(ghosts, max_ghost_age_years)
+        if verbose:
+            print(
+                f"  Dropped {n_before - len(ghosts):,} ghosts older than "
+                f"{max_ghost_age_years:g} years -> {len(ghosts):,}"
+            )
 
     if test_bbox is not None:
         from shapely.geometry import box
@@ -734,6 +829,7 @@ def apply_shadow_match(
             type_weight = type_weight,
             identifier_weight = identifier_weight,
             min_prior_name_match_score = min_prior_name_match_score,
+            verbose = verbose,
         )
         if verbose:
             print(
@@ -743,19 +839,26 @@ def apply_shadow_match(
 
     # -- Current-OSM-survivor filter ----------------------------------
     n_survivor_dropped = 0
-    if (
-        survivor_filter
-        and bool(survivor_filter.get("enabled", False))
-        and rated_snapshot_path is not None
-        and len(matches) > 0
-    ):
+    survivor_snapshot_path: Path | None = None
+    if survivor_filter and bool(survivor_filter.get("enabled", False)):
+        use_full = bool(survivor_filter.get("use_full_snapshot", False))
+        if use_full and full_snapshot_path is not None:
+            survivor_snapshot_path = full_snapshot_path
+        else:
+            if use_full and verbose:
+                print(
+                    "  use_full_snapshot is set but no full snapshot path "
+                    "was given; falling back to the rated snapshot."
+                )
+            survivor_snapshot_path = rated_snapshot_path
+    if survivor_snapshot_path is not None and len(matches) > 0:
         if verbose:
             print("Applying current-OSM-survivor filter ...")
         matches, n_survivor_dropped = apply_current_survivor_filter(
             matches = matches,
             unmatched_overture = unmatched_ov,
-            rated_snapshot_path = rated_snapshot_path,
-            radius_m = float(survivor_filter.get("radius_m", 50)),
+            snapshot_path = survivor_snapshot_path,
+            radius_m = float(survivor_filter.get("radius_m", 150)),
             name_similarity_threshold = float(
                 survivor_filter.get("name_similarity_threshold", 70)
             ),
