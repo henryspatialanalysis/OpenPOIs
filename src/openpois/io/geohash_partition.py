@@ -262,6 +262,58 @@ def write_label_partitioned_dataset(
             print(f"  {i + 1}/{n_partitions} partitions written...")
 
 
+def _has_null_type(data_type: pa.DataType) -> bool:
+    """True for ``null`` and for lists of ``null`` (an all-empty list column)."""
+    if pa.types.is_null(data_type):
+        return True
+    if pa.types.is_list(data_type) or pa.types.is_large_list(data_type):
+        return _has_null_type(data_type.value_type)
+    return False
+
+
+def _stream_schema(group, sort_indices: np.ndarray, cols: list,
+                   max_probe: int = 1000) -> pa.Schema:
+    """Writer schema for a partition streamed in chunks.
+
+    Arrow infers a column's type from the pandas values it is given, so a
+    column that is null (or holds only empty lists) in the rows sampled is
+    typed ``null`` and then rejects every chunk that holds a value, or the
+    other way round (the 2026-10-01 conflation failed on ``overture_phones``
+    and the mostly-null ``overture_categories_alternate``). Each such
+    field takes its type from the first rows where the column has a value;
+    a column empty throughout keeps the null type, and every chunk agrees.
+    """
+    schema = _geopandas_to_arrow(
+        group.iloc[sort_indices[:1]][cols], index = True, write_covering_bbox = True,
+    ).schema
+    for name in [f.name for f in schema if _has_null_type(f.type)]:
+        if name not in group.columns:
+            continue
+        values = group[name]
+        present = np.flatnonzero(values.map(
+            lambda v: v is not None and not (np.ndim(v) == 0 and pd.isna(v))
+            and not (np.ndim(v) > 0 and len(v) == 0)
+        ).to_numpy(dtype = bool))
+        if len(present) == 0:
+            continue
+        probe = _geopandas_to_arrow(
+            group.iloc[present[:max_probe]][cols], index = True,
+            write_covering_bbox = True,
+        ).schema.field(name)
+        if not _has_null_type(probe.type):
+            schema = schema.set(schema.get_field_index(name), probe)
+    return schema
+
+
+def _conform(table: pa.Table, schema: pa.Schema) -> pa.Table:
+    """Cast a chunk to the writer schema (null-typed columns to their type)."""
+    if table.schema.equals(schema, check_metadata = False):
+        return table
+    return table.cast(schema.remove_metadata()).replace_schema_metadata(
+        schema.metadata
+    )
+
+
 def _write_one_partition(group, cols, output_dir: Path, partition_col: str,
                          value, sort_col: str, chunk_rows: int) -> int:
     """Write one Hive partition directory, geohash-sorted. Returns row count."""
@@ -294,12 +346,7 @@ def _write_one_partition(group, cols, output_dir: Path, partition_col: str,
         # Large partitions: stream via ParquetWriter in row-group
         # chunks so the Arrow Table never coexists at full size
         # with the parent GeoDataFrame.
-        sample_slice = group.iloc[sort_indices[:1]][cols]
-        sample_tbl = _geopandas_to_arrow(
-            sample_slice, write_covering_bbox = True,
-        )
-        schema = sample_tbl.schema
-        del sample_slice, sample_tbl
+        schema = _stream_schema(group, sort_indices, cols)
 
         with pq.ParquetWriter(str(part_path), schema) as writer:
             for chunk_start in range(0, n_rows, chunk_rows):
@@ -307,10 +354,10 @@ def _write_one_partition(group, cols, output_dir: Path, partition_col: str,
                 chunk_indices = sort_indices[chunk_start:chunk_end]
                 chunk_slice = group.iloc[chunk_indices][cols]
                 chunk_tbl = _geopandas_to_arrow(
-                    chunk_slice, write_covering_bbox = True,
+                    chunk_slice, index = True, write_covering_bbox = True,
                 )
                 writer.write_table(
-                    chunk_tbl, row_group_size = 100_000,
+                    _conform(chunk_tbl, schema), row_group_size = 100_000,
                 )
                 del chunk_slice, chunk_tbl
                 gc.collect()

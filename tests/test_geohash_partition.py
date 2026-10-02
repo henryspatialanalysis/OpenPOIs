@@ -684,3 +684,45 @@ def test_streaming_partition_rejects_misaligned_labels(tmp_path):
             geohash_precision = 6, overwrite = True,
             labels = pd.Series(["amenity"] * 3),
         )
+
+
+@pytest.mark.parametrize("filled_first", [True, False])
+def test_chunked_partition_tolerates_all_null_list_chunks(tmp_path, filled_first):
+    """A list column that is entirely null in one chunk must still write.
+
+    Arrow types an all-None object column ``null``; the 2026-10-01 conflation
+    failed when a chunk of ``overture_phones`` was all null after the writer
+    had been opened as list<string>. Either order (values first, or nulls
+    first) must produce one list<string> column with the values intact.
+    """
+    n = 40
+    rng = np.random.default_rng(3)
+    values = [["+1 555 0100"] if i < n // 2 else None for i in range(n)]
+    if not filled_first:
+        values = values[::-1]
+    gdf = gpd.GeoDataFrame(
+        {
+            "osm_id": np.arange(n),
+            "shared_label": "Restaurant",
+            "phones": values,
+            "empty_lists": [[] for _ in range(n)],
+            "geometry": [Point(x, y) for x, y in zip(
+                np.linspace(-120, -70, n), rng.uniform(25, 49, n))],
+        },
+        crs = "EPSG:4326",
+    )
+    gdf = add_geohash_column(gdf, precision = 6)
+    # Sort order is geohash, which follows longitude here, so the filled and
+    # null halves land in different 10-row chunks.
+    write_label_partitioned_dataset(
+        gdf, tmp_path / "out", partition_col = "shared_label",
+        sort_col = "geohash", overwrite = True, chunk_rows = 10,
+    )
+    table = _read_hive(tmp_path / "out")
+    assert table.num_rows == n
+    import pyarrow as pa
+
+    assert pa.types.is_list(table.schema.field("phones").type)
+    phones = table.to_pandas().sort_values("osm_id")["phones"].tolist()
+    filled = [p is not None and len(p) == 1 for p in phones]
+    assert sum(filled) == n // 2
