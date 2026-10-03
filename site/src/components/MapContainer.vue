@@ -14,11 +14,9 @@
       v-if="props.activeSource === 'osm' || props.activeSource === 'overture' || props.activeSource === 'conflated'"
     />
 
-    <!-- Overture's archive is z14-only; below the under-zoom floor we prompt
-         the user to zoom in rather than showing an empty map. -->
-    <div v-if="showOvertureZoomHint" class="overture-zoom-hint">
-      <span class="material-symbols-outlined">zoom_in</span>
-      Zoom in to see Overture POIs
+    <div v-if="activeLayerError" class="layer-unavailable" role="alert">
+      <span class="material-symbols-outlined">error</span>
+      {{ activeLayerName }} layer unavailable. Try again later.
     </div>
 
     <!-- Desktop: native select -->
@@ -87,13 +85,13 @@ import {
   getOvertureLayer,
   updateOvertureFilters,
   wrapOvertureFeature,
-  OVERTURE_MIN_ZOOM,
 } from '../layers/overtureLayer.js'
 import {
   getConflatedLayer,
   updateConflatedFilters,
   wrapConflatedFeature,
 } from '../layers/conflatedLayer.js'
+import { layerErrors } from '../layers/sourceHealth.js'
 import {
   BASE_MAP_STYLES,
   INITIAL_CENTER,
@@ -113,13 +111,14 @@ const popupEl = ref(null)
 const map = shallowRef(null)
 const popupOverlay = shallowRef(null)
 const selectedFeature = shallowRef(null)
-const currentZoom = ref(INITIAL_ZOOM)
 
-// Overture is z14-only and only renders above OVERTURE_MIN_ZOOM (see
-// overtureLayer.js); below the floor, prompt the user to zoom in.
-const showOvertureZoomHint = computed(
-  () => props.activeSource === 'overture' && currentZoom.value <= OVERTURE_MIN_ZOOM
-)
+const SOURCE_NAMES = {
+  osm: 'OpenStreetMap',
+  overture: 'Overture Maps',
+  conflated: 'Conflated',
+}
+const activeLayerError = computed(() => layerErrors[props.activeSource] ?? null)
+const activeLayerName = computed(() => SOURCE_NAMES[props.activeSource] ?? props.activeSource)
 const selectedStyle = ref('positron')
 const basemapModalOpen = ref(false)
 const baseMapStyles = BASE_MAP_STYLES
@@ -180,10 +179,6 @@ onMounted(async () => {
 
   useMapHash(olMap)
   if (!hashState) handleGeolocate()
-
-  // Track view zoom so the Overture "zoom in" hint can react to it.
-  currentZoom.value = view.getZoom()
-  view.on('change:resolution', () => { currentZoom.value = view.getZoom() })
 })
 
 onBeforeUnmount(() => {

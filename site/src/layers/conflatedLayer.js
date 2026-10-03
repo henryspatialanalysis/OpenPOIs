@@ -8,6 +8,7 @@ import {
   POI_DOT_BY_ZOOM,
 } from '../utils.js'
 import { CONFLATED_PMTILES_URL } from '../constants.js'
+import { watchSourceHealth } from './sourceHealth.js'
 
 let layer = null
 let enabledLabels = null  // null = all on; otherwise Set<string>
@@ -17,8 +18,11 @@ const styleCache = {}
 export function getConflatedLayer() {
   if (layer) return layer
 
+  const source = new PMTilesVectorSource({ url: CONFLATED_PMTILES_URL })
+  watchSourceHealth(source, 'conflated')
+
   layer = new VectorTileLayer({
-    source: new PMTilesVectorSource({ url: CONFLATED_PMTILES_URL }),
+    source,
     style: conflatedTileStyle,
     zIndex: 10,
   })
