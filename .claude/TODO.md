@@ -35,6 +35,13 @@ Added 2026-10-02 from the October run. List these to Nat before any step runs.
    fixed 2026-10-02): both `format_for_upload.py` runs, the upload `--dry-run` before
    the credentials, `source-coop login` just before `creds put` (the token lasted under
    an hour), and a whole-dataset read in the published-release checks.
+7. **Three PMTiles archives now, all extended past z14** (2026-10-03). Packaging runs
+   `scripts/overture/prepare_pmtiles.py` too (the site's Overture layer is self-hosted;
+   `tiles.overturemaps.org` blocks openpois.org). Expect roughly OSM 0.5 GB (top zoom
+   14), conflated 4.7 GB and Overture 6.4 GB (top zoom 16). The upload sends ~11.6 GB and
+   then re-uploads the archives into `latest/` (the proxy cannot server-side copy over
+   5 GB); on 2026-10-03 each pass took about 2 minutes from openpois-01. Run the
+   verify-pipeline-run tile-completeness check before publishing.
 
 ## October 2026 run: outcome (2026-10-02)
 
@@ -131,6 +138,14 @@ re-uploaded). Details in CHANGELOG and the items below.
   per-round design weights in the HT correction rates (passes on current code).
 
 ## Recently done
+- 2026-10-03: **Self-hosted Overture layer and complete PMTiles.** Overture's tile
+  CDN started blocking openpois.org referers (403), so the site's Overture layer went
+  blank. The Overture snapshot now carries `basic_category`, `taxonomy_primary` and
+  `taxonomy_hierarchy`; `overture-pmtiles/` (archive + filter-category JSON) was added
+  to 2026-10-01-v0; the site filters Overture by L0 group -> `basic_category` and shows
+  the full taxonomy path; a "layer unavailable" banner covers any unreadable archive.
+  The same pass found every archive dropping 25-80% of POIs in dense z14 tiles for good;
+  all three were rebuilt with `extend_zooms_if_still_dropping` and re-published.
 
 _(trim after a few weeks)_
 - [x] **October 2026 release `2026-10-01-v0`** — 2026-10-02. Bayesian mixture calibration
