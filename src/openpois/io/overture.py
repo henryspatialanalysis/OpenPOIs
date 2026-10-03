@@ -39,6 +39,9 @@ Category filtering uses the ``taxonomy.hierarchy`` array. The first element
 deprecated ``categories`` struct is gone from release 2026-09-23.1 on, so
 ``overture_categories_alternate`` now comes from ``taxonomy.alternates`` and carries
 the new taxonomy's vocabulary rather than the old category names.
+``basic_category`` (~280 "cognitively basic" labels) is carried for the web map,
+which Overture recommends for map filtering and iconography; matching does not
+use it.
 
 Memory knobs: ``duckdb_memory_limit`` and ``duckdb_threads`` are per
 DuckDB connection. ``workers`` parallelizes per-part downloads via a
@@ -317,8 +320,9 @@ def _download_one_part(
     between parts.
 
     Output schema: source, overture_id, release_date, taxonomy_l0/l1/l2/l3,
-    overture_categories_alternate, overture_name, brand_name, brand_wikidata,
-    confidence,
+    taxonomy_primary, taxonomy_hierarchy (the full path, which can run deeper
+    than L3), basic_category, overture_categories_alternate, overture_name,
+    brand_name, brand_wikidata, confidence,
     overture_addr_street/city/state/postcode/country, overture_websites,
     overture_phones, overture_socials, longitude, latitude. No geometry
     column — geometry is built in the final merge step.
@@ -338,6 +342,9 @@ def _download_one_part(
                 taxonomy.hierarchy[2] AS taxonomy_l1,
                 taxonomy.hierarchy[3] AS taxonomy_l2,
                 taxonomy.hierarchy[4] AS taxonomy_l3,
+                taxonomy.primary AS taxonomy_primary,
+                taxonomy.hierarchy AS taxonomy_hierarchy,
+                basic_category,
                 taxonomy.alternates AS overture_categories_alternate,
                 names.primary AS overture_name,
                 brand.names.primary AS brand_name,
@@ -421,6 +428,9 @@ def _finalize_snapshot_in_duckdb(
                 p.taxonomy_l1,
                 p.taxonomy_l2,
                 p.taxonomy_l3,
+                p.taxonomy_primary,
+                p.taxonomy_hierarchy,
+                p.basic_category,
                 p.overture_categories_alternate,
                 p.overture_name,
                 p.brand_name,
