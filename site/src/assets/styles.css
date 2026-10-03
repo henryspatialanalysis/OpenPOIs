@@ -495,6 +495,32 @@ body,
   overflow-y: auto;
 }
 
+.overture-filter-list {
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.overture-group-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.overture-group-toggle {
+  width: 18px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #6b7280;
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.overture-group-members {
+  padding-left: 22px;
+}
+
 /* POI popup */
 .poi-popup {
   background: #fff;

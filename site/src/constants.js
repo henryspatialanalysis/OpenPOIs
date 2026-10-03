@@ -15,9 +15,14 @@ export const OSM_PMTILES_URL =
 export const CONFLATED_PMTILES_URL =
   'https://data.source.coop/henryspatialanalysis/openpois/2026-10-01-v0/conflated-pmtiles/conflated.pmtiles'
 
-// Overture PMTiles (latest release — update URL on each Overture monthly release)
+// Overture PMTiles built from our monthly Overture snapshot, plus the
+// filter-panel category counts published beside it. Self-hosted because
+// tiles.overturemaps.org blocks openpois.org referers.
 export const OVERTURE_PMTILES_URL =
-  'https://tiles.overturemaps.org/2026-09-23.1/places.pmtiles'
+  'https://data.source.coop/henryspatialanalysis/openpois/2026-10-01-v0/overture-pmtiles/overture.pmtiles'
+
+export const OVERTURE_CATEGORIES_URL =
+  'https://data.source.coop/henryspatialanalysis/openpois/2026-10-01-v0/overture-pmtiles/overture_categories.json'
 
 // Confidence color ramp (conf_mean 0-1, 1 = stable)
 export const COLORS = {
@@ -88,7 +93,8 @@ export const BASE_MAP_STYLES = [
 export const CONFLATED_LABELS = SHARED_LABELS
 
 // Zoom thresholds — PMTiles min_zoom (site can't zoom out below this).
-// PMTiles archives carry z10–z14; z15+ render via ol-pmtiles over-zoom.
+// PMTiles archives start at z10 and run to z14, or deeper where dense tiles
+// would otherwise drop points; past the top zoom ol-pmtiles over-zooms.
 // Per-layer point radius scales down at lower zooms (see utils.js).
 export const MIN_ZOOM = 10
 

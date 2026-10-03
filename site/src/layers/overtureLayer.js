@@ -1,7 +1,5 @@
 import VectorTileLayer from 'ol/layer/VectorTile'
 import { PMTilesVectorSource } from 'ol-pmtiles'
-import { createXYZ } from 'ol/tilegrid'
-import { get as getProjection } from 'ol/proj'
 import { Style, Circle, Fill, Stroke } from 'ol/style'
 import {
   confidenceColor,
@@ -10,55 +8,60 @@ import {
   POI_DOT_BY_ZOOM,
 } from '../utils.js'
 import { OVERTURE_PMTILES_URL } from '../constants.js'
+import { watchSourceHealth } from './sourceHealth.js'
+
+// Our own archive of the monthly Overture snapshot (scripts/overture/
+// prepare_pmtiles.py), with the same zoom pyramid as the OSM and conflated
+// archives: z10 up, extended past z14 where dense tiles would drop points.
+// Overture's hosted archive at tiles.overturemaps.org blocks openpois.org
+// referers.
 
 let layer = null
+let hiddenKeys = new Set()  // filter keys switched off; empty = all on
 
-// Style cache keyed by conf bucket (same discretisation as OSM layer)
 const styleCache = {}
-
-// Overture's hosted PMTiles archive contains tiles at z14 ONLY (unlike our
-// OSM/conflated archives, which carry a z10–z14 pyramid). OpenLayers does not
-// down-sample vector tiles, so without intervention Overture renders nothing
-// below z14. We pin the source tile grid to a single z14 level so OL reuses
-// the z14 tiles at lower view zooms (under-zoom), and floor rendering at
-// OVERTURE_MIN_ZOOM so we don't try to load a metro's worth of z14 tiles when
-// zoomed way out. Below the floor the UI shows a "zoom in" hint instead.
-export const OVERTURE_MIN_ZOOM = 13
-
-const overtureTileGrid = createXYZ({
-  extent: getProjection('EPSG:3857').getExtent(),
-  minZoom: 14,
-  maxZoom: 14,
-  tileSize: 512,
-})
 
 export function getOvertureLayer() {
   if (layer) return layer
 
+  const source = new PMTilesVectorSource({ url: OVERTURE_PMTILES_URL })
+  watchSourceHealth(source, 'overture')
+
   layer = new VectorTileLayer({
-    source: new PMTilesVectorSource({
-      url: OVERTURE_PMTILES_URL,
-      tileGrid: overtureTileGrid,
-    }),
+    source,
     style: overtureTileStyle,
     zIndex: 10,
     visible: false,
-    // minZoom is exclusive: the layer renders only at view zoom > OVERTURE_MIN_ZOOM.
-    minZoom: OVERTURE_MIN_ZOOM,
   })
   return layer
 }
 
 /**
- * No-op: Overture PMTiles tiles contain only granular L1/L2 subcategories
- * (e.g. "coffee_shop", "gym") — not the L0 labels (e.g. "food_and_drink")
- * used in the filter UI. Category filtering is therefore not applied here.
+ * Filter key for an Overture feature: its basic_category, which Overture
+ * recommends for map filtering, or "other:<L0>" when it has none.
  */
-export function updateOvertureFilters(_filtersObj) {}
+export function overtureFilterKey(basicCategory, l0) {
+  return basicCategory ?? `other:${l0}`
+}
+
+/**
+ * filtersObj is {filterKey: boolean}. Only keys set to false hide features,
+ * so a category missing from the filter panel's list still renders.
+ */
+export function updateOvertureFilters(filtersObj) {
+  hiddenKeys = new Set(
+    Object.entries(filtersObj).filter(([, v]) => !v).map(([k]) => k)
+  )
+  if (layer) layer.changed()
+}
 
 function overtureTileStyle(feature, resolution) {
-  const cats = tryParse(feature.get('categories'))
-  if (cats?.primary === 'parking') return null
+  if (hiddenKeys.size > 0) {
+    const key = overtureFilterKey(
+      feature.get('basic_category'), feature.get('taxonomy_l0')
+    )
+    if (hiddenKeys.has(key)) return null
+  }
 
   const conf = feature.get('confidence')
   const bucket = discretizeConf(conf)
@@ -80,30 +83,23 @@ function overtureTileStyle(feature, resolution) {
 
 /**
  * Wrap a VectorTile RenderFeature (immutable) in a plain object that
- * exposes the same .get() / .getKeys() / .getGeometry() API as an OL Feature,
- * with Overture's JSON-encoded fields pre-parsed into flat properties.
+ * exposes the same .get() / .getKeys() / .getGeometry() API as an OL Feature.
  */
 export function wrapOvertureFeature(rf) {
-  const cats = tryParse(rf.get('categories'))
-  const brand = tryParse(rf.get('brand'))
-  const addrs = tryParse(rf.get('addresses'))
-  const addr = Array.isArray(addrs) ? addrs[0] : addrs
-  const websites = tryParse(rf.get('websites'))
-  const phones = tryParse(rf.get('phones'))
-
   const props = {
     _source: 'overture',
-    name: rf.get('@name') || null,
+    name: rf.get('name') || null,
     id: rf.get('id'),
     confidence: rf.get('confidence'),
-    l0: cats?.primary ?? null,
-    l1: cats?.alternate?.[0] ?? null,
-    brand: brand?.names?.primary ?? null,
-    website: Array.isArray(websites) ? websites[0] : null,
-    phone: Array.isArray(phones) ? phones[0] : null,
-    'addr:street': addr?.freeform ?? null,
-    'addr:city': addr?.locality ?? null,
-    'addr:state': addr?.region ?? null,
+    basic_category: rf.get('basic_category') ?? null,
+    taxonomy_primary: rf.get('taxonomy_primary') ?? null,
+    taxonomy_hierarchy: rf.get('taxonomy_hierarchy') ?? null,
+    brand: rf.get('brand') ?? null,
+    website: rf.get('website') ?? null,
+    phone: rf.get('phone') ?? null,
+    'addr:street': rf.get('addr_street') ?? null,
+    'addr:city': rf.get('addr_city') ?? null,
+    'addr:state': rf.get('addr_state') ?? null,
     source_dataset: 'Overture Maps',
   }
 
@@ -112,9 +108,4 @@ export function wrapOvertureFeature(rf) {
     getKeys: () => Object.keys(props),
     getGeometry: () => rf.getGeometry(),
   }
-}
-
-function tryParse(str) {
-  if (!str) return null
-  try { return JSON.parse(str) } catch { return null }
 }
