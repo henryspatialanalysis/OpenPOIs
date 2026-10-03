@@ -190,7 +190,8 @@ See :mod:`openpois.io.geohash_partition`.
 
    python scripts/osm_snapshot/prepare_pmtiles.py
 
-Generates a single-zoom (z14) PMTiles archive from the partitioned dataset
+Generates a multi-zoom PMTiles archive (z10–z14, extended deeper where dense
+tiles would otherwise drop points) from the rated snapshot
 for use by the web map. Output: ``osm_snapshot.pmtiles``.
 
 See :mod:`openpois.io.pmtiles`.
@@ -236,10 +237,14 @@ shared taxonomy label. Output: ``summary_by_label.csv``.
 
    python scripts/conflation/format_for_upload.py
    python scripts/conflation/prepare_pmtiles.py
+   python scripts/overture/prepare_pmtiles.py
 
 Adds geohash columns and writes a Hive-style partitioned dataset, then
-builds a single-zoom (z14) PMTiles archive of the conflated points.
-Outputs: ``conflated_partitioned/`` and ``conflated.pmtiles``.
+builds multi-zoom PMTiles archives (z10 and up) of the conflated points and of
+the Overture snapshot (the web map's Overture layer, with
+``overture_categories.json`` for its filter panel).
+Outputs: ``conflated_partitioned/``, ``conflated.pmtiles``,
+``overture_snapshot.pmtiles`` and ``overture_categories.json``.
 
 See :mod:`openpois.io.geohash_partition` and :mod:`openpois.io.pmtiles`.
 

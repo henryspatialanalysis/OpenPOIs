@@ -18,17 +18,21 @@ Cooperative version folder.
 
 1. **Sync taxonomy** — run the [sync-taxonomy](../sync-taxonomy/SKILL.md) skill first. It regenerates `site/src/taxonomy.generated.js` and `site/public/taxonomy.html` from the conflation CSVs and checks `constants.js` for missing display labels. Catch drift before touching data URLs.
 
-2. **Update PMTiles URLs in [site/src/constants.js](../../../site/src/constants.js)** — both point at the Source Coop version folder (`versions.source_coop` in `config.yaml`):
+2. **Update data URLs in [site/src/constants.js](../../../site/src/constants.js)** — all four point at the Source Coop version folder (`versions.source_coop` in `config.yaml`):
    - `OSM_PMTILES_URL` → `https://data.source.coop/henryspatialanalysis/openpois/<YYYY-MM-DD-vN>/osm-pmtiles/osm.pmtiles`
    - `CONFLATED_PMTILES_URL` → `https://data.source.coop/henryspatialanalysis/openpois/<YYYY-MM-DD-vN>/conflated-pmtiles/conflated.pmtiles`
-   - `OVERTURE_PMTILES_URL` → bump on monthly Overture release
+   - `OVERTURE_PMTILES_URL` → `https://data.source.coop/henryspatialanalysis/openpois/<YYYY-MM-DD-vN>/overture-pmtiles/overture.pmtiles`
+   - `OVERTURE_CATEGORIES_URL` → `…/<YYYY-MM-DD-vN>/overture-pmtiles/overture_categories.json` (drives the Overture filter panel)
+
+   The Overture layer is **self-hosted**: since 2026-10 `tiles.overturemaps.org` answers any request carrying an `openpois.org` Referer with a CloudFront 403, so do not point it back at Overture's archive. A failed archive shows a "layer unavailable" banner (`site/src/layers/sourceHealth.js`).
 
 3. **Local preview**:
    ```bash
    cd site && npm run dev
    ```
    Verify:
-   - Map loads POIs at zoom 14+ without CORS/404 errors on `data.source.coop`
+   - Map loads POIs at zoom 10+ on all three sources without CORS/404 errors on `data.source.coop`, and no "layer unavailable" banner
+   - Overture filter panel lists the L0 groups; expanding one shows its `basic_category` entries, and toggling them hides points
    - Source filter dropdown (OSM / Overture / Conflated) toggles data
    - Taxonomy legend renders from `taxonomy.html`
    - POI popups show non-empty name/category/confidence

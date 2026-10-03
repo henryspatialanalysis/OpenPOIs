@@ -20,10 +20,12 @@ required.
 """
 from __future__ import annotations
 
+import mimetypes
 from pathlib import Path
 from typing import Iterable
 
 import boto3
+from botocore.config import Config as BotoConfig
 from tqdm import tqdm
 
 DEFAULT_BUCKET = "henryspatialanalysis"
@@ -36,6 +38,10 @@ def make_client(creds: dict, endpoint_url: str = DEFAULT_ENDPOINT):
 
     ``endpoint_url`` is not optional in practice: without it boto3 talks to AWS
     S3, which does not recognize proxy-issued credentials.
+
+    The read timeout is raised from botocore's 60 s because the proxy answers a
+    server-side copy only once it finishes, which takes minutes for a
+    multi-GB object.
     """
     return boto3.client(
         "s3",
@@ -44,6 +50,10 @@ def make_client(creds: dict, endpoint_url: str = DEFAULT_ENDPOINT):
         aws_session_token = creds["aws_session_token"],
         region_name = creds.get("region_name") or "us-west-2",
         endpoint_url = endpoint_url,
+        config = BotoConfig(
+            read_timeout = 900,
+            retries = {"max_attempts": 5, "mode": "standard"},
+        ),
     )
 
 
@@ -206,8 +216,15 @@ def mirror_prefix(
     src_prefix: str,
     dst_prefix: str,
     dry_run: bool = False,
+    local_files: dict[str, Path] | None = None,
 ) -> dict:
     """Server-side copy every object under ``src_prefix`` to ``dst_prefix``.
+
+    ``local_files`` maps paths relative to ``src_prefix`` to local copies of
+    those objects; they are uploaded to ``dst_prefix`` instead of copied. The
+    proxy does not implement UploadPartCopy, and a single ``copy_object`` stops
+    at 5 GB, so any object larger than that (the Overture PMTiles is ~6.4 GB)
+    can only reach ``dst_prefix`` from a local file.
 
     Any objects currently under ``dst_prefix`` whose relative path is not
     present in ``src_prefix`` are deleted first, so ``dst_prefix`` becomes a
@@ -234,9 +251,27 @@ def mirror_prefix(
         tqdm(src_keys, desc = f"↪ {dst_prefix}", unit = "obj")
         if src_keys else src_keys
     )
+    local_files = local_files or {}
     for src_key in iterator:
         rel = src_key[len(src_prefix) :]
         dst_key = f"{dst_prefix}{rel}"
+        if rel in local_files:
+            if dry_run:
+                print(f"[dry-run] upload {local_files[rel]} → s3://{bucket}/{dst_key}")
+                continue
+            content_type = (
+                mimetypes.guess_type(rel)[0] or "application/octet-stream"
+            )
+            client.upload_file(
+                Filename = str(local_files[rel]),
+                Bucket = bucket,
+                Key = dst_key,
+                ExtraArgs = {
+                    "ACL": "bucket-owner-full-control",
+                    "ContentType": content_type,
+                },
+            )
+            continue
         if dry_run:
             print(f"[dry-run] copy s3://{bucket}/{src_key} → s3://{bucket}/{dst_key}")
             continue

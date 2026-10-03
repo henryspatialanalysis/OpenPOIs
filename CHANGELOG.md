@@ -34,6 +34,19 @@ than 0.05, 3.9% by more than 0.10); OSM-only 0.817 → 0.817; matched 0.908 →
 
 ### Methods changes vs. prior release
 
+- **New `overture-pmtiles/` folder (added 2026-10-02).** `overture.pmtiles`
+  tiles this release's Overture input snapshot, and
+  `overture_categories.json` counts its POIs by taxonomy L0 and
+  `basic_category`. The tile properties follow Overture's current Places
+  schema: `basic_category` for filtering, plus `taxonomy_primary` and the full
+  `taxonomy_hierarchy` path. The files were added to the published version.
+- **All three PMTiles archives rebuilt (2026-10-03) so no POI is dropped.**
+  The original archives stopped at z14, and tippecanoe's density-based
+  dropping kept only 29% of conflated POIs in a Midtown Manhattan z14 tile
+  (44% in downtown LA, 75% in north Seattle). Deeper views only enlarge z14,
+  so the dropped POIs were missing at every zoom. The archives now add zoom
+  levels past z14 until the top zoom drops nothing. The parquet datasets are
+  unchanged.
 - **`overture_categories_alternate` follows Overture's new taxonomy.** Overture
   removed its deprecated `categories` field in release 2026-09-23.1, so the
   column now holds `taxonomy.alternates`: the same idea (secondary categories),

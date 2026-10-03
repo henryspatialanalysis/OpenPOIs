@@ -23,9 +23,11 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import geopandas as gpd
+import pandas as pd
 import pyarrow.parquet as pq
 import pyogrio
 
@@ -40,6 +42,8 @@ def build_pmtiles(
     drop_strategy: str = "drop-densest-as-needed",
     batch_size: int = 1_000_000,
     tippecanoe_bin: str | None = None,
+    batch_transform: Callable[[pd.DataFrame], pd.DataFrame] | None = None,
+    extend_zooms_if_still_dropping: bool = False,
 ) -> dict:
     """Build a PMTiles archive from a GeoParquet POI file.
 
@@ -59,6 +63,14 @@ def build_pmtiles(
         batch_size: rows per Arrow batch. Smaller = lower peak RAM, more I/O.
         tippecanoe_bin: path to ``tippecanoe`` executable. If None, uses the
             one on PATH.
+        batch_transform: optional function applied to each batch's attribute
+            columns (everything but ``geometry``) before it is written. Use it
+            to rename columns or flatten LIST columns, which FlatGeobuf cannot
+            store. Its output columns become the tile properties.
+        extend_zooms_if_still_dropping: pass tippecanoe's flag of the same
+            name, which adds zoom levels past ``max_zoom`` until the top zoom
+            drops no features. Without it, features dropped at ``max_zoom``
+            are missing at every zoom, since deeper views over-zoom that tile.
 
     Returns a dict with: ``rows_written``, ``fgb_bytes``, ``pmtiles_bytes``.
     """
@@ -84,6 +96,7 @@ def build_pmtiles(
             output_fgb = fgb_path,
             properties = properties,
             batch_size = batch_size,
+            batch_transform = batch_transform,
         )
 
     fgb_bytes = fgb_path.stat().st_size
@@ -100,6 +113,7 @@ def build_pmtiles(
         max_zoom = max_zoom,
         drop_strategy = drop_strategy,
         tippecanoe_bin = tippecanoe_bin,
+        extend_zooms_if_still_dropping = extend_zooms_if_still_dropping,
     )
 
     pmtiles_bytes = output_pmtiles.stat().st_size
@@ -121,6 +135,7 @@ def _stage_flatgeobuf(
     output_fgb: Path,
     properties: list[str],
     batch_size: int,
+    batch_transform: Callable[[pd.DataFrame], pd.DataFrame] | None = None,
 ) -> int:
     """Stream GeoParquet -> FlatGeobuf, projecting geometry to representative point.
 
@@ -141,6 +156,10 @@ def _stage_flatgeobuf(
 
     for batch in pq_file.iter_batches(batch_size = batch_size, columns = read_cols):
         df = batch.to_pandas()
+        if batch_transform is not None:
+            geometry = df.pop("geometry")
+            df = batch_transform(df)
+            df["geometry"] = geometry
         df["geometry"] = gpd.GeoSeries.from_wkb(df["geometry"])
         gdf = gpd.GeoDataFrame(df, geometry = "geometry", crs = "EPSG:4326")
         gdf = gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty]
@@ -167,6 +186,7 @@ def _run_tippecanoe(
     max_zoom: int,
     drop_strategy: str,
     tippecanoe_bin: str | None,
+    extend_zooms_if_still_dropping: bool = False,
 ) -> None:
     """Invoke tippecanoe. Stderr is streamed to our stderr so the caller sees
     the tile-count / drop summary in real time.
@@ -194,7 +214,9 @@ def _run_tippecanoe(
         "-l", layer_name,
         "--force",
         "--no-progress-indicator",   # -\r progress spam bloats captured logs
-        str(fgb_path),
     ]
+    if extend_zooms_if_still_dropping:
+        cmd.append("--extend-zooms-if-still-dropping")
+    cmd.append(str(fgb_path))
     print("  running: " + " ".join(cmd))
     subprocess.run(cmd, check = True)

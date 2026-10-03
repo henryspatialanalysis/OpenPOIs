@@ -16,6 +16,8 @@ segment:
             osm-pmtiles/osm.pmtiles
             conflated-parquet/geohash_prefix=*/part-*.parquet
             conflated-pmtiles/conflated.pmtiles
+            overture-pmtiles/overture.pmtiles
+            overture-pmtiles/overture_categories.json
         latest/
             (server-side mirror of the most recently published version)
 
@@ -76,7 +78,27 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--skip-pmtiles", action = "store_true",
-        help = "Skip both PMTiles uploads.",
+        help = "Skip every PMTiles upload.",
+    )
+    parser.add_argument(
+        "--skip-osm-pmtiles", action = "store_true",
+        help = "Skip the OSM PMTiles upload.",
+    )
+    parser.add_argument(
+        "--skip-conflated-pmtiles", action = "store_true",
+        help = "Skip the conflated PMTiles upload.",
+    )
+    parser.add_argument(
+        "--skip-overture-pmtiles", action = "store_true",
+        help = "Skip the Overture PMTiles and filter-category JSON upload.",
+    )
+    parser.add_argument(
+        "--skip-readme", action = "store_true",
+        help = (
+            "Do not regenerate the per-version README. Use when adding files "
+            "to an already-published version from a host that no longer has "
+            "its partitioned parquet (the README counts rows from those)."
+        ),
     )
     parser.add_argument(
         "--update-top-level", action = "store_true",
@@ -128,6 +150,9 @@ def main() -> None:
     print()
 
     version_prefix = f"{repo_prefix}/{version}"
+    # Files uploaded by this run, keyed by path under the version folder. The
+    # latest/ mirror re-uploads these rather than copying them server-side.
+    uploaded: dict[str, Path] = {}
 
     # -------------------------------------------------------------------------
     # Datasets
@@ -154,7 +179,7 @@ def main() -> None:
             dry_run = args.dry_run,
         )
 
-    if not args.skip_pmtiles:
+    if not (args.skip_pmtiles or args.skip_osm_pmtiles):
         osm_pm = config.get_file_path("snapshot_osm", "pmtiles")
         if osm_pm.exists():
             upload_file(
@@ -164,9 +189,11 @@ def main() -> None:
                 key = f"{version_prefix}/osm-pmtiles/osm.pmtiles",
                 dry_run = args.dry_run,
             )
+            uploaded["osm-pmtiles/osm.pmtiles"] = osm_pm
         else:
             print(f"Skipping OSM PMTiles — {osm_pm} not found.")
 
+    if not (args.skip_pmtiles or args.skip_conflated_pmtiles):
         conflated_pm = config.get_file_path("conflation", "pmtiles")
         if conflated_pm.exists():
             upload_file(
@@ -176,25 +203,54 @@ def main() -> None:
                 key = f"{version_prefix}/conflated-pmtiles/conflated.pmtiles",
                 dry_run = args.dry_run,
             )
+            uploaded["conflated-pmtiles/conflated.pmtiles"] = conflated_pm
         else:
             print(f"Skipping conflated PMTiles — {conflated_pm} not found.")
+
+    # The site reads both files together, so upload neither unless both exist.
+    if not (args.skip_pmtiles or args.skip_overture_pmtiles):
+        overture_pm = config.get_file_path("snapshot_overture", "pmtiles")
+        overture_cats = config.get_file_path("snapshot_overture", "categories")
+        if overture_pm.exists() and overture_cats.exists():
+            upload_file(
+                client = client,
+                local_path = overture_pm,
+                bucket = bucket,
+                key = f"{version_prefix}/overture-pmtiles/overture.pmtiles",
+                dry_run = args.dry_run,
+            )
+            uploaded["overture-pmtiles/overture.pmtiles"] = overture_pm
+            upload_file(
+                client = client,
+                local_path = overture_cats,
+                bucket = bucket,
+                key = f"{version_prefix}/overture-pmtiles/overture_categories.json",
+                content_type = "application/json",
+                dry_run = args.dry_run,
+            )
+        else:
+            print(
+                f"Skipping Overture PMTiles — {overture_pm} or {overture_cats} "
+                "not found."
+            )
 
     # -------------------------------------------------------------------------
     # Per-version README (always regenerated)
     # -------------------------------------------------------------------------
-    readme_text = build_version_readme(
-        config = config,
-        version_folder = version,
-        config_path = CONFIG_PATH,
-    )
-    upload_bytes(
-        client = client,
-        data = readme_text.encode("utf-8"),
-        bucket = bucket,
-        key = f"{version_prefix}/README.md",
-        content_type = "text/markdown; charset=utf-8",
-        dry_run = args.dry_run,
-    )
+    if not args.skip_readme:
+        readme_text = build_version_readme(
+            config = config,
+            version_folder = version,
+            config_path = CONFIG_PATH,
+        )
+        upload_bytes(
+            client = client,
+            data = readme_text.encode("utf-8"),
+            bucket = bucket,
+            key = f"{version_prefix}/README.md",
+            content_type = "text/markdown; charset=utf-8",
+            dry_run = args.dry_run,
+        )
 
     # -------------------------------------------------------------------------
     # Mirror the published version to {repo_prefix}/latest/
@@ -214,6 +270,7 @@ def main() -> None:
             src_prefix = f"{version_prefix}/",
             dst_prefix = f"{latest_prefix}/",
             dry_run = args.dry_run,
+            local_files = uploaded,
         )
         print(
             f"  copied {summary['copied']} object(s), "

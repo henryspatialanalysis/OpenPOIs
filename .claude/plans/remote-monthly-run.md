@@ -206,13 +206,15 @@ Stop the instance (`ec2-openpois stop`) whenever the next step waits on a person
    from `verify-pipeline-run` via `exec`, and `pull <v>`. **Nat** reviews the fit
    report, the HT PDF and the summaries, and gives the release decision.
 8. **Package.** Both `format_for_upload.py` runs (`scripts/conflation/` and
-   `scripts/osm_snapshot/`; the upload reads both partitioned datasets), then both
-   `prepare_pmtiles.py` runs.
+   `scripts/osm_snapshot/`; the upload reads both partitioned datasets), then the three
+   `prepare_pmtiles.py` runs (`osm_snapshot`, `conflation`, `overture`).
 9. **Publish.** The upload `--dry-run` first: it needs no credentials, so missing files
    show up before the token clock starts. Then Nat's local `source-coop login` (on
    2026-10-01 the cached token had expired within an hour, so log in just before);
    `creds put`; the
-   upload, the published-release checks; `creds clear`.
+   upload, the published-release checks; `creds clear`. The `latest/` mirror
+   re-uploads the run's PMTiles from disk (the proxy has no server-side copy over
+   5 GB), so the transfer is about twice the archive total.
 10. **Wrap up.** `update-site` locally; TODO.md bookkeeping; PR the run branch to main
     (Nat approves); `prune`, check the list, `prune --apply`; `ec2-openpois stop`.
 

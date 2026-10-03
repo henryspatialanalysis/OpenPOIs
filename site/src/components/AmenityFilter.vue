@@ -16,9 +16,51 @@
         </label>
       </template>
       <template v-else-if="activeSource === 'overture'">
-        <p class="filter-note">
-          Overture Maps tiles use granular subcategories. Filtering will be available after the taxonomy stabilizes in June 2026.
+        <p v-if="overtureError" class="filter-note">
+          Overture categories are unavailable, so filtering is off.
         </p>
+        <p v-else-if="overtureGroups.length === 0" class="filter-note">
+          Loading categories…
+        </p>
+        <template v-else>
+          <div class="filter-actions">
+            <button class="filter-action-btn" @click="setAllOverture(true)">All</button>
+            <button class="filter-action-btn" @click="setAllOverture(false)">None</button>
+          </div>
+          <div class="overture-filter-list">
+            <div v-for="g in overtureGroups" :key="g.l0" class="overture-group">
+              <div class="overture-group-row">
+                <button
+                  class="overture-group-toggle"
+                  :aria-expanded="expandedL0 === g.l0"
+                  :aria-label="`Show ${g.label} categories`"
+                  @click="expandedL0 = expandedL0 === g.l0 ? null : g.l0"
+                >
+                  {{ expandedL0 === g.l0 ? '▾' : '▸' }}
+                </button>
+                <label>
+                  <input
+                    type="checkbox"
+                    :checked="groupState(g) === 'all'"
+                    :indeterminate.prop="groupState(g) === 'some'"
+                    @change="setGroupOverture(g, groupState(g) !== 'all')"
+                  />
+                  {{ g.label }}
+                </label>
+              </div>
+              <div v-if="expandedL0 === g.l0" class="overture-group-members">
+                <label v-for="c in g.categories" :key="c.key" :title="`${c.count.toLocaleString()} POIs`">
+                  <input
+                    type="checkbox"
+                    :checked="isOvertureOn(c.key)"
+                    @change="toggleOverture(c.key)"
+                  />
+                  {{ c.label }}
+                </label>
+              </div>
+            </div>
+          </div>
+        </template>
       </template>
       <template v-else-if="activeSource === 'conflated'">
         <div class="filter-actions">
@@ -43,7 +85,8 @@
 
 <script setup>
 import { ref } from 'vue'
-import { OSM_FILTER_KEYS, OVERTURE_CATEGORIES } from '../constants.js'
+import { OSM_FILTER_KEYS } from '../constants.js'
+import { useOvertureCategories } from '../composables/useOvertureCategories.js'
 
 const props = defineProps({
   activeSource: { type: String, required: true },
@@ -60,17 +103,44 @@ const emit = defineEmits([
 ])
 const collapsed = ref(false)
 const osmFilterKeys = OSM_FILTER_KEYS
-const overtureCategories = OVERTURE_CATEGORIES
+const { groups: overtureGroups, error: overtureError } = useOvertureCategories()
+const expandedL0 = ref(null)
 
 function toggleOsm(key) {
   emit('update:osm-filters', { ...props.osmFilters, [key]: !props.osmFilters[key] })
 }
 
+// Overture filters hide only keys set to false, so a key not yet in the
+// object (every key, before the first click) counts as on.
+function isOvertureOn(key) {
+  return props.overtureFilters[key] !== false
+}
+
 function toggleOverture(key) {
   emit('update:overture-filters', {
     ...props.overtureFilters,
-    [key]: !props.overtureFilters[key],
+    [key]: !isOvertureOn(key),
   })
+}
+
+function groupState(group) {
+  const on = group.categories.filter(c => isOvertureOn(c.key)).length
+  if (on === group.categories.length) return 'all'
+  return on === 0 ? 'none' : 'some'
+}
+
+function setGroupOverture(group, value) {
+  const next = { ...props.overtureFilters }
+  for (const c of group.categories) next[c.key] = value
+  emit('update:overture-filters', next)
+}
+
+function setAllOverture(value) {
+  const next = {}
+  for (const g of overtureGroups.value) {
+    for (const c of g.categories) next[c.key] = value
+  }
+  emit('update:overture-filters', next)
 }
 
 function toggleConflated(label) {

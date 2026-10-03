@@ -194,7 +194,8 @@ Publishing from the remote: after Nat's local `source-coop login`, run
    ```
    Outputs `conflated_partitioned/` (and OSM-only `osm_snapshot_partitioned/`).
 
-6.5. **Build PMTiles** — multi-zoom (z10–z14, `drop-densest-as-needed`; see
+6.5. **Build PMTiles** — multi-zoom (z10–z14, extended past z14 until the top
+     zoom drops nothing, `drop-densest-as-needed`; see
      `publish.pmtiles` in config.yaml) archives consumed directly by the site
      via `ol-pmtiles`. Intermediate FlatGeobufs are cleaned up on success.
      ```bash
@@ -202,9 +203,16 @@ Publishing from the remote: after Nat's local `source-coop login`, run
        2>&1 | tee ~/data/openpois/logs/pmtiles_osm_<version>.log
      python -u scripts/conflation/prepare_pmtiles.py \
        2>&1 | tee ~/data/openpois/logs/pmtiles_conflated_<version>.log
+     python -u scripts/overture/prepare_pmtiles.py \
+       2>&1 | tee ~/data/openpois/logs/pmtiles_overture_<version>.log
      ```
      Properties and zoom range are configured under `publish.pmtiles` in
-     `config.yaml`.
+     `config.yaml`. The Overture archive tiles the Overture snapshot itself
+     (the site's Overture layer; `tiles.overturemaps.org` blocks openpois.org
+     referers) and writes `overture_categories.json`, the filter panel's
+     L0 → `basic_category` counts. It needs a snapshot pulled with the
+     2026-10 ingest query (`basic_category`, `taxonomy_primary`,
+     `taxonomy_hierarchy`) and refuses one without them.
 
 7. **Publish to Source Cooperative** — uploads OSM + conflated parquet,
    both PMTiles, and a freshly-rendered per-version `README.md` under
@@ -221,9 +229,13 @@ Publishing from the remote: after Nat's local `source-coop login`, run
    # If the top-level README or LICENSE changed:
    python scripts/publish/upload_to_source_coop.py --update-top-level
    ```
-   `--skip-osm-parquet`, `--skip-conflated-parquet`, and `--skip-pmtiles`
-   allow partial reuploads (e.g. after regenerating PMTiles alone), and
-   `--skip-latest-mirror` holds `latest/` on the previous release.
+   `--skip-osm-parquet`, `--skip-conflated-parquet`, `--skip-pmtiles`, and
+   the per-archive `--skip-{osm,conflated,overture}-pmtiles` allow partial
+   reuploads (e.g. after regenerating one PMTiles archive), and
+   `--skip-latest-mirror` holds `latest/` on the previous release. Adding
+   files to an already-published version from a host that no longer has the
+   partitioned parquet needs `--skip-readme`, since the README counts rows
+   from those directories.
 
    **Writes go through the data proxy, reads do not.** Uploads use
    `endpoint_url = https://data.source.coop` with the **account as the bucket**

@@ -171,7 +171,15 @@ each table means. Then check the deployed output:
 - Open the deployed site (or `npm run dev` locally after a constants.js bump).
 - Browser console: no CORS, no 404s on `data.source.coop` URLs.
 - Filter dropdown: each source (OSM / Overture / Conflated) loads.
-- Popups non-empty; taxonomy legend rendered; PMTiles overlay visible at zoom 14+.
+- Popups non-empty; taxonomy legend rendered; all three layers visible from zoom 10, and no "layer unavailable" banner.
+- Overture filter panel lists the L0 groups, and the popup shows a taxonomy path.
+- **PMTiles completeness.** The archives must keep every POI at their top zoom
+  (`publish.pmtiles.extend_zooms_if_still_dropping`). For a dense z14 tile (Midtown
+  Manhattan is z14 4824/6157), sum the features of its children at the archive's top
+  zoom (`tippecanoe-decode <archive> z x y`; byte 101 of the header is the top zoom)
+  and compare with the source rows inside the tile's bounds. The sum should be at
+  least the row count (edge buffers duplicate some points). Before 2026-10-03 the
+  archives stopped at z14 and kept 19-75% of POIs there.
 - **Post-territory-expansion runs**: pan to all 4 new territories — Guam (~+144°E) and American Samoa (~-170°W) are the longitudes most likely to expose tile-wrap or PMTiles edge bugs that haven't been exercised before. Verify points render at all 4 territories. Geocoder check: `"Hagåtña"`, `"Charlotte Amalie"`, `"Saipan"`, `"Pago Pago"` should resolve in the search bar (Stadia `boundary.country` now includes `PR,VI,GU,MP,AS`).
 
 ## Published release (Source Cooperative)

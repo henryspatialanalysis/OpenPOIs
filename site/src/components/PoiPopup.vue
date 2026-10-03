@@ -95,16 +95,33 @@
 
       <!-- Overture details -->
       <template v-if="source === 'overture'">
-        <div v-if="entry.l0" class="detail-row">
+        <div v-if="entry.basic_category" class="detail-row">
           <span class="detail-label">Category</span>
-          <span class="detail-value">
-            {{ formatCategory(entry.l0) }}
-            <template v-if="entry.l1"> / {{ formatCategory(entry.l1) }}</template>
-          </span>
+          <span class="detail-value">{{ formatCategory(entry.basic_category) }}</span>
+        </div>
+        <div v-if="taxonomyPath(entry)" class="detail-row">
+          <span class="detail-label">Taxonomy</span>
+          <span class="detail-value">{{ taxonomyPath(entry) }}</span>
         </div>
         <div v-if="entry.brand" class="detail-row">
           <span class="detail-label">Brand</span>
           <span class="detail-value">{{ entry.brand }}</span>
+        </div>
+        <div v-if="entryAddress(entry)" class="detail-row">
+          <span class="detail-label">Address</span>
+          <span class="detail-value">{{ entryAddress(entry) }}</span>
+        </div>
+        <div v-if="entry.phone" class="detail-row">
+          <span class="detail-label">Phone</span>
+          <span class="detail-value">{{ entry.phone }}</span>
+        </div>
+        <div v-if="entry.website" class="detail-row">
+          <span class="detail-label">Website</span>
+          <span class="detail-value">
+            <a :href="entry.website" target="_blank" rel="noopener">
+              {{ entry.website }}
+            </a>
+          </span>
         </div>
         <div v-if="entry.source_dataset" class="detail-row">
           <span class="detail-label">Source</span>
@@ -262,6 +279,15 @@ function formatLastEdited(raw) {
 function formatCategory(cat) {
   if (!cat) return ''
   return cat.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+}
+
+// Overture's full taxonomy path, most general first ("Food And Drink ›
+// Restaurant › Casual Eatery"); falls back to the primary category alone.
+function taxonomyPath(entry) {
+  const path = entry.taxonomy_hierarchy
+    ? entry.taxonomy_hierarchy.split(' > ')
+    : [entry.taxonomy_primary].filter(Boolean)
+  return path.map(formatCategory).join(' › ')
 }
 
 function formatMatchType(src) {

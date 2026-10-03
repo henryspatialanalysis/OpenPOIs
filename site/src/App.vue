@@ -44,7 +44,6 @@ import MapContainer from './components/MapContainer.vue'
 import AmenityFilter from './components/AmenityFilter.vue'
 import {
   OSM_FILTER_KEYS,
-  OVERTURE_CATEGORIES,
   CONFLATED_LABELS,
 } from './constants.js'
 
@@ -54,9 +53,8 @@ const mapRef = ref(null)
 const osmFilters = ref(
   OSM_FILTER_KEYS.reduce((acc, f) => ({ ...acc, [f.key]: true }), {})
 )
-const overtureFilters = ref(
-  OVERTURE_CATEGORIES.reduce((acc, c) => ({ ...acc, [c.key]: true }), {})
-)
+// {filterKey: false} hides an Overture category; empty = everything on.
+const overtureFilters = ref({})
 const conflatedFilters = ref(
   CONFLATED_LABELS.reduce((acc, lbl) => ({
     ...acc,

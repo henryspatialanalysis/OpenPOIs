@@ -28,10 +28,17 @@ These values are what a consumer needs to reproduce this release.
 {version_folder}/
 ├── README.md                         # this file
 ├── osm-parquet/                      # OSM-only snapshot, hive-partitioned by primary_tag
-├── osm-pmtiles/osm.pmtiles           # OSM snapshot as a single PMTiles archive (z10-z14)
+├── osm-pmtiles/osm.pmtiles           # OSM snapshot as a single PMTiles archive (z10+)
 ├── conflated-parquet/                # OSM × Overture conflation, hive-partitioned by shared_label
-└── conflated-pmtiles/conflated.pmtiles
+├── conflated-pmtiles/conflated.pmtiles
+└── overture-pmtiles/
+    ├── overture.pmtiles              # Overture input snapshot (US, conflation taxonomy) as PMTiles (z10+)
+    └── overture_categories.json      # POI counts by taxonomy L0 and basic_category
 ```
+
+The Overture archive carries Overture Maps data under its original licenses
+(CDLA-Permissive-2.0, with Apache-2.0 and CC0-1.0 for some sources); see the
+[Overture attribution guide](https://docs.overturemaps.org/attribution/).
 
 ## Reproducing this build
 

@@ -440,6 +440,11 @@ directories:
     path: ~/data/openpois/snapshots/overture
     files:
       snapshot: overture_snapshot.parquet
+      # Self-hosted web tiles (tiles.overturemaps.org blocks openpois.org
+      # referers since 2026-10) and the filter-panel category counts the site
+      # reads alongside them. Built by scripts/overture/prepare_pmtiles.py.
+      pmtiles: overture_snapshot.pmtiles
+      categories: overture_categories.json
   conflation:
     versioned: true
     path: ~/data/openpois/conflation
@@ -734,17 +739,25 @@ publish:
     osm_snapshot_date: "2026-09-29"   # YYYY-MM-DD Geofabrik extract date
     overture_release: "2026-09-23.1"  # Overture Maps release ID, https://docs.overturemaps.org/release-calendar/
     model_commit: null                # null → use current git HEAD; set a short SHA to pin
-  # PMTiles generation — multi-zoom archive z10–z14 for both OSM and conflated.
-  # Site's View.minZoom is 10 (full-metro view). z10–z14 are served directly
-  # from the PMTiles; z15+ render as lossless OL over-zooms of the z14 tile.
-  # drop-densest-as-needed silently drops features at lower zooms to keep
-  # each tile under ~500 KB; per-zoom point radius scales down on the site.
+  # PMTiles generation — multi-zoom archives for OSM, conflated and Overture.
+  # Site's View.minZoom is 10 (full-metro view). Zooms up to the archive's
+  # top zoom are served directly; deeper views are lossless OL over-zooms of
+  # the top-zoom tile. drop-densest-as-needed drops features to keep each
+  # tile under ~500 KB, and it sets ONE spacing per zoom level, so the densest
+  # tile in the country (Midtown Manhattan) thins every tile at that zoom.
+  # With max_zoom 14 alone, the 2026-10-01 archives kept only 19-75% of POIs
+  # at z14, and over-zooming never brings the dropped ones back.
+  # extend_zooms_if_still_dropping keeps adding zoom levels past max_zoom
+  # until the top zoom drops nothing, so every POI renders somewhere; the
+  # site reads each archive's top zoom from its header.
   pmtiles:
     min_zoom: 10
     max_zoom: 14
+    extend_zooms_if_still_dropping: true
     drop_strategy: "drop-densest-as-needed"
     osm_layer_name: "osm_pois"
     conflated_layer_name: "conflated_pois"
+    overture_layer_name: "overture_pois"
     osm_properties:
       - osm_id
       - osm_type       # node|way|relation — drives popup OSM link path
@@ -775,3 +788,21 @@ publish:
       # confidence from a change-detection-demoted or extrapolated one without
       # fetching the parquet. Null for the ordinary on-curve case.
       - calibration_flag
+    # Overture snapshot columns read into the Overture tiles. The prepare
+    # script renames them to short tile properties (id, name, brand, website,
+    # phone, addr_*) and flattens the LIST columns: websites/phones to their
+    # first entry, taxonomy_hierarchy to a " > "-joined path for the popup.
+    overture_properties:
+      - overture_id
+      - overture_name
+      - brand_name
+      - confidence       # Overture's provider confidence; drives point coloring
+      - taxonomy_l0      # filter-panel group
+      - basic_category   # filter key (Overture's recommended map category)
+      - taxonomy_primary
+      - taxonomy_hierarchy
+      - overture_addr_street
+      - overture_addr_city
+      - overture_addr_state
+      - overture_websites
+      - overture_phones

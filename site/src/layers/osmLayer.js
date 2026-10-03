@@ -8,6 +8,7 @@ import {
   POI_DOT_BY_ZOOM,
 } from '../utils.js'
 import { OSM_PMTILES_URL } from '../constants.js'
+import { watchSourceHealth } from './sourceHealth.js'
 
 // OSM filter keys that drive feature visibility. A feature is visible when at
 // least one *enabled* key has a non-null value on it. If every filter is off,
@@ -25,8 +26,11 @@ const styleCache = {}
 export function getOsmLayer() {
   if (layer) return layer
 
+  const source = new PMTilesVectorSource({ url: OSM_PMTILES_URL })
+  watchSourceHealth(source, 'osm')
+
   layer = new VectorTileLayer({
-    source: new PMTilesVectorSource({ url: OSM_PMTILES_URL }),
+    source,
     style: osmTileStyle,
     zIndex: 10,
   })

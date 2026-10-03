@@ -325,8 +325,8 @@ body,
   text-align: right;
 }
 
-/* Overture "zoom in" hint (Overture tiles are z14-only) */
-.overture-zoom-hint {
+/* Shown while the active data layer's archive cannot be read */
+.layer-unavailable {
   position: absolute;
   top: 50%;
   left: 50%;
@@ -335,18 +335,19 @@ body,
   display: flex;
   align-items: center;
   gap: 6px;
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid #ccc;
+  max-width: calc(100% - 32px);
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid #e0a3a3;
   border-radius: 20px;
   padding: 8px 16px;
   font-size: 14px;
   font-weight: 500;
-  color: #444;
+  color: #8a1f1f;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
   pointer-events: none;
 }
 
-.overture-zoom-hint .material-symbols-outlined {
+.layer-unavailable .material-symbols-outlined {
   font-size: 20px;
 }
 
@@ -492,6 +493,32 @@ body,
 .conflated-filter-list {
   max-height: 240px;
   overflow-y: auto;
+}
+
+.overture-filter-list {
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.overture-group-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.overture-group-toggle {
+  width: 18px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #6b7280;
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.overture-group-members {
+  padding-left: 22px;
 }
 
 /* POI popup */
