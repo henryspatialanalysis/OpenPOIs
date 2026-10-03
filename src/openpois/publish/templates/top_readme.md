@@ -19,7 +19,8 @@ Each refresh writes a new versioned folder. Inside every version:
 ├── osm-parquet/                  # OSM-only snapshot, hive-partitioned by primary_tag
 ├── osm-pmtiles/osm.pmtiles       # OSM snapshot as a single PMTiles archive
 ├── conflated-parquet/            # OSM × Overture conflated snapshot, hive-partitioned by shared_label
-└── conflated-pmtiles/conflated.pmtiles
+├── conflated-pmtiles/conflated.pmtiles
+└── overture-pmtiles/             # Overture input snapshot as PMTiles + filter-category counts
 ```
 
 `latest/` is a server-side mirror of the most recently published version —
