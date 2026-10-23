@@ -218,6 +218,28 @@ Stop the instance (`ec2-openpois stop`) whenever the next step waits on a person
 10. **Wrap up.** `update-site` locally; TODO.md bookkeeping; PR the run branch to main
     (Nat approves); `prune`, check the list, `prune --apply`; `ec2-openpois stop`.
 
+### Measured: a routine month (2026-10-22, no refit, no validation)
+
+About 4½ hours from `ec2-openpois start` to an upload-ready release, then 6 minutes
+of upload. Stages, wall time (peak RSS):
+
+| Stage | Wall | Peak RSS |
+|---|--:|--:|
+| Pre-flight: `compare_taxonomy.py --strict`, `download_history PLAN=1` | ~1 min each | small |
+| OSM history, incremental (parallel with the two below) | 11 min | 2.5 GB |
+| OSM snapshot | 40 min | 3.1 GB |
+| Overture snapshot (2 DuckDB workers) | 64 min | 1.7 GB |
+| `check_history`, drift gate, `build_type_affinity.py` | under 1 min each | |
+| `make rate` | 19 min | 5.7 GB |
+| `conflate_to_cd` + curve reuse + overrides + summarize | 2h17m | 23.3 GB |
+| Package: conflated partition + PMTiles (parallel with the next row) | 49 min | |
+| Package: OSM partition + OSM PMTiles + Overture PMTiles | 53 min | |
+| Upload, including the `latest/` re-upload of the archives | 6 min | 0.3 GB |
+
+The critical path is Overture download → conflation → packaging. Root disk: 63 GB
+used at start (carry-forward plus OS and env), 92 GB at the peak after packaging,
+52 GB after `prune --apply` (which freed 42.5 GB).
+
 ## 5. What comes back to the laptop
 
 `pull <v>` rsyncs into the same relative paths under local `~/data/openpois/`, so local

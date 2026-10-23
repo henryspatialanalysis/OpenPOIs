@@ -103,9 +103,9 @@ Publishing from the remote: after Nat's local `source-coop login`, run
    5. `apply_manual_overrides.py` — apply the Close triage CSV's `exclude` / `include` pins (`directories.manual_overrides`, versioned) in place over `conflated.parquet`. Runs **last** so a forced 0 / 1 is never re-scaled; a missing CSV is a logged no-op.
 
    ```bash
-   make conflate            # full CONUS; peak RSS measured 21.9 GB on 20260902
-                            # (pre-merge reload of both frames; 13.8M Overture
-                            # rows) against the 24 GB WSL cap — see TODO.md
+   make conflate            # full CONUS; conflate_to_cd peaked at 23.3 GB RSS on
+                            # 20261022 (15.4M Overture rows; 21.9 GB on 20260902):
+                            # at the laptop's 24 GB WSL cap, so run on openpois-01
    make conflate TEST=1     # Seattle bbox dry run
 
    # Sub-targets for partial re-runs:
@@ -130,12 +130,25 @@ Publishing from the remote: after Nat's local `source-coop login`, run
    (`scripts/overture/compare_confidence.py`, run during the data pull; decision rule in
    [docs/confidence-calibration.md](../../docs/confidence-calibration.md)). On a
    **pass** (the normal monthly case), do **not** refit — reuse the most recent fitted
-   curves verbatim, then run `scripts/conflation/ht_review.py` on them:
+   curves verbatim. No make target covers this, and `apply_calibration.py
+   --curves-dir` only *reads* the prior curves: it does not copy them, so the new
+   version's `calibration/` would stay empty and `ht_review.py` would have nothing to
+   read. Copy them first, as the 2026-10-22 run did in one remote stage:
    ```bash
-   # copy curves + metadata from the prior conflation version, with a provenance note
-   python scripts/conflation/apply_calibration.py --input-suffix cd --output-suffix "" \
-       --curves-dir ~/data/openpois/conflation/<prior version>/calibration
+   make conflate_to_cd
+   D=~/data/openpois/conflation; P=$D/<prior version>/calibration; C=$D/<version>/calibration
+   mkdir -p $C
+   for s in matched osm overture; do cp $P/${s}_curve.parquet $P/${s}_metadata.json $C/; done
+   cp $P/fit_report.md $C/fit_report_<prior version>.md
+   # write $C/PROVENANCE.md: source dir, round, and the drift-gate metrics that allowed reuse
+   python -u scripts/conflation/apply_calibration.py --input-suffix=cd --output-suffix=""
+   python -u scripts/conflation/plot_calibration.py
+   python -u scripts/conflation/ht_review.py
+   python -u scripts/conflation/apply_manual_overrides.py
+   python -u scripts/conflation/summarize.py
    ```
+   With the same curves and the same validation round, the HT review comes out
+   byte-identical to the fit month's, so its flags are not news.
    **Method-change override:** if the calibration *method* changed since the curves
    being reused were fit (the model, its label layer, or code that changes the
    curves), refit with `make calibrate` even on a pass. **The October 2026 run is such
@@ -176,6 +189,13 @@ Publishing from the remote: after Nat's local `source-coop login`, run
    being produced. See [docs/type-affinity-metric.md](../../docs/type-affinity-metric.md).
    Skip it if neither the taxonomy nor the release changed — the table is
    checked in.
+
+   **Gotcha — committing the rebuilt table.** On openpois-01 the script writes into
+   the remote checkout, and `src/openpois/conflation/data/` is in `.gitignore` even
+   though the CSV is tracked, so a plain `git add` refuses it. Copy it back
+   (`scp ec2-openpois:efs-mount/repos/OpenPOIs/src/openpois/conflation/data/type_affinity.csv ...`),
+   commit it with `git add -f`, discard the remote copy (`git checkout --` via
+   `openpois-remote.sh exec`) and `sync`, so the remote is clean and on the commit.
 
 5. **Match-rate sanity check**:
    ```bash

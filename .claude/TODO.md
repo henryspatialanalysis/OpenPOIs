@@ -45,18 +45,11 @@ did not apply (no refit), items 5–7 followed. Items 8–9 added from that run.
    5 GB); on 2026-10-03 each pass took about 2 minutes from openpois-01. Run the
    verify-pipeline-run tile-completeness check before publishing.
 8. **A curve-reuse month has no make target.** `apply_calibration.py --curves-dir`
-   reads the prior curves but does not copy them, so the new version's `calibration/`
-   stays empty and `ht_review.py` has nothing to read. On 2026-10-22 one remote stage
-   ran `make conflate_to_cd`, copied the three `<segment>_curve.parquet` +
-   `_metadata.json` and the old `fit_report.md` into `conflation/<v>/calibration/` with
-   a `PROVENANCE.md`, then `apply_calibration.py` (default curves dir),
-   `plot_calibration.py`, `ht_review.py`, `apply_manual_overrides.py`, `summarize.py`.
-   Worth a `make conflate_reuse PRIOR=<v>` target. On reused curves and the same round
-   the HT review is byte-identical to the fit month's.
-9. **`type_affinity.csv` is built on the remote under a gitignored path.**
-   `src/openpois/conflation/data/` is in `.gitignore` but the CSV is tracked, so a
-   plain `git add` refuses it. Copy it back (`scp`), commit with `git add -f`, run
-   `git checkout --` on the remote copy, then `sync`.
+   reads the prior curves without copying them; the copy-then-apply sequence the
+   2026-10-22 run used is now in the conflate-snapshots skill (step 4). Worth a
+   `make conflate_reuse PRIOR=<v>` target.
+9. **`type_affinity.csv` needs `git add -f`** (gitignored directory, tracked file); the
+   copy-back-and-commit steps are in the conflate-snapshots skill, step 4b.
 
 ## 2026-10-22 run: outcome (2026-10-23)
 
