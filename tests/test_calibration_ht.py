@@ -143,6 +143,36 @@ def test_correction_rates_and_corrected_labels_by_hand():
         assert np.allclose(labels[silver_rows], value)
 
 
+def test_correction_rates_weight_each_round_under_its_own_design():
+    # Round b samples exists-verdict gold far more thinly than round a, so
+    # weighting the stacked table as one design gives different rates.
+    def one_round(round_id, seed, keep_exists_gold):
+        frame = pd.concat([_rows(s, n = 1500, seed = seed + i)
+                           for i, s in enumerate(calibration_fit.SEGMENTS)],
+                          ignore_index = True)
+        rng = np.random.default_rng(seed)
+        drop = ((frame["llm_verdict"] == "exists") & frame["gold"]
+                & (rng.random(len(frame)) > keep_exists_gold))
+        return frame.assign(validation_round = round_id,
+                            gold = frame["gold"] & ~drop,
+                            y = frame["y"].where(~drop))
+
+    a = one_round("a", 10, 1.0)
+    b = one_round("b", 20, 0.2)
+    config = calibration_fit.FitConfig()
+    rates = cht.correction_rates(pd.concat([a, b], ignore_index = True), config)
+    per_round = calibration_bayes.silver_label_rates([a, b], config)
+    one_design = calibration_bayes.silver_label_rates(
+        pd.concat([a, b], ignore_index = True).assign(validation_round = "x"),
+        config)
+    q = rates.set_index(["segment", "verdict"])["q"]
+    for segment in calibration_fit.SEGMENTS:
+        assert np.isclose(q[(segment, "exists")], per_round[segment]["exists"])
+        assert np.isclose(q[(segment, "gone")], per_round[segment]["gone"])
+    assert any(not np.isclose(q[(s, "exists")], one_design[s]["exists"])
+               for s in calibration_fit.SEGMENTS)
+
+
 def test_correction_rates_fall_back_when_a_segment_lacks_gold():
     # One segment only: silver_label_rates refuses (the other segments have
     # no gold), so every rate comes from the helpers with the same values.
