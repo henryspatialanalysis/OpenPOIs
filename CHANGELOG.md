@@ -1,5 +1,51 @@
 # Changelog
 
+## 2026-10-22-v0
+
+### Snapshot inputs
+
+| Source                 | Value                                       |
+| ---------------------- | ------------------------------------------- |
+| OSM snapshot date      | 2026-10-21                                  |
+| Overture release       | `2026-10-21.0` (pinned)                     |
+| OSM snapshot rows      | 4,552,550                                   |
+| Overture snapshot rows | 15,360,783                                  |
+| Boundary footprint     | US + all territories (PR, USVI, GU, MP, AS) |
+
+### Conflated output
+
+| Metric                       | This run    | Prior        | Δ                       |
+| ---------------------------- | ----------- | ------------ | ----------------------- |
+| Total rows                   | 16,873,428  | 16,591,754   | +281,674 (+1.70%)       |
+| Matched OSM × Overture       | 1,871,280   | 1,855,640    | +15,640 (+0.84%)        |
+| OSM-only                     | 2,675,717   | 2,673,948    | +1,769 (+0.07%)         |
+| Overture-only                | 12,326,431  | 12,062,166   | +264,265 (+2.19%)       |
+| Shadow-matched (CD penalty)  | 26,012      | 25,412       | +600 (+2.36%)           |
+| Shared labels                | 102         | 102          | —                       |
+
+A routine monthly refresh with no methods change. Growth follows the upstream
+Overture release (+2.4% rows month-over-month, of which 1,143,160 were removed
+by internal dedup). Per-label match rates are within one percentage point of
+2026-10-01-v0.
+
+Confidence moves against 2026-10-01-v0 (unflagged rows): Overture-only mean
+`conf_mean` 0.641 → 0.640, OSM-only 0.817 → 0.817, matched 0.902 → 0.901. At
+most 0.5% of POIs in any segment move by more than 0.05.
+
+### Methods changes vs. prior release
+
+- **None to the published method.** The calibration curves are the
+  2026-10-01-v0 curves, reused verbatim: Overture's confidence scores did not
+  drift between releases 2026-09-23.1 and 2026-10-21.0 (on 14,964,964 shared
+  GERS ids: RMSE 0.018, mean difference +0.0007, 0.46% of POIs moving by
+  more than 0.1), which is within the reuse rule.
+- **Type-affinity table rebuilt** against the 2026-10-21.0 category hierarchy
+  from the 2026-10-01-v0 matches.
+- **Change-detection release gate still deferred.** The vetted precision
+  sample of ≥ 100 demoted POIs, deferred in 2026-10-01-v0, was not measured
+  for this release either.
+- No manual overrides were applied in this release.
+
 ## 2026-10-01-v0
 
 ### Snapshot inputs

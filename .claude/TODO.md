@@ -5,6 +5,8 @@ Short running list of in-progress / upcoming work. Edit freely; trim older compl
 ## Next monthly run: November 2026 checklist (raise every item before starting)
 
 Added 2026-10-02 from the October run. List these to Nat before any step runs.
+Carried through the 2026-10-22 run (Nat, 2026-10-22): items 0–3 deferred again, item 4
+did not apply (no refit), items 5–7 followed. Items 8–9 added from that run.
 
 0. **Pooling drift checks were skipped in October; one fails.** The pooling plan
    (`.claude/plans/bayesian-monotone-calibration.md` ~l.1210) requires two checks before
@@ -42,6 +44,27 @@ Added 2026-10-02 from the October run. List these to Nat before any step runs.
    then re-uploads the archives into `latest/` (the proxy cannot server-side copy over
    5 GB); on 2026-10-03 each pass took about 2 minutes from openpois-01. Run the
    verify-pipeline-run tile-completeness check before publishing.
+8. **A curve-reuse month has no make target.** `apply_calibration.py --curves-dir`
+   reads the prior curves but does not copy them, so the new version's `calibration/`
+   stays empty and `ht_review.py` has nothing to read. On 2026-10-22 one remote stage
+   ran `make conflate_to_cd`, copied the three `<segment>_curve.parquet` +
+   `_metadata.json` and the old `fit_report.md` into `conflation/<v>/calibration/` with
+   a `PROVENANCE.md`, then `apply_calibration.py` (default curves dir),
+   `plot_calibration.py`, `ht_review.py`, `apply_manual_overrides.py`, `summarize.py`.
+   Worth a `make conflate_reuse PRIOR=<v>` target. On reused curves and the same round
+   the HT review is byte-identical to the fit month's.
+9. **`type_affinity.csv` is built on the remote under a gitignored path.**
+   `src/openpois/conflation/data/` is in `.gitignore` but the CSV is tracked, so a
+   plain `git add` refuses it. Copy it back (`scp`), commit with `git add -f`, run
+   `git checkout --` on the remote copy, then `sync`.
+
+## 2026-10-22 run: outcome (2026-10-23)
+
+Released as `2026-10-22-v0` (Overture `2026-10-21.0`, Geofabrik 2026-10-21) from
+`run/2026-10-22` on openpois-01, with no refit and no validation round. Drift gate pass
+(RMSE 0.018, bias +0.0007, 0.46% moving > 0.1), so the 20261001 curves were reused.
+16,873,428 rows (+1.7%), per-label match rates within 1 pp of October, calibrated means
+unchanged to 0.001. `conflate_to_cd` peaked at 23.3 GB RSS, 2h17m. Upload 6 min.
 
 ## October 2026 run: outcome (2026-10-02)
 
@@ -62,6 +85,14 @@ re-uploaded). Details in CHANGELOG and the items below.
   `conflation.manual_overrides.path` at it, before the first run that should apply pins.
 
 ## Upcoming
+
+- [ ] **`unified_id` is not unique for OSM rows.** Added 2026-10-23. It is
+  `osm:<osm_id>` without the element type, so a node and a way (or relation) with the
+  same numeric id collide: 148 duplicated ids (296 rows, all `source = 'osm'`) in
+  `2026-10-22-v0`, 151 in `2026-10-01-v0`. Anything keyed on `unified_id` (manual
+  overrides, Close joins, release-over-release diffs) can hit the wrong POI. Fix by
+  folding `osm_type` into the id (`osm:n123` style); that changes a published key, so
+  record it in the CHANGELOG and check the overrides CSV format against it.
 
 - [x] **Obsolete 2026-09-30 (v4 retired; Nat).** **October 2026 run: refit calibration once (method change).** Added 2026-09-26. `matched_index_mode` is now `interaction` and `band_aggregation` is `bin`, so the prior curves (pool-mode, old band) must not be reused even if the Overture drift gate passes. Run `make fit_calibration` against `versions.calibration: 20260730`, then check `fit_report.md`: the interaction coefficients should be close to the round-20260730 fit (a3 ≈ −11, `a1+a3` active) and matched curve metadata should show `index_mode: interaction`, `score_decimals: 6`. The overture curve also shifts at this refit because of the `build_lookup` edge fix. See the "Method-change override" in [docs/confidence-calibration.md](docs/confidence-calibration.md).
 - [ ] **Close the remaining band under-coverage (smoothing bias).** Added 2026-09-26. With `band_aggregation: bin`, simulated coverage of the nominal 95% band is 0.89 (matched), 0.91 (osm), 0.66 (overture). What remains is kernel smoothing bias where the curve bends, worst at the Overture atoms (0.919912, 0.990219). Candidates: an atom-aware bandwidth, or giving each atom its own cell in the overture curve. Re-check with `scripts/conflation/simulate_band_coverage.py --truths osm_1d,overture_1d`. Until then the published bands are narrower than a true 95%.
@@ -121,6 +152,7 @@ re-uploaded). Details in CHANGELOG and the items below.
 - [ ] **Widen `craft` ingest on the next OSM pull.** Added 2026-07-27. `craft` is value-scoped in the ingest filter, so adding values requires re-downloading the history + snapshot PBFs (none are on disk). Queue for the next monthly refresh: `distillery` (623) → Bar, `signmaker` (~1,244) → Print and Copy Shop, `floorer` (490) + `locksmith` (152) → Home Service, `pottery` (404) → Specialty Store. Same for a `social_facility=*` subtag column in `download.osm.extract_keys`, which would split `amenity=social_facility` (19,360, currently all → Community Center) into nursing/assisted-living vs shelters and food banks — the prerequisite for a **Senior Living** shared_label, which was deferred for lack of an OSM side (Overture has `senior_living_facility`, 71k).
 - [ ] **Mirror the Overture crosswalk-liveness check on the OSM side.** Added 2026-07-27. `compare_taxonomy.py` §6 now flags crosswalk rows naming Overture values that no longer exist. Nothing does the equivalent for `taxonomy_crosswalk_openstreetmap.csv` against the tag values actually present in the snapshot, so a deprecated or retagged OSM value would rot silently. Also worth reporting unmapped-but-common values under the value-scoped keys (`historic`, `craft`, `landuse`), since those now go unlabeled rather than falling to a wildcard.
 - [ ] **Walmart Supercenter duplicates reported by Close users (big-box conflation).** Added 2026-09-25. Two Close location reports flag one real Walmart appearing twice, one OSM object plus a second record: Ithaca, NY (OSM way/107643102; Close dest_ids 9574710 and 3746065, both "Walmart Supercenter", 0 m apart; reported 2025-01-16, report `a7830b6a-b95b-4ea1-b981-4bf66724a631`) and Huntsville, AL (OSM way/728262122; reported in the June 2026 batch, report `9b12a0ec-904a-4dc6-b1a9-98c199851d0f`; the reviewer found only one OSM Walmart there, so the second row came from conflation, not OSM). **Neither reproduces in 2026-09-02-v0**: Ithaca now has one Walmart Supercenter (the OSM way; 3746065 is gone) and Huntsville one matched OSM+Overture Walmart (conf 0.986), so the July match-scoring rework most likely merged them; both Close reports were closed as fixed upstream on 2026-09-25. Open work: confirm the mechanism, then guard it. Big-box stores are mapped as large OSM building ways whose Overture point can sit far from the way's centroid, so the same store can fall outside `max_radius_m`, and department listings ("Walmart Pharmacy", "Walmart Auto Care Center") are legitimate separate rows that a naive fix would wrongly merge. Candidate guard: distance to the OSM way outline (or point-in-polygon) rather than to its centroid for building-way matches, plus a QA count of same-brand, same-name pairs within 100 m per release. Stopgap if one resurfaces: an `apply_manual_overrides` exclude on the Overture unified_id, carrying the report id.
+- [ ] **Map `shop=grocery` and `shop=greengrocer` out of the `shop,*` catch-all.** Added 2026-10-21. `taxonomy_crosswalk_openstreetmap.csv` has no row for either value, so both fall to `shop,*` → *Other Shop*, a label Close does not load. Found through 8 Close location reports (June 2026 additions mapped by njhenry) that the wtm.ingest audit could not find in Close: in `2026-10-01-v0` they are present at conf 0.87–0.96, but as *Other Shop*: Bavyas Indian Grocery (node/13963507959), Desi Brothers (13963507963), Mi Ranchito Market (13963337806), Riverwards Produce Market (13963505850), A&N House of Produce (13963505847), SÜPRMARKT (13963337812). The OSM wiki discourages `shop=grocery` (`supermarket` or `convenience` by size), but it is still in use on real food stores; `greengrocer` is a fruit-and-vegetable store. Decide the label for each (*Supermarket*, *Convenience Store*, or a new produce/grocery label with an Overture-side mapping), then run the `sync-taxonomy` pass. Count how many US features carry each value before choosing. wtm.ingest tracks the Close side in `.claude/docs/unresolved_todos.md` §27.
 - [ ] **Ways (and relations) as ghost sources.** Added 2026-09-24. `build_ghosts.py` emits nodes only because the per-version parquets carry node `lat`/`lon` as pseudo-tags but no way geometry, so a deleted / `disused:`-retagged / renamed building way never produces a ghost even though named ways are now first-class survivors on the other side of the rule (the 150 m full-snapshot survivor filter). The same-entity rule made named lifecycle ghosts admissible (F2b), which makes the gap visible: a shop mapped as a building way that gets `disused:shop=*` is invisible to change detection. Needs a position source for prior way versions — either replay node refs from the history PBF at ghost-build time (osmium `--with-history` keeps them) or persist a per-(way, version) centroid during `osm_history_pbf` ingestion. Measure the share of `disused:*` / deleted POI ways in the history first to size the payoff.
 - [ ] **HT review: add gold-only z per bin.** Added 2026-10-02. The corrected rate gives
   every silver row one q per (segment, verdict), flat across score, while the true
