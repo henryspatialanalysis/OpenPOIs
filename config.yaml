@@ -736,7 +736,7 @@ publish:
   # Values surfaced in the per-version README. Set each round until the
   # pipeline captures them automatically — see .claude/TODO.md.
   version_metadata:
-    osm_snapshot_date: "2026-09-29"   # YYYY-MM-DD Geofabrik extract date
+    osm_snapshot_date: "2026-10-21"   # YYYY-MM-DD Geofabrik extract date
     overture_release: "2026-10-21.0"  # Overture Maps release ID, https://docs.overturemaps.org/release-calendar/
     model_commit: null                # null → use current git HEAD; set a short SHA to pin
   # PMTiles generation — multi-zoom archives for OSM, conflated and Overture.
