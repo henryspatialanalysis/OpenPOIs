@@ -21,6 +21,7 @@ Output:
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shutil
 from pathlib import Path
@@ -117,6 +118,28 @@ def drift_gate_table() -> pd.DataFrame | None:
     return pd.read_csv(metrics) if metrics.exists() else None
 
 
+def id_stats_table(version: str) -> pd.DataFrame | None:
+    """This release's stable-id counts beside the prior release's, when the
+    assign_stable_ids stage left ``id_stats.json`` files."""
+    root = config.get_dir_path("conflation").parent
+    rows = {}
+    for label, v in (("this run", version), ("prior", prior_version(root, version))):
+        path = root / str(v) / "id_stats.json" if v else None
+        if path is None or not path.exists():
+            continue
+        stats = json.loads(path.read_text())
+        rows[label] = {
+            "rows": stats["n_rows"],
+            "carried forward": stats["n_reused"],
+            "minted": stats["n_minted"],
+            **stats["changes"],
+        }
+    if "this run" not in rows:
+        return None
+    table = pd.DataFrame(rows).fillna(0).astype(int)
+    return table.reset_index(names = "count")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description = __doc__.split("\n\n")[0])
     parser.add_argument(
@@ -155,6 +178,18 @@ def main() -> None:
         out += [f"- `{stage}`: {line}" for stage, line in verdicts] + [""]
 
     out += ["## Row counts", "", markdown_table(count_table()), ""]
+
+    ids = id_stats_table(version)
+    if ids is not None:
+        out += ["## Stable ids", ""]
+        out += [
+            "Counts by change type against the prior release, from "
+            "`id_stats.json`. A spike in `merged_into` / `split_from` usually "
+            "means a matching or source change; compare with last month.",
+            "",
+            markdown_table(ids),
+            "",
+        ]
 
     drift = drift_gate_table()
     if drift is not None:

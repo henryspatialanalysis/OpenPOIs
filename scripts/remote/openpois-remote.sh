@@ -120,11 +120,14 @@ cmd_seed() {
     calibration=$(local_version calibration)
     echo "seeding: osm_data $osm, overture $overture, model $model," \
         "conflation $conflation, calibration $calibration"
-    "${RSYNC[@]}" -R --info=progress2 \
+    # id_registry.parquet is next month's versions.id_registry; it is produced on
+    # this host, so the laptop only has it after a pull.
+    "${RSYNC[@]}" -R --ignore-missing-args --info=progress2 \
         "$LOCAL_DATA/./osm_data/$osm" \
         "$LOCAL_DATA/./snapshots/overture/$overture/overture_snapshot.parquet" \
         "$LOCAL_DATA/./osm_turnover_model/$model" \
         "$LOCAL_DATA/./conflation/$conflation/conflated.parquet" \
+        "$LOCAL_DATA/./conflation/$conflation/id_registry.parquet" \
         "$LOCAL_DATA/./conflation/$conflation/calibration" \
         "$LOCAL_DATA/./boundary" \
         "$LOCAL_DATA/./census_areas" \
@@ -203,6 +206,9 @@ cmd_pull() {
         "$base/conflation/$version/match_status_by_label.csv"
         "$base/conflation/$version/config.yaml"
         "$base/conflation/$version/run_summary.md"
+        "$base/conflation/$version/id_registry.parquet"
+        "$base/conflation/$version/id_changes.parquet"
+        "$base/conflation/$version/id_stats.json"
         "$base/conflation/$version/calibration_bayes"
         "$base/conflation/$version/calibration_eval_bayes_*"
         "$base/osm_data/*/history_coverage.json"
