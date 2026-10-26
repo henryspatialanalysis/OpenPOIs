@@ -20,12 +20,13 @@ Each refresh writes a new versioned folder. Inside every version:
 ├── osm-pmtiles/osm.pmtiles       # OSM snapshot as a single PMTiles archive
 ├── conflated-parquet/            # OSM × Overture conflated snapshot, hive-partitioned by shared_label
 ├── conflated-pmtiles/conflated.pmtiles
-└── overture-pmtiles/             # Overture input snapshot as PMTiles + filter-category counts
+├── overture-pmtiles/             # Overture input snapshot as PMTiles + filter-category counts
+└── ids/                          # stable-id registry and change log (see "Stable IDs")
 ```
 
 `latest/` is a server-side mirror of the most recently published version —
 use it for live demos and tutorials, and pin a dated folder
-(e.g. `2026-04-23-v0/`) when you need a stable, reproducible reference.
+(e.g. `2026-10-22-v1/`) when you need a stable, reproducible reference.
 
 Browse all versions at
 <https://source.coop/henryspatialanalysis/openpois>.
@@ -37,10 +38,10 @@ Overture Maps places. Key columns:
 
 | Column | Description |
 |---|---|
-| `unified_id` | Stable ID for the conflated POI |
+| `unified_id` | Opaque ID for the place, stable across releases (see Stable IDs) |
 | `source` | `matched` (in both sources), `osm`, or `overture` |
-| `osm_id`, `osm_type` | Source OSM feature (when present) |
-| `overture_id` | Source Overture ID (when present) |
+| `osm_type`, `osm_id` | Source OSM element (`node` / `way` / `relation` + int64 id), when matched to OSM |
+| `overture_id` | Source Overture (GERS) ID, when matched to Overture |
 | `name`, `brand` | Preferred display names |
 | `shared_label` | Harmonised category across the two source taxonomies |
 | `conf_mean` | **Calibrated probability that the POI exists and is currently open to the public** (see Confidence, below) |
@@ -54,6 +55,37 @@ Overture Maps places. Key columns:
 | `geometry` | WKB point (EPSG:4326) |
 
 The `osm-parquet/` files contain the same OSM rows before conflation. This data retains the original OSM tags.
+
+## Stable IDs
+
+`unified_id` (`opoi_` + 16 characters) names a place, not a pairing. It stays
+the same from release to release as long as either of the place's source records
+persists: an Overture-only place keeps its id when OSM adds it, and a matched
+place keeps its id when either partner is replaced. Do not parse it; to join
+back to the sources, use `osm_type` + `osm_id` and `overture_id`.
+
+Each release carries, under `ids/`:
+
+| File | Contents |
+|---|---|
+| `id_registry.parquet` | Every source key seen so far (`osm:n123`, `osm:w123`, `osm:r123`, `ovt:<GERS id>`) and the `unified_id` it last belonged to |
+| `id_changes.parquet` | `old_id`, `new_id`, `change`: ids `minted` for new places, `merged_into` another id when two places became one, `split_from` an id when one place became two, `retired` when a place disappeared, `revived` when it returned, and `renamed_guard` when an OSM element was retagged as a different business |
+| `id_migration_v0_v1.parquet` | v1 releases only: the old `-v0` id of every row and its new id |
+
+When two places merge, the OSM side's id survives. An id that vanishes for a
+release comes back if its source record returns.
+
+Find the stable id of a source record (`osm_type` + `osm_id` works the same way):
+
+```sql
+SELECT unified_id, last_release
+FROM 's3://us-west-2.opendata.source.coop/henryspatialanalysis/openpois/latest/ids/id_registry.parquet'
+WHERE source_key = 'ovt:<overture_id>';   -- or 'osm:n<osm_id>' for a node
+```
+
+Every release up to 2026-10-22 was re-issued as a `-v1` folder with these ids,
+replayed forward from the first release, so ids can be followed across the
+whole history. The `-v0` folders keep their original, unstable ids.
 
 ## Confidence
 
@@ -106,7 +138,7 @@ Read directly from Source Cooperative's S3 mirror (no authentication):
   expansion works over the bucket listing.
 
 Every example uses `VERSION = "latest"`; swap in a dated folder (e.g.
-`"2026-04-23-v0"`) when you need a reproducible pin.
+`"2026-10-22-v1"`) when you need a reproducible pin.
 
 ### Python: pyarrow
 
@@ -115,7 +147,7 @@ import pyarrow.dataset as ds
 import pyarrow.fs as pafs
 
 BASE = "us-west-2.opendata.source.coop/henryspatialanalysis/openpois"
-VERSION = "latest"   # or pin a specific dated folder, e.g. "2026-04-23-v0"
+VERSION = "latest"   # or pin a specific dated folder, e.g. "2026-10-22-v1"
 
 fs = pafs.S3FileSystem(anonymous = True, region = "us-west-2")
 pois = ds.dataset(
@@ -134,7 +166,7 @@ print(f"{pois.count_rows():,} POIs")
 import duckdb
 
 BASE = "s3://us-west-2.opendata.source.coop/henryspatialanalysis/openpois"
-VERSION = "latest"   # or pin a specific dated folder, e.g. "2026-04-23-v0"
+VERSION = "latest"   # or pin a specific dated folder, e.g. "2026-10-22-v1"
 
 con = duckdb.connect()
 con.execute("INSTALL httpfs; LOAD httpfs;")
@@ -163,7 +195,7 @@ import geopandas as gpd
 import pyarrow.fs as pafs
 
 BASE = "us-west-2.opendata.source.coop/henryspatialanalysis/openpois"
-VERSION = "latest"   # or pin a specific dated folder, e.g. "2026-04-23-v0"
+VERSION = "latest"   # or pin a specific dated folder, e.g. "2026-10-22-v1"
 
 fs = pafs.S3FileSystem(anonymous = True, region = "us-west-2")
 # conflated-parquet is hive-partitioned by shared_label.
@@ -196,7 +228,7 @@ PMTiles are authored at zoom 14, so zoom in past z14 to see points.
 <script src="https://unpkg.com/pmtiles@3/dist/pmtiles.js"></script>
 <script>
   const BASE = "https://data.source.coop/henryspatialanalysis/openpois";
-  const VERSION = "latest";   // or pin a specific dated folder, e.g. "2026-04-23-v0"
+  const VERSION = "latest";   // or pin a specific dated folder, e.g. "2026-10-22-v1"
 
   const protocol = new pmtiles.Protocol();
   maplibregl.addProtocol("pmtiles", protocol.tile);
