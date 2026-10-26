@@ -35,6 +35,17 @@ import shapely
 from openpois.io.overture import check_overture_confidence
 
 
+def _osm_keys(osm_types: np.ndarray, osm_ids: np.ndarray) -> list[str]:
+    """``n123`` / ``w123`` / ``r123``: the element type keeps a node and a way
+    with the same number apart.
+
+    The ids built from these are provisional: ``assign_stable_ids.py`` replaces
+    every ``unified_id`` with a release-stable one (see
+    ``openpois.conflation.stable_ids``).
+    """
+    return [f"{str(t)[0]}{int(i)}" for t, i in zip(osm_types, osm_ids)]
+
+
 def _pick_geometries(
     osm_geoms: np.ndarray,
     overture_geoms: np.ndarray,
@@ -254,8 +265,8 @@ def _build_matched_gdf(
 
     unified_ids = np.array(
         [
-            f"matched:{o}_{v}"
-            for o, v in zip(osm_ids, ov_ids)
+            f"matched:{k}_{v}"
+            for k, v in zip(_osm_keys(osm_types, osm_ids), ov_ids)
         ],
         dtype = object,
     )
@@ -354,7 +365,7 @@ def _build_unmatched_osm_gdf(
     nulls = lambda: np.full(n, None, dtype = object)
 
     unified_ids = np.array(
-        [f"osm:{x}" for x in osm_ids], dtype = object,
+        [f"osm:{k}" for k in _osm_keys(osm_types, osm_ids)], dtype = object,
     )
 
     return gpd.GeoDataFrame(
