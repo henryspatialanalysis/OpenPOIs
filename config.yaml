@@ -30,6 +30,11 @@ versions:
   # conflation.manual_overrides). Rows are appended by the Close triage
   # lane; bump the version when the file is re-baselined, not per row.
   manual_overrides: "20260924"
+  # The PRIOR release's id registry (source key -> stable unified_id), read by
+  # scripts/conflation/assign_stable_ids.py. Bump with ``conflation`` each
+  # month, to the version being replaced. 20261022 is the stable-id backfill
+  # registry (2026-10-22-v1).
+  id_registry: "20261022"
 
 # Settings for downloading data
 download:
@@ -455,13 +460,22 @@ directories:
       pmtiles: conflated.pmtiles
       summary_by_label: summary_by_label.csv
       match_status: match_status_by_label.csv
+      id_registry: id_registry.parquet
+      id_changes: id_changes.parquet
+  # Prior release's id registry; same tree as ``conflation``, versioned on
+  # ``versions.id_registry``.
+  id_registry:
+    versioned: true
+    path: ~/data/openpois/conflation
+    files:
+      registry: id_registry.parquet
   ghost_osm:
     versioned: true
     path: ~/data/openpois/ghost_osm
     files:
       ghosts: ghosts.parquet
-  # Manual confidence overrides (columns: unified_id, overture_id, action,
-  # reason, date, report_id). Read by scripts/conflation/
+  # Manual confidence overrides (columns: unified_id, overture_id, osm_type,
+  # osm_id, action, reason, date, report_id). Read by scripts/conflation/
   # apply_manual_overrides.py, the last stage of `make conflate`. A
   # missing file is a no-op.
   manual_overrides:
@@ -616,7 +630,8 @@ conflation:
   # Hand-curated confidence pins, applied by apply_manual_overrides.py as
   # the LAST stage of `make conflate` (after calibration, so a forced
   # conf_mean is never re-scaled). CSV columns: unified_id, overture_id,
-  # action (exclude | include), reason, date, report_id. `exclude` forces
+  # osm_type, osm_id, action (exclude | include), reason, date, report_id;
+  # any one id hitting a row applies the pin. `exclude` forces
   # conf_mean/lower/upper = 0 with calibration_flag 'manual_exclude';
   # `include` forces them to 1 with 'manual_include'. This is the fix path
   # for Overture-only closures / wrong POIs at any threshold; rows are
@@ -627,6 +642,16 @@ conflation:
     # directories.manual_overrides/<versions.manual_overrides>/
     # manual_overrides.csv. A missing file is a no-op (logged).
     path: null
+  # Release-stable unified_id (scripts/conflation/assign_stable_ids.py, run
+  # inside `make conflate_baseline`; see openpois.conflation.stable_ids). Ids
+  # are carried forward through the prior release's registry
+  # (versions.id_registry) by source key; new places get id_prefix + 16
+  # base32 characters of a hash of their founding key. guard_threshold is the
+  # names_match threshold below which a retagged OSM element counts as a
+  # different business and gets a new id (the change-detection name gate).
+  stable_ids:
+    guard_threshold: 70
+    id_prefix: "opoi_"
   # Existence-confidence calibration (see
   # .claude/docs/confidence-calibration.md). From October 2026 production is
   # three Bayesian monotone-spline fits with the fixed-rate mixture label layer
@@ -776,6 +801,7 @@ publish:
     conflated_properties:
       - unified_id
       - source
+      - overture_id    # drives the popup's Overture link
       - osm_id
       - osm_type       # node|way|relation — drives popup OSM link path
       - shared_label
