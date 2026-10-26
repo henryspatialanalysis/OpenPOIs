@@ -14,11 +14,15 @@ them.
 
 CSV columns (all required, header exact)::
 
-    unified_id, overture_id, action, reason, date, report_id
+    unified_id, overture_id, osm_type, osm_id, action, reason, date, report_id
 
-``action`` is ``exclude`` or ``include``; at least one of ``unified_id``
-/ ``overture_id`` must be set on every row. When both are given, either
-one hitting a conflated row applies the override.
+``action`` is ``exclude`` or ``include``. Every row names its POI by at
+least one of ``unified_id``, ``overture_id`` or the pair ``osm_type``
+(``node`` / ``way`` / ``relation``) + ``osm_id``. When several are given,
+any one hitting a conflated row applies the override. ``unified_id`` is
+stable across releases (see ``openpois.conflation.stable_ids``); the
+source ids keep a pin attached even if the replacement guard gives the
+place a new ``unified_id``.
 
 - ``exclude`` → ``conf_mean = conf_lower = conf_upper = 0`` and
   ``calibration_flag = 'manual_exclude'``. The row is kept, so the
@@ -46,8 +50,10 @@ import pyarrow.parquet as pq
 
 
 REQUIRED_COLUMNS = (
-    "unified_id", "overture_id", "action", "reason", "date", "report_id",
+    "unified_id", "overture_id", "osm_type", "osm_id", "action", "reason",
+    "date", "report_id",
 )
+OSM_TYPES = ("node", "way", "relation")
 ACTIONS = ("exclude", "include")
 FLAG_EXCLUDE = "manual_exclude"
 FLAG_INCLUDE = "manual_include"
@@ -85,6 +91,7 @@ def read_overrides(path: Path | str | None) -> pd.DataFrame:
     for col in REQUIRED_COLUMNS:
         df[col] = df[col].astype(str).str.strip()
     df["action"] = df["action"].str.lower()
+    df["osm_type"] = df["osm_type"].str.lower()
     # Drop fully blank lines (a trailing newline pasted in by hand).
     blank = (df[list(REQUIRED_COLUMNS)] == "").all(axis = 1)
     df = df.loc[~blank].reset_index(drop = True)
@@ -96,31 +103,63 @@ def read_overrides(path: Path | str | None) -> pd.DataFrame:
             f"{path}: action must be one of {list(ACTIONS)}; bad rows "
             f"(1-based, excluding header): {rows}"
         )
-    no_id = (df["unified_id"] == "") & (df["overture_id"] == "")
+    has_type = df["osm_type"] != ""
+    has_osm_id = df["osm_id"] != ""
+    bad_osm = (
+        (has_type != has_osm_id)
+        | (has_type & ~df["osm_type"].isin(OSM_TYPES))
+        | (has_osm_id & ~df["osm_id"].str.fullmatch(r"\d+"))
+    )
+    if bad_osm.any():
+        rows = (df.index[bad_osm] + 1).tolist()
+        raise ValueError(
+            f"{path}: osm_type ({'/'.join(OSM_TYPES)}) and a numeric osm_id "
+            f"go together; bad rows (1-based, excluding header): {rows}"
+        )
+    no_id = (df["unified_id"] == "") & (df["overture_id"] == "") & ~has_type
     if no_id.any():
         rows = (df.index[no_id] + 1).tolist()
         raise ValueError(
-            f"{path}: every row needs a unified_id or an overture_id; "
-            f"bad rows (1-based, excluding header): {rows}"
+            f"{path}: every row needs a unified_id, an overture_id or an "
+            f"osm_type + osm_id; bad rows (1-based, excluding header): {rows}"
         )
     return df
 
 
+def _osm_key(osm_type, osm_id) -> str:
+    """``node/123``; "" when either part is missing."""
+    if osm_type is None or osm_id is None:
+        return ""
+    if not isinstance(osm_type, str) or not osm_type:
+        return ""
+    try:
+        if pd.isna(osm_id):
+            return ""
+        return f"{osm_type.lower()}/{int(float(osm_id))}"
+    except (TypeError, ValueError):
+        return ""
+
+
 def build_override_index(
     overrides: pd.DataFrame,
-) -> tuple[dict[str, str], dict[str, str]]:
-    """Map ``unified_id -> action`` and ``overture_id -> action``.
+) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+    """Map ``unified_id``, ``overture_id`` and ``osm_type/osm_id`` to the
+    row's action.
 
     Later rows override earlier ones for the same id.
     """
     by_unified: dict[str, str] = {}
     by_overture: dict[str, str] = {}
+    by_osm: dict[str, str] = {}
     for row in overrides.itertuples(index = False):
         if row.unified_id:
             by_unified[row.unified_id] = row.action
         if row.overture_id:
             by_overture[row.overture_id] = row.action
-    return by_unified, by_overture
+        key = _osm_key(row.osm_type, row.osm_id)
+        if key:
+            by_osm[key] = row.action
+    return by_unified, by_overture, by_osm
 
 
 def _flags_to_list(values) -> list[str | None]:
@@ -138,15 +177,28 @@ def _mask_for(
     return pd.Series(ids, dtype = object).isin(wanted).to_numpy(dtype = bool)
 
 
+def _frame_osm_keys(frame: pd.DataFrame) -> np.ndarray:
+    if "osm_type" not in frame.columns or "osm_id" not in frame.columns:
+        return np.full(len(frame), "", dtype = object)
+    return np.array(
+        [_osm_key(t, i) for t, i in zip(
+            frame["osm_type"].astype(object), frame["osm_id"].astype(object)
+        )],
+        dtype = object,
+    )
+
+
 def apply_overrides_to_frame(
     frame: pd.DataFrame,
     by_unified: dict[str, str],
     by_overture: dict[str, str],
+    by_osm: dict[str, str] | None = None,
 ) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
     """Apply the overrides to an in-memory frame.
 
     ``frame`` needs ``unified_id``, ``overture_id`` (may be null), the
-    three ``conf_*`` columns and, optionally, ``calibration_flag``.
+    three ``conf_*`` columns and, optionally, ``osm_type`` / ``osm_id``
+    and ``calibration_flag``.
     Returns ``(frame, exclude_mask, include_mask)``; exclude wins when
     both apply to one row.
     """
@@ -160,13 +212,18 @@ def apply_overrides_to_frame(
     else:
         oid = np.full(len(frame), "", dtype = object)
 
+    by_osm = by_osm or {}
+    osm = _frame_osm_keys(frame) if by_osm else np.full(len(frame), "", dtype = object)
+
     exclude = (
         _mask_for(uid, by_unified, "exclude")
         | _mask_for(oid, by_overture, "exclude")
+        | _mask_for(osm, by_osm, "exclude")
     )
     include = (
         _mask_for(uid, by_unified, "include")
         | _mask_for(oid, by_overture, "include")
+        | _mask_for(osm, by_osm, "include")
     ) & ~exclude
 
     out = frame.copy()
@@ -205,7 +262,7 @@ def apply_manual_overrides(
     """
     input_path = Path(input_path)
     output_path = Path(output_path)
-    by_unified, by_overture = build_override_index(overrides)
+    by_unified, by_overture, by_osm = build_override_index(overrides)
     in_place = output_path.resolve() == input_path.resolve()
     write_path = (
         output_path.with_name(output_path.name + ".tmp")
@@ -222,8 +279,9 @@ def apply_manual_overrides(
         metadata = base_schema.metadata,
     )
     needed = ["unified_id"] + list(CONF_COLUMNS)
-    if "overture_id" in base_schema.names:
-        needed.append("overture_id")
+    for col in ("overture_id", "osm_type", "osm_id"):
+        if col in base_schema.names:
+            needed.append(col)
     if has_flag:
         needed.append(_FLAG_COLUMN)
 
@@ -234,16 +292,17 @@ def apply_manual_overrides(
         "n_included": 0,
         "hit_unified_ids": set(),
         "hit_overture_ids": set(),
+        "hit_osm_keys": set(),
     }
     with pq.ParquetWriter(
         str(write_path), out_schema, compression = "zstd",
     ) as writer:
         for batch in pf.iter_batches(batch_size = chunk_rows):
             table = pa.Table.from_batches([batch], schema = batch.schema)
-            if by_unified or by_overture:
+            if by_unified or by_overture or by_osm:
                 frame = table.select(needed).to_pandas()
                 updated, exclude, include = apply_overrides_to_frame(
-                    frame, by_unified, by_overture,
+                    frame, by_unified, by_overture, by_osm,
                 )
                 touched = exclude | include
                 if touched.any():
@@ -276,6 +335,10 @@ def apply_manual_overrides(
                             frame["overture_id"].astype(object)[touched]
                             .dropna().tolist()
                         )
+                    if by_osm:
+                        stats["hit_osm_keys"].update(
+                            k for k in _frame_osm_keys(frame)[touched] if k
+                        )
                 elif not has_flag:
                     table = table.append_column(
                         _FLAG_COLUMN,
@@ -298,15 +361,21 @@ def apply_manual_overrides(
 
     # Overrides that matched nothing: worth a warning, never an error (an
     # id can legitimately vanish from a later Overture release).
+    override_osm = pd.Series(
+        [_osm_key(t, i) for t, i in zip(overrides["osm_type"], overrides["osm_id"])],
+        index = overrides.index, dtype = object,
+    )
     unmatched = overrides[
         ~(
             overrides["unified_id"].isin(stats["hit_unified_ids"])
             | overrides["overture_id"].isin(stats["hit_overture_ids"])
+            | override_osm.isin(stats["hit_osm_keys"])
         )
     ]
     stats["n_unmatched_overrides"] = int(len(unmatched))
     stats["hit_unified_ids"] = sorted(stats["hit_unified_ids"])
     stats["hit_overture_ids"] = sorted(stats["hit_overture_ids"])
+    stats["hit_osm_keys"] = sorted(stats["hit_osm_keys"])
     if verbose:
         print(f"  Wrote {stats['rows']:,} rows to {output_path}")
         print(
@@ -323,6 +392,7 @@ def apply_manual_overrides(
                 print(
                     f"    unified_id={row.unified_id or '-'} "
                     f"overture_id={row.overture_id or '-'} "
+                    f"osm={_osm_key(row.osm_type, row.osm_id) or '-'} "
                     f"action={row.action} report_id={row.report_id or '-'}"
                 )
     return stats
