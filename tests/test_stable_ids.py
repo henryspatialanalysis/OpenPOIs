@@ -353,3 +353,22 @@ def test_migration_table_maps_v0_to_v1(tmp_path):
     assert {(m["v0_unified_id"], m["v1_unified_id"]) for m in mig} == {
         ("old0", ids[0]), ("old1", ids[1]),
     }
+
+
+def test_assign_from_registry_applies_a_release_to_another_copy(tmp_path):
+    rows = [{"osm": "n1", "ovt": "X"}, {"ovt": "Y"}, {"osm": "w2"}]
+    ids, _, _, reg, *_ = _run(tmp_path, "20260101", rows)
+    copy = _release(tmp_path / "canonical.parquet", rows[::-1])
+    con = si.connect("1GB")
+    si.load_release(con, [copy])
+    si.load_registry(con, reg)
+    assert si.assign_from_registry(con, "20260101") == 3
+    si.rewrite_unified_id(con, copy, copy)
+    assert pq.read_table(copy).column("unified_id").to_pylist() == [
+        ids[2], ids[1], ids[0],
+    ]
+    # A row the registry has never seen is an error.
+    other = _release(tmp_path / "other.parquet", [{"ovt": "Q"}])
+    si.load_release(con, [other])
+    with pytest.raises(ValueError, match = "without an id"):
+        si.assign_from_registry(con, "20260101")

@@ -182,7 +182,29 @@ def main() -> None:
         help = "Delete each release's v0 download once its v1 passes the checks.",
     )
     parser.add_argument("--memory-limit", default = "24GB")
+    parser.add_argument(
+        "--apply-to", type = Path, default = None,
+        help = (
+            "Instead of backfilling, rewrite this parquet (a copy of the LAST "
+            "release in --releases, e.g. the canonical conflated.parquet) in "
+            "place with that release's backfilled ids."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.apply_to is not None:
+        release = sorted(args.releases)[-1]
+        registry = args.work_dir / release / "v1" / "id_registry.parquet"
+        con = si.connect(args.memory_limit)
+        n = si.load_release(con, [args.apply_to])
+        si.load_registry(con, registry)
+        si.assign_from_registry(con, _yyyymmdd(release))
+        si.rewrite_unified_id(con, args.apply_to, args.apply_to, cast_osm_id = True)
+        bad = si.verify_rewrite(con, args.apply_to)
+        if bad:
+            raise SystemExit(f"{bad:,} rows carry the wrong id after the rewrite")
+        print(f"Rewrote {n:,} rows of {args.apply_to} with the {release} ids.")
+        return
 
     releases = sorted(args.releases)
     if releases[0] != RELEASES[0]:

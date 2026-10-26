@@ -553,6 +553,44 @@ def reconcile(
     return stats
 
 
+def assign_from_registry(con: duckdb.DuckDBPyConnection, release: str) -> int:
+    """Fill ``assigned`` for table ``cur`` from a registry that already
+    covers ``release`` (its keys with ``last_release == release``).
+
+    For applying a release's ids to another copy of the same rows, e.g. the
+    canonical ``conflated.parquet`` behind a published partitioned release.
+    Raises unless every row gets exactly one id and the ids are unique.
+    """
+    con.execute(f"""
+        CREATE OR REPLACE TABLE assigned AS
+        WITH r AS (
+            SELECT source_key, unified_id FROM reg
+            WHERE source_key IS NOT NULL AND last_release = '{release}'
+        )
+        SELECT c.rid, coalesce(ro.unified_id, rv.unified_id) AS unified_id,
+               ro.unified_id AS via_osm, rv.unified_id AS via_ovt
+        FROM cur c
+        LEFT JOIN r ro ON ro.source_key = c.osm_key
+        LEFT JOIN r rv ON rv.source_key = c.ovt_key
+    """)
+    n_cur, n_missing, n_conflict, n_ids = con.execute("""
+        SELECT count(*), count(*) FILTER (WHERE unified_id IS NULL),
+               count(*) FILTER (WHERE via_osm IS DISTINCT FROM via_ovt
+                                AND via_osm IS NOT NULL AND via_ovt IS NOT NULL),
+               count(DISTINCT unified_id)
+        FROM assigned
+    """).fetchone()
+    if n_missing or n_conflict or n_ids != n_cur:
+        raise ValueError(
+            f"registry does not fit these rows: {n_missing:,} without an id, "
+            f"{n_conflict:,} with conflicting keys, {n_ids:,} ids for "
+            f"{n_cur:,} rows"
+        )
+    con.execute("ALTER TABLE assigned DROP COLUMN via_osm")
+    con.execute("ALTER TABLE assigned DROP COLUMN via_ovt")
+    return int(n_cur)
+
+
 def format_stats(stats: dict) -> str:
     """Multi-line summary of a ``reconcile`` stats dict, for logs and
     ``run_summary.md``."""
