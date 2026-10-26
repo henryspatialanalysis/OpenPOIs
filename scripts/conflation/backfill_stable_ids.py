@@ -108,6 +108,7 @@ def run_release(
     work_dir: Path,
     rewrite: bool,
     memory_limit: str,
+    drop_v0: bool = False,
 ) -> Path:
     """Reconcile (and rewrite) one release; return its registry path."""
     rel = _yyyymmdd(release)
@@ -159,6 +160,8 @@ def run_release(
     stats["rewritten"] = rewrite
     (root / "reconcile_stats.json").write_text(json.dumps(stats, indent = 2))
     con.close()
+    if drop_v0 and rewrite:
+        shutil.rmtree(root / "v0")
     print(f"  done in {stats['elapsed_s']:.0f}s", flush = True)
     return registry_path
 
@@ -174,6 +177,10 @@ def main() -> None:
         help = "Reconcile and write the id files only; skip the parquet rewrite.",
     )
     parser.add_argument("--force", action = "store_true")
+    parser.add_argument(
+        "--drop-v0", action = "store_true",
+        help = "Delete each release's v0 download once its v1 passes the checks.",
+    )
     parser.add_argument("--memory-limit", default = "24GB")
     args = parser.parse_args()
 
@@ -199,6 +206,7 @@ def main() -> None:
             registry = run_release(
                 release, prev_registry, args.work_dir,
                 rewrite = not args.no_rewrite, memory_limit = args.memory_limit,
+                drop_v0 = args.drop_v0,
             )
         prev_registry = registry
 
