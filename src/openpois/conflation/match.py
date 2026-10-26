@@ -603,16 +603,34 @@ def compute_match_scores(
 # -----------------------------------------------------------------
 
 
+def source_id_order(ids) -> np.ndarray:
+    """Each element's position when ``ids`` are sorted (ties by position).
+
+    Pass OSM keys as ``"<type>/<id>"`` strings or any sortable values.
+    """
+    ids = pd.Series(np.asarray(ids, dtype = object)).astype(str).to_numpy()
+    order = np.argsort(ids, kind = "stable")
+    rank = np.empty(len(ids), dtype = np.int64)
+    rank[order] = np.arange(len(ids), dtype = np.int64)
+    return rank
+
+
 def select_best_matches(
     scored: pd.DataFrame,
     min_score: float = 0.67,
+    osm_order: np.ndarray | None = None,
+    overture_order: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """
     Greedy one-to-one matching above a minimum composite score.
 
-    Sorts candidates by composite_score descending, then iterates:
+    Sorts candidates by composite_score descending, then distance
+    ascending, then by each POI's position in source-id order
+    (``osm_order`` / ``overture_order``, indexed like ``osm_idx`` /
+    ``overture_idx``; the row indices when omitted), then iterates:
     assign each pair if neither the OSM POI nor the Overture POI has
-    been assigned yet.
+    been assigned yet. The full sort key makes ties independent of
+    input row order, which changes from release to release.
 
     Returns:
         DataFrame of selected matches with all score columns.
@@ -621,9 +639,17 @@ def select_best_matches(
     if above.empty:
         return above
 
-    above = above.sort_values(
-        "composite_score", ascending = False
-    ).reset_index(drop = True)
+    oi_all = above["osm_idx"].to_numpy()
+    vi_all = above["overture_idx"].to_numpy()
+    osm_rank = oi_all if osm_order is None else np.asarray(osm_order)[oi_all]
+    ov_rank = vi_all if overture_order is None else np.asarray(overture_order)[vi_all]
+    order = np.lexsort((
+        ov_rank,
+        osm_rank,
+        above["distance_m"].to_numpy(),
+        -above["composite_score"].to_numpy(),
+    ))
+    above = above.iloc[order].reset_index(drop = True)
 
     used_osm: set[int] = set()
     used_overture: set[int] = set()
@@ -656,6 +682,9 @@ _MATCH_PART_DTYPES = {
     "type_score": np.float32,
     "identifier_score": np.float32,
     "composite_score": np.float32,
+    # Position of the OSM POI in source-id order: the cross-chunk dedup's
+    # final tie-break. Dropped by the dedup.
+    "osm_order": np.int64,
 }
 
 
@@ -700,6 +729,8 @@ def _match_one_chunk(
     overture_wikidata: np.ndarray | None = None,
     id_weights: tuple[float, float, float, float] | None = None,
     no_id_weights: tuple[float, float, float, float] | None = None,
+    osm_order: np.ndarray | None = None,
+    overture_order: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """
     Run the candidates → score → select sequence for one chunk and
@@ -797,6 +828,13 @@ def _match_one_chunk(
 
     local_matches = select_best_matches(
         scored, min_score = min_match_score,
+        osm_order = (
+            osm_order[osm_global_idx] if osm_order is not None else None
+        ),
+        overture_order = (
+            overture_order[ov_global_idx]
+            if overture_order is not None else None
+        ),
     )
     if local_matches.empty:
         return _empty_match_part()
@@ -815,6 +853,10 @@ def _match_one_chunk(
     result = pd.DataFrame(
         {
             "osm_idx": osm_global[keep].astype(np.int32),
+            "osm_order": (
+                osm_order[osm_global[keep]] if osm_order is not None
+                else osm_global[keep]
+            ).astype(np.int64),
             "overture_idx": ov_global[keep].astype(np.int32),
             "distance_m": local_matches["distance_m"]
             .to_numpy()[keep]
@@ -847,7 +889,7 @@ def _dedup_chunk_parquets(
     Stream-dedup chunk match parquets via DuckDB.
 
     Scans every ``chunk_*.parquet`` under ``checkpoint_dir``, ranks
-    rows by ``(composite_score DESC, distance_m ASC, osm_idx ASC)``
+    rows by ``(composite_score DESC, distance_m ASC, osm_order ASC)``
     within each ``overture_idx``, and returns the top row per group.
     Uses a bounded DuckDB memory limit so spilling is preferred over
     OOMing — much cheaper than pandas concat + sort + drop_duplicates
@@ -880,7 +922,7 @@ def _dedup_chunk_parquets(
                         PARTITION BY overture_idx
                         ORDER BY composite_score DESC,
                                  distance_m ASC,
-                                 osm_idx ASC
+                                 osm_order ASC
                     ) AS _rn
                 FROM read_parquet('{glob_pattern}')
             )
@@ -932,6 +974,8 @@ def find_and_score_matches_chunked(
     osm_centroids_lonlat: np.ndarray | None = None,
     overture_centroids_lonlat: np.ndarray | None = None,
     duckdb_memory_limit: str = "4GB",
+    osm_order: np.ndarray | None = None,
+    overture_order: np.ndarray | None = None,
 ) -> tuple[pd.DataFrame, dict]:
     """
     Spatially chunked matching driver.
@@ -961,9 +1005,15 @@ def find_and_score_matches_chunked(
     If ``checkpoint_dir`` is ``None``, a tempdir is created and
     cleaned up on exit. Pass an explicit dir to enable resume.
 
+    ``osm_order`` / ``overture_order`` give each POI's position in
+    source-id order (see ``source_id_order``). They break exact score
+    and distance ties in the greedy selection and the cross-chunk dedup,
+    so a tie resolves the same way whatever the input row order; row
+    indices are used when they are omitted.
+
     Returns:
         ``(matches, summary)`` where ``matches`` has the
-        ``_MATCH_PART_DTYPES`` schema and ``summary`` is a dict of
+        ``_MATCH_PART_DTYPES`` schema (less ``osm_order``) and ``summary`` is a dict of
         observability counters including ``n_chunks``,
         ``min_chunk_pois``, ``max_chunk_pois``, and
         ``n_overture_dedup_drops``, plus the ``osm_primary`` /
@@ -1092,6 +1142,8 @@ def find_and_score_matches_chunked(
                     overture_wikidata = overture_wikidata,
                     id_weights = id_weights,
                     no_id_weights = no_id_weights,
+                    osm_order = osm_order,
+                    overture_order = overture_order,
                 )
                 part.to_parquet(part_path, compression = "zstd")
                 cumulative_matches += len(part)

@@ -278,6 +278,36 @@ class TestSelectBestMatches:
         result = select_best_matches(scored, min_score = 0.67)
         assert len(result) == 0
 
+    def test_exact_tie_breaks_on_source_id_order(self):
+        # Two OSM POIs tie on score and distance for one Overture POI. The
+        # winner follows source-id order, not row order.
+        scored = pd.DataFrame(
+            {
+                "osm_idx": [0, 1],
+                "overture_idx": [0, 0],
+                "distance_m": [12.0, 12.0],
+                "composite_score": [0.85, 0.85],
+            }
+        )
+        osm_order = np.array([1, 0])  # OSM 1 has the smaller source id
+        for frame in (scored, scored.iloc[::-1]):
+            result = select_best_matches(
+                frame, min_score = 0.67, osm_order = osm_order,
+            )
+            assert result["osm_idx"].tolist() == [1]
+
+    def test_distance_breaks_score_ties(self):
+        scored = pd.DataFrame(
+            {
+                "osm_idx": [0, 1],
+                "overture_idx": [0, 0],
+                "distance_m": [30.0, 5.0],
+                "composite_score": [0.85, 0.85],
+            }
+        )
+        result = select_best_matches(scored, min_score = 0.67)
+        assert result["osm_idx"].tolist() == [1]
+
 
 # -----------------------------------------------------------------
 # Chunked driver
