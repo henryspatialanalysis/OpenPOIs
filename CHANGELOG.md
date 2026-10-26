@@ -35,8 +35,9 @@ Share of the prior release's ids still present:
 | 2026-10-01 | 16,591,754 | 96.89% | 96.03% |
 | 2026-10-22 | 16,873,428 | 99.01% | 98.44% |
 
-The June and July releases dropped rows by design (non-POI and private-property
-exclusions), and those ids are retired in either scheme.
+The June and July dips follow rows leaving the data, not id churn: 2026-06-27
+has 3.7M fewer rows than 2026-05-21, and 2026-07-30 introduced the non-POI and
+private-property exclusions. Those ids are retired in either scheme.
 
 Id changes against the prior release:
 
