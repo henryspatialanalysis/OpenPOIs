@@ -222,6 +222,10 @@
           <span class="detail-label">ID</span>
           <span class="detail-value detail-monospace">{{ entry.unified_id }}</span>
         </div>
+        <div v-if="entry.overture_id" class="detail-row detail-row--muted">
+          <span class="detail-label">Overture ID</span>
+          <span class="detail-value detail-monospace">{{ entry.overture_id }}</span>
+        </div>
       </template>
     </template>
   </div>
