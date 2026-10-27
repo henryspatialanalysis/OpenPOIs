@@ -82,6 +82,10 @@
           <span class="detail-label">OSM type</span>
           <span class="detail-value">{{ entry.osm_type }}</span>
         </div>
+        <div v-if="entry.osm_id" class="detail-row detail-row--muted">
+          <span class="detail-label">OSM ID</span>
+          <span class="detail-value detail-monospace">{{ osmRef(entry) }}</span>
+        </div>
         <a
           v-if="entry.osm_id"
           class="osm-link"
@@ -222,6 +226,10 @@
           <span class="detail-label">ID</span>
           <span class="detail-value detail-monospace">{{ entry.unified_id }}</span>
         </div>
+        <div v-if="entry.osm_id" class="detail-row detail-row--muted">
+          <span class="detail-label">OSM ID</span>
+          <span class="detail-value detail-monospace">{{ osmRef(entry) }}</span>
+        </div>
         <div v-if="entry.overture_id" class="detail-row detail-row--muted">
           <span class="detail-label">Overture ID</span>
           <span class="detail-value detail-monospace">{{ entry.overture_id }}</span>
@@ -316,5 +324,11 @@ function cleanOsmId(id) {
   const s = String(id)
   // Strip trailing ".0" from float-cast IDs
   return s.replace(/\.0$/, '')
+}
+
+// The OSM element's unique reference, e.g. "node/123456": the number alone is
+// shared between a node, a way and a relation.
+function osmRef(entry) {
+  return `${entry.osm_type || 'node'}/${cleanOsmId(entry.osm_id)}`
 }
 </script>
