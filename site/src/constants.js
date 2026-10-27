@@ -10,19 +10,19 @@ import {
 // Source Cooperative URLs — PMTiles archives read via ol-pmtiles. Bump the
 // version folder each refresh to match `versions.source_coop` in config.yaml.
 export const OSM_PMTILES_URL =
-  'https://data.source.coop/henryspatialanalysis/openpois/2026-10-22-v0/osm-pmtiles/osm.pmtiles'
+  'https://data.source.coop/henryspatialanalysis/openpois/2026-10-22-v1/osm-pmtiles/osm.pmtiles'
 
 export const CONFLATED_PMTILES_URL =
-  'https://data.source.coop/henryspatialanalysis/openpois/2026-10-22-v0/conflated-pmtiles/conflated.pmtiles'
+  'https://data.source.coop/henryspatialanalysis/openpois/2026-10-22-v1/conflated-pmtiles/conflated.pmtiles'
 
 // Overture PMTiles built from our monthly Overture snapshot, plus the
 // filter-panel category counts published beside it. Self-hosted because
 // tiles.overturemaps.org blocks openpois.org referers.
 export const OVERTURE_PMTILES_URL =
-  'https://data.source.coop/henryspatialanalysis/openpois/2026-10-22-v0/overture-pmtiles/overture.pmtiles'
+  'https://data.source.coop/henryspatialanalysis/openpois/2026-10-22-v1/overture-pmtiles/overture.pmtiles'
 
 export const OVERTURE_CATEGORIES_URL =
-  'https://data.source.coop/henryspatialanalysis/openpois/2026-10-22-v0/overture-pmtiles/overture_categories.json'
+  'https://data.source.coop/henryspatialanalysis/openpois/2026-10-22-v1/overture-pmtiles/overture_categories.json'
 
 // Confidence color ramp (conf_mean 0-1, 1 = stable)
 export const COLORS = {
