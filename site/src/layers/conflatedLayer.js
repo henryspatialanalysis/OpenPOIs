@@ -84,6 +84,7 @@ export function wrapConflatedFeature(rf) {
     source: rf.get('source'),
     osm_id: rf.get('osm_id'),
     osm_type: rf.get('osm_type'),
+    overture_id: rf.get('overture_id'),
     shared_label: rf.get('shared_label'),
     name: rf.get('name'),
     brand: rf.get('brand'),

@@ -36,7 +36,9 @@ Five stages, each separately runnable and individually inspectable:
                               ▼  ghosts.parquet
 ─── 2. conflate.py (--output-suffix=baseline) ──────────────────────────
    rated_osm  ──►  match  ──►  conflated_baseline.parquet
-   overture   ─────┘            (unchanged from the no-CD pipeline)
+   overture   ─────┘            (unchanged from the no-CD pipeline;
+                                 assign_stable_ids.py then sets the
+                                 release-stable unified_id in place)
                               │
                               ▼
 ─── 3. apply_change_detection.py ──────────────────────────────────────
@@ -298,7 +300,8 @@ Anything the automated rule still gets wrong — an Overture-only closure the
 gate misses, a wrong POI at any threshold, or a POI Close must carry despite
 a low score — is fixed by a row in the manual overrides CSV
 ([src/openpois/conflation/manual_overrides.py](../src/openpois/conflation/manual_overrides.py);
-columns `unified_id, overture_id, action, reason, date, report_id`,
+columns `unified_id, overture_id, osm_type, osm_id, action, reason, date,
+report_id`; any one id hitting a row applies the pin,
 `action ∈ exclude | include`). Rows are appended by the Close triage lane
 with the report id. `exclude` forces `conf_mean = conf_lower = conf_upper
 = 0` with `calibration_flag = 'manual_exclude'`; `include` forces 1 with

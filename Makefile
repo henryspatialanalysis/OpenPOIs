@@ -62,6 +62,11 @@ site_preview:
 #   2. conflate.py                 - OSM x Overture matching as before,
 #                                    written to conflated_baseline.parquet
 #                                    so the pre-CD result is archived.
+#                                    assign_stable_ids.py then replaces
+#                                    its provisional unified_id values
+#                                    with release-stable ones, carried
+#                                    forward through the prior release's
+#                                    id registry (versions.id_registry).
 #   3. apply_change_detection.py   - penalize Overture POIs that shadow-
 #                                    match a same-entity ghost; writes
 #                                    conflated_cd.parquet.
@@ -139,11 +144,17 @@ build_ghosts:
 	@$(CONDA_PYTHON) -u scripts/conflation/build_ghosts.py \
 		2>&1 | tee $(LOG_DIR)/build_ghosts_$(LOG_TS).log
 
+# pipefail: a failed conflate.py must not hand a stale baseline to
+# assign_stable_ids.py.
+conflate_baseline: SHELL := /bin/bash
+conflate_baseline: .SHELLFLAGS := -o pipefail -c
 conflate_baseline:
 	@mkdir -p $(LOG_DIR)
 	@$(CONDA_PYTHON) -u scripts/conflation/conflate.py \
 		--output-suffix=baseline $(TEST_FLAG) \
 		2>&1 | tee $(LOG_DIR)/conflate_baseline_$(LOG_TS).log
+	@$(CONDA_PYTHON) -u scripts/conflation/assign_stable_ids.py $(TEST_FLAG) \
+		2>&1 | tee $(LOG_DIR)/assign_stable_ids_$(LOG_TS).log
 
 apply_cd:
 	@mkdir -p $(LOG_DIR)

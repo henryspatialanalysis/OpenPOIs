@@ -16,6 +16,10 @@ def _calibrated(tmp_path, n = 12, with_flag = True):
     frame = pd.DataFrame({
         "unified_id": [f"u{i}" for i in range(n)],
         "overture_id": [f"ov{i}" if i % 3 else None for i in range(n)],
+        "osm_type": [None if i % 3 == 1 else ("way" if i % 2 else "node")
+                     for i in range(n)],
+        # Nullable int64 in the real file; pandas reads it back as float.
+        "osm_id": [np.nan if i % 3 == 1 else float(100 + i) for i in range(n)],
         "source": np.resize(["matched", "osm", "overture"], n),
         "name": ["Place"] * n,
         "conf_mean": rng.uniform(0.3, 0.9, n),
@@ -33,9 +37,14 @@ def _calibrated(tmp_path, n = 12, with_flag = True):
 
 
 def _csv(tmp_path, rows: list[tuple]):
+    """Rows are (unified_id, overture_id, action, reason, date, report_id),
+    or with osm_type, osm_id after overture_id."""
     path = tmp_path / "manual_overrides.csv"
-    lines = ["unified_id,overture_id,action,reason,date,report_id"]
-    lines += [",".join(str(v) for v in r) for r in rows]
+    lines = ["unified_id,overture_id,osm_type,osm_id,action,reason,date,report_id"]
+    for r in rows:
+        if len(r) == 6:
+            r = (r[0], r[1], "", "") + tuple(r[2:])
+        lines.append(",".join(str(v) for v in r))
     path.write_text("\n".join(lines) + "\n")
     return path
 
@@ -146,6 +155,9 @@ def test_unmatched_override_is_counted_not_fatal(tmp_path):
     [
         ([("u1", "", "drop", "r", "d", "rep")], "action must be one of"),
         ([("", "", "exclude", "r", "d", "rep")], "needs a unified_id"),
+        ([("", "", "node", "", "exclude", "r", "d", "rep")], "go together"),
+        ([("", "", "point", "5", "exclude", "r", "d", "rep")], "go together"),
+        ([("", "", "way", "5a", "exclude", "r", "d", "rep")], "go together"),
     ],
 )
 def test_read_overrides_rejects_malformed_rows(tmp_path, rows, message):
@@ -158,3 +170,21 @@ def test_read_overrides_rejects_missing_columns(tmp_path):
     path.write_text("unified_id,action\nu1,exclude\n")
     with pytest.raises(ValueError, match = "missing required column"):
         mo.read_overrides(path)
+
+
+def test_osm_type_and_id_pin_a_row(tmp_path):
+    # osm_id = 100 + i, odd i -> way, i % 3 == 1 -> no OSM side: u3 is
+    # way/103, u6 is node/106, and node/103 is no row.
+    in_path, _ = _calibrated(tmp_path)
+    overrides = mo.read_overrides(_csv(tmp_path, [
+        ("", "", "way", "103", "exclude", "r", "2026-10-26", "rep"),
+        ("", "", "Node", "106", "include", "r", "2026-10-26", "rep"),
+        ("", "", "node", "103", "exclude", "r", "2026-10-26", "rep"),
+    ]))
+    out = tmp_path / "out.parquet"
+    stats = mo.apply_manual_overrides(in_path, out, overrides, verbose = False)
+    res = pd.read_parquet(out).set_index("unified_id")
+    assert res.loc["u3", "calibration_flag"] == "manual_exclude"
+    assert res.loc["u6", "calibration_flag"] == "manual_include"
+    assert stats["n_excluded"] == 1 and stats["n_included"] == 1
+    assert stats["n_unmatched_overrides"] == 1   # node/103 does not exist

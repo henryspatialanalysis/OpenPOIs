@@ -31,6 +31,9 @@ from tqdm import tqdm
 DEFAULT_BUCKET = "henryspatialanalysis"
 DEFAULT_READ_HOST = "https://data.source.coop"
 DEFAULT_ENDPOINT = "https://data.source.coop"
+# Anonymous public reads still work against the legacy flat bucket (keys
+# ``{account}/{repo}/...``); writes must go through the proxy above.
+LEGACY_READ_BUCKET = "us-west-2.opendata.source.coop"
 
 
 def make_client(creds: dict, endpoint_url: str = DEFAULT_ENDPOINT):
@@ -174,6 +177,49 @@ def public_url(key: str, account: str = DEFAULT_BUCKET) -> str:
     if account and not key.startswith(f"{account}/"):
         key = f"{account}/{key}"
     return f"{DEFAULT_READ_HOST}/{key}"
+
+
+def make_anonymous_read_client():
+    """Unsigned boto3 client for public reads from ``LEGACY_READ_BUCKET``."""
+    from botocore import UNSIGNED
+
+    return boto3.client(
+        "s3",
+        region_name = "us-west-2",
+        config = BotoConfig(
+            signature_version = UNSIGNED,
+            read_timeout = 900,
+            retries = {"max_attempts": 5, "mode": "standard"},
+        ),
+    )
+
+
+def download_prefix(
+    client,
+    bucket: str,
+    prefix: str,
+    dest_dir: Path,
+) -> list[Path]:
+    """Download every object under ``prefix`` into ``dest_dir``, keeping the
+    key path below ``prefix``. Files already present with the object's size
+    are skipped, so an interrupted download resumes."""
+    prefix = prefix if prefix.endswith("/") else prefix + "/"
+    dest_dir = Path(dest_dir)
+    paths: list[Path] = []
+    paginator = client.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket = bucket, Prefix = prefix):
+        for obj in page.get("Contents", []) or []:
+            rel = obj["Key"][len(prefix):]
+            if not rel:
+                continue
+            path = dest_dir / rel
+            if not (path.exists() and path.stat().st_size == obj["Size"]):
+                path.parent.mkdir(parents = True, exist_ok = True)
+                tmp = path.with_name(path.name + ".part")
+                client.download_file(bucket, obj["Key"], str(tmp))
+                tmp.replace(path)
+            paths.append(path)
+    return paths
 
 
 def list_keys(client, bucket: str, prefix: str) -> list[str]:

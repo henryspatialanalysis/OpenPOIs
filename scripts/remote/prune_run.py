@@ -9,8 +9,10 @@ published and verified. Kept, for the versions currently set in config.yaml:
     snapshots/overture/<snapshot_overture>/   overture_snapshot.parquet and viz/
                                               (prior month for compare_confidence.py)
     conflation/<conflation>/                  conflated.parquet, calibration/, the
-                                              Bayes eval dirs and the small CSV/MD
-                                              files (type-affinity input, curve reuse)
+                                              Bayes eval dirs, id_registry.parquet
+                                              (next run's versions.id_registry) and
+                                              the small CSV/MD files (type-affinity
+                                              input, curve reuse)
     ghost_osm/<ghost_osm>/                    (22 MB; regenerated monthly anyway)
     osm_turnover_model/<model_output>/        the pinned rating model
     boundary/, census_areas/, logs            untouched

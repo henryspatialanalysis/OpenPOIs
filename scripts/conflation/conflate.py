@@ -55,6 +55,7 @@ from openpois.conflation.match import (
     find_and_score_matches_chunked,
     find_spatial_candidates,
     select_best_matches,
+    source_id_order,
 )
 from openpois.conflation.merge import (
     build_merge_parts,
@@ -691,6 +692,12 @@ if __name__ == "__main__":
     log_rss("after taxonomy assignment + tag-col drop")
 
     # -- Matching --------------------------------------------------
+    # Source-id order breaks exact score/distance ties, so a tie resolves
+    # the same way whatever the snapshot row order.
+    osm_order = source_id_order(
+        osm_gdf["osm_type"].astype(str) + "/" + osm_gdf["osm_id"].astype(str)
+    )
+    overture_order = source_id_order(overture_gdf["overture_id"])
     # Prepare name/brand arrays once (used by both code paths).
     osm_names = osm_gdf["name"].to_numpy()
     osm_brands = (
@@ -770,6 +777,7 @@ if __name__ == "__main__":
             )
             matches = select_best_matches(
                 scored, min_score = MIN_MATCH_SCORE,
+                osm_order = osm_order, overture_order = overture_order,
             )
             print(
                 f"  Selected {len(matches):,} one-to-one matches"
@@ -830,6 +838,8 @@ if __name__ == "__main__":
             chunk_target_pois = CHUNK_TARGET_POIS,
             chunk_size = CHUNK_SIZE,
             checkpoint_dir = checkpoint_dir,
+            osm_order = osm_order,
+            overture_order = overture_order,
         )
         del osm_centroids_lonlat, overture_centroids_lonlat
         print(

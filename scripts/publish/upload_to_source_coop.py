@@ -16,6 +16,7 @@ segment:
             osm-pmtiles/osm.pmtiles
             conflated-parquet/geohash_prefix=*/part-*.parquet
             conflated-pmtiles/conflated.pmtiles
+            ids/id_registry.parquet, ids/id_changes.parquet
             overture-pmtiles/overture.pmtiles
             overture-pmtiles/overture_categories.json
         latest/
@@ -75,6 +76,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-conflated-parquet", action = "store_true",
         help = "Skip the conflated geohash-partitioned parquet upload.",
+    )
+    parser.add_argument(
+        "--skip-ids", action = "store_true",
+        help = "Skip the stable-id registry and change-log upload.",
     )
     parser.add_argument(
         "--skip-pmtiles", action = "store_true",
@@ -178,6 +183,25 @@ def main() -> None:
             patterns = ("*.parquet",),
             dry_run = args.dry_run,
         )
+
+    # Stable-id registry and change log (assign_stable_ids.py). Both are
+    # required: a release without them breaks the id history.
+    if not args.skip_ids:
+        for file_key in ("id_registry", "id_changes"):
+            local = config.get_file_path("conflation", file_key)
+            if not local.exists():
+                raise SystemExit(
+                    f"{local} not found; run assign_stable_ids.py "
+                    "(make conflate_baseline) or pass --skip-ids"
+                )
+            upload_file(
+                client = client,
+                local_path = local,
+                bucket = bucket,
+                key = f"{version_prefix}/ids/{local.name}",
+                dry_run = args.dry_run,
+            )
+            uploaded[f"ids/{local.name}"] = local
 
     if not (args.skip_pmtiles or args.skip_osm_pmtiles):
         osm_pm = config.get_file_path("snapshot_osm", "pmtiles")

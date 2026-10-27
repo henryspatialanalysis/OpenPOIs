@@ -97,7 +97,7 @@ Publishing from the remote: after Nat's local `source-coop login`, run
 
 4. **Run the conflation pipeline.** The canonical entry point is `make conflate`, which orchestrates five stages so every national run gets the OSM-history change-detection penalty, the confidence calibration and the manual overrides automatically (see [docs/change-detection.md](../../../docs/change-detection.md) and [docs/confidence-calibration.md](../../docs/confidence-calibration.md)):
    1. `build_ghosts.py` — reconstruct ghost POIs from OSM history (`ghosts.parquet` under `versions.ghost_osm`).
-   2. `conflate.py --output-suffix=baseline` — OSM × Overture matching, writes `conflated_baseline.parquet` (no-CD archive).
+   2. `conflate.py --output-suffix=baseline` — OSM × Overture matching, writes `conflated_baseline.parquet` (no-CD archive). In the same make target, `assign_stable_ids.py` then replaces the provisional `unified_id` values with release-stable ones, carried forward through the **prior** release's id registry (`versions.id_registry`), and writes `id_registry.parquet` / `id_changes.parquet` / `id_stats.json` into `conflation/<version>/`. **Bump `versions.id_registry` to the version being replaced every month** (it must be older than `versions.conflation`; the stage refuses otherwise), and keep that registry in the remote carry-forward. A missing registry stops the stage; `--bootstrap` mints every id and breaks the id history, so never use it on a national run.
    3. `apply_change_detection.py` — shadow-match unmatched Overture against **same-entity** ghosts (name gate 70 on normalised names, rename-direction guard, 150 m full-snapshot survivor filter, ghosts ≤ 3 years old) and apply the per-`shared_label` δ penalty; writes `conflated_cd.parquet`. Any matcher change must clear the ≥ 70% precision release gate in docs/change-detection.md before publishing.
    4. `make calibrate` — fit the three Bayesian mixture models (1-D Overture, 1-D OSM, 2-D matched; `MODE=mixture run_bayes_phase1.sh`), export grid curves through the §5.1 acceptance gate (`export_bayes_curves.py`), map every POI through them (`apply_calibration.py`), then the plots and the HT review; writes the canonical `conflated.parquet`. Run the fits on openpois-01, not the laptop. If the export refuses (a segment failed acceptance), stop and ask Nat.
    5. `apply_manual_overrides.py` — apply the Close triage CSV's `exclude` / `include` pins (`directories.manual_overrides`, versioned) in place over `conflated.parquet`. Runs **last** so a forced 0 / 1 is never re-scaled; a missing CSV is a logged no-op.
@@ -110,7 +110,7 @@ Publishing from the remote: after Nat's local `source-coop login`, run
 
    # Sub-targets for partial re-runs:
    make build_ghosts        # ghosts only
-   make conflate_baseline   # matching only (writes conflated_baseline.parquet)
+   make conflate_baseline   # matching + stable ids (writes conflated_baseline.parquet)
    make apply_cd            # CD pass only (reads baseline, writes conflated_cd.parquet)
    make conflate_to_cd      # stages 1-3 only: stop after change detection (validation months)
    make calibrate           # fit + export + apply + plot + HT review (reads conflated_cd, writes conflated.parquet)

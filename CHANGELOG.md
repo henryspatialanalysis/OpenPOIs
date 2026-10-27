@@ -1,5 +1,59 @@
 # Changelog
 
+## Stable ids (v1 re-issue of every release, 2026-10-26)
+
+Every release from 2026-04-23 to 2026-10-22 was re-issued as `<date>-v1`. The
+only changes from `-v0` are:
+
+- **`unified_id` is now release-stable and unique.** It is an opaque
+  `opoi_` + 16-character id that stays with a place as long as either of its
+  source records (OSM element or Overture place) persists. The old
+  `matched:<osm>_<overture>` / `osm:<osm_id>` / `overture:<overture_id>` ids
+  changed whenever a match partner changed, and `osm:<osm_id>` collided for a
+  node and a way with the same number (148 duplicates in 2026-10-22-v0). The ids
+  were replayed forward from 2026-04-23, so they can be followed across the whole
+  history. When two places merge, the OSM side's id survives.
+- **New `ids/` folder** in every release: `id_registry.parquet` (every source key
+  seen so far and its id), `id_changes.parquet` (ids minted, merged, split,
+  retired or revived since the previous release) and, in the v1 re-issues,
+  `id_migration_v0_v1.parquet` (each row's v0 id and its v1 id).
+- **`osm_id` is int64** in every v1 release (it was a double up to 2026-09-02).
+- The conflated PMTiles of 2026-10-22-v1 carry the new ids and `overture_id`.
+  Older v1 folders keep their v0 tiles, whose `unified_id` is the v0 id.
+
+Confidence values, row sets and every other column are identical to v0. The
+`-v0` folders stay published, with a pointer to v1.
+
+Share of the prior release's ids still present:
+
+| Release | Rows | v1 ids kept | v0 ids kept |
+| ---------- | ---------- | ------: | ------: |
+| 2026-05-21 | 17,989,377 | 95.02% | 90.43% |
+| 2026-06-27 | 14,278,577 | 78.25% | 73.81% |
+| 2026-07-30 | 14,613,331 | 84.80% | 79.53% |
+| 2026-09-02 | 15,586,580 | 96.51% | 95.19% |
+| 2026-10-01 | 16,591,754 | 96.89% | 96.03% |
+| 2026-10-22 | 16,873,428 | 99.01% | 98.44% |
+
+The June and July dips follow rows leaving the data, not id churn: 2026-06-27
+has 3.7M fewer rows than 2026-05-21, and 2026-07-30 introduced the non-POI and
+private-property exclusions. Those ids are retired in either scheme.
+
+Id changes against the prior release:
+
+| Release | Carried forward | Minted | Merged | Split | Retired | Revived | Replaced (guard) |
+| ---------- | ---------: | --------: | ------: | ------: | --------: | ------: | ----: |
+| 2026-04-23 | 0 | 17,788,585 | 0 | 0 | 0 | 0 | 0 |
+| 2026-05-21 | 16,901,845 | 1,087,532 | 196,343 | 189,207 | 689,423 | 0 | 1,432 |
+| 2026-06-27 | 14,109,320 | 169,257 | 92,075 | 65,768 | 3,819,282 | 32,730 | 1,773 |
+| 2026-07-30 | 12,802,549 | 1,810,782 | 87,878 | 376,404 | 2,082,058 | 694,761 | 1,686 |
+| 2026-09-02 | 14,370,292 | 1,216,288 | 98,565 | 40,693 | 410,533 | 267,421 | 1,976 |
+| 2026-10-01 | 15,343,513 | 1,248,241 | 25,506 | 33,943 | 458,861 | 242,351 | 1,504 |
+| 2026-10-22 | 16,557,628 | 315,800 | 26,004 | 30,540 | 137,256 | 129,719 | 883 |
+
+"Replaced (guard)": an OSM element retagged as a different business (its name
+fails the change-detection name gate) gets a new id.
+
 ## 2026-10-22-v0
 
 ### Snapshot inputs

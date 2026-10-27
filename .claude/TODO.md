@@ -79,13 +79,28 @@ re-uploaded). Details in CHANGELOG and the items below.
 
 ## Upcoming
 
-- [ ] **`unified_id` is not unique for OSM rows.** Added 2026-10-23. It is
-  `osm:<osm_id>` without the element type, so a node and a way (or relation) with the
-  same numeric id collide: 148 duplicated ids (296 rows, all `source = 'osm'`) in
-  `2026-10-22-v0`, 151 in `2026-10-01-v0`. Anything keyed on `unified_id` (manual
-  overrides, Close joins, release-over-release diffs) can hit the wrong POI. Fix by
-  folding `osm_type` into the id (`osm:n123` style); that changes a published key, so
-  record it in the CHANGELOG and check the overrides CSV format against it.
+- [x] **`unified_id` is not unique for OSM rows.** Done 2026-10-26: ids are now
+  opaque, release-stable `opoi_` ids carried through a source-key registry
+  (`stable_ids.py`), and every release was re-issued as `-v1`. See
+  [plans/stable-unified-ids.md](plans/stable-unified-ids.md).
+- [ ] **Re-offer the next candidate to cross-chunk dedup losers.** Added 2026-10-26
+  (deferred from the stable-id work). An OSM POI that loses its Overture partner in
+  `_dedup_chunk_parquets` falls through to OSM-only instead of trying its next
+  candidate. Changes the match set and so the calibration inputs; needs its own
+  precision check.
+- [ ] **Stabilise the Overture dedup winner.** Added 2026-10-26 (deferred). The
+  internal dedup can flip its winner month to month and drops the loser from the
+  output; 99,581 of September's 864,165 losers were published in October. The
+  stable-id stage recovers the id through the dedup alias edge, but the published
+  `overture_id` still flips.
+- [ ] **OSM element merges retire ids.** Added 2026-10-26. When mappers fold a node
+  into a way, the node's key vanishes and its `unified_id` is retired with no
+  successor. A spatial + name link from a vanished OSM key to a new key nearby
+  would let the stable-id stage carry it.
+- [ ] **wtm.ingest: consume the stable ids.** Added 2026-10-26. Close.City should
+  migrate its stored `unified_id` references with `ids/id_migration_v0_v1.parquet`
+  and follow `merged_into` / `split_from` rows in `ids/id_changes.parquet` on each
+  bump instead of treating a new id as delete + add.
 
 - [x] **Obsolete 2026-09-30 (v4 retired; Nat).** **October 2026 run: refit calibration once (method change).** Added 2026-09-26. `matched_index_mode` is now `interaction` and `band_aggregation` is `bin`, so the prior curves (pool-mode, old band) must not be reused even if the Overture drift gate passes. Run `make fit_calibration` against `versions.calibration: 20260730`, then check `fit_report.md`: the interaction coefficients should be close to the round-20260730 fit (a3 ≈ −11, `a1+a3` active) and matched curve metadata should show `index_mode: interaction`, `score_decimals: 6`. The overture curve also shifts at this refit because of the `build_lookup` edge fix. See the "Method-change override" in [docs/confidence-calibration.md](docs/confidence-calibration.md).
 - [ ] **Close the remaining band under-coverage (smoothing bias).** Added 2026-09-26. With `band_aggregation: bin`, simulated coverage of the nominal 95% band is 0.89 (matched), 0.91 (osm), 0.66 (overture). What remains is kernel smoothing bias where the curve bends, worst at the Overture atoms (0.919912, 0.990219). Candidates: an atom-aware bandwidth, or giving each atom its own cell in the overture curve. Re-check with `scripts/conflation/simulate_band_coverage.py --truths osm_1d,overture_1d`. Until then the published bands are narrower than a true 95%.

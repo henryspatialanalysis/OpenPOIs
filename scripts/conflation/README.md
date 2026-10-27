@@ -154,8 +154,9 @@ columns (`osm_name`, `overture_name`, `osm_brand`, `overture_brand`).
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `unified_id` | str | `"matched:{osm_id}_{overture_id}"`, `"osm:{osm_id}"`, or `"overture:{overture_id}"` |
+| `unified_id` | str | Release-stable opaque id (`opoi_` + 16 base32 chars), set by `assign_stable_ids.py`; `conflate.py` writes a provisional `matched:{n123}_{overture_id}` / `osm:{w123}` / `overture:{overture_id}` that the stage replaces |
 | `source` | str | `"matched"`, `"osm"`, or `"overture"` |
+| `osm_type` | str, nullable | `node`, `way` or `relation` |
 | `osm_id` | int64, nullable | OpenStreetMap element ID |
 | `overture_id` | str, nullable | Overture place ID |
 | `name` | str, nullable | Best name (from higher-confidence source) |
