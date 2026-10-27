@@ -20,7 +20,7 @@ versions:
   # openpois-validator's scripts/08_export_handoff.py; the curves are
   # release-specific and do not transport across Overture releases.
   calibration: "20261001"
-  source_coop: "2026-10-22-v0"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
+  source_coop: "2026-10-22-v1"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
   # Ghost POI dataset reconstructed from OSM history (one row per
   # detected previous-state event). Pinned to the same value as
   # ``osm_data`` since it is derived from the same history parquets,
