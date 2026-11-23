@@ -566,6 +566,29 @@ conflation:
     max_radius_m: 100
     chunk_target_pois: 200_000
     duckdb_memory_limit: "4GB"
+  # OSM-internal same-brand dedup (dedup_osm_brand.py), run on the merged rows
+  # before assign_stable_ids.py. Absorbs an OSM-only row into a kept row of the
+  # same shared_label within radius_m whose brand key (brand else name, generic
+  # tokens such as "pharmacy" dropped) reaches min_name_score; a matched row
+  # (OSM + Overture) is always kept. Built for the drugstore building +
+  # in-store pharmacy node pairs (4,427 Pharmacy pairs in 2026-10-22-v1).
+  # labels limits it (null = every label). The accepted list is the labels whose
+  # sampled pairs were the same place at >= 14/15 (8/8 for labels with < 50
+  # pairs) on 2026-10-22, judged from live OSM tags: one destination per place
+  # a person travels to. Rejected: ATM and Charging Station (separate machines
+  # and charge points), Clothing/Shoe/Cell Phone (kids or sub-brand stores next
+  # door), Clinic and Public Safety (separate departments, police vs fire), and
+  # every label under the bar. Table: scripts/conflation/README.md section 8.
+  osm_brand_dedup:
+    enabled: true
+    radius_m: 50
+    min_name_score: 90
+    labels: [
+      "Pharmacy", "Gas Station", "Fast Food", "Hotel", "Restaurant", "Bank",
+      "Place of Worship", "Self-Storage", "Car Dealer", "Supermarket",
+      "Discount Store", "Recreation", "Car Wash", "Real Estate", "Tire Store",
+      "Car Rental", "Pet Store", "Bar", "Kindergarten",
+    ]
   test_bbox:
     xmin: -122.45
     ymin: 47.50

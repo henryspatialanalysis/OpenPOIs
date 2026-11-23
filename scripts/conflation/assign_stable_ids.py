@@ -35,6 +35,7 @@ from config_versioned import Config
 from openpois.conflation import stable_ids as si
 
 DEDUP_DROPPED_FILE = "overture_dedup_dropped.parquet"
+OSM_DEDUP_DROPPED_FILE = "osm_brand_dedup_dropped.parquet"
 
 
 def _suffixed(path: Path, suffix: str) -> Path:
@@ -79,6 +80,7 @@ def main() -> None:
                 )
             prior = None
     dedup = conflated.parent / DEDUP_DROPPED_FILE
+    osm_dedup = conflated.parent / OSM_DEDUP_DROPPED_FILE
 
     print(f"Release:  {release}")
     print(f"Target:   {target} (rewritten in place)")
@@ -89,6 +91,7 @@ def main() -> None:
     si.load_registry(con, prior)
     n_alias = si.load_dedup_aliases(
         con, dedup if (dedup.exists() and not args.test) else None,
+        osm_dedup if (osm_dedup.exists() and not args.test) else None,
     )
     print(f"  {n_rows:,} rows, {n_alias:,} dedup alias pairs")
     stats = si.reconcile(con, release, guard_threshold = guard, prefix = prefix)

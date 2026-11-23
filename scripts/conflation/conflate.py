@@ -48,6 +48,7 @@ from config_versioned import Config
 from shapely.geometry import box
 
 from openpois.conflation.chunking import extract_centroids_lonlat
+from openpois.conflation.dedup_osm_brand import dedup_osm_brand
 from openpois.conflation.dedup_overture import mark_no_conflate
 from openpois.conflation.match import (
     compute_match_scores,
@@ -82,6 +83,7 @@ CHECKPOINT_SUBDIR = "chunk_matches"
 DEDUP_CHECKPOINT_SUBDIR = "chunk_selfdedup"
 DEDUP_DROPPED_FILE = "overture_dedup_dropped.parquet"
 DEDUP_POST_FILTER_FILE = "overture_post_dedup.parquet"
+OSM_DEDUP_DROPPED_FILE = "osm_brand_dedup_dropped.parquet"
 
 
 # -----------------------------------------------------------------
@@ -175,6 +177,14 @@ DEDUP_DUCKDB_MEM = str(
     DEDUP_CFG.get("duckdb_memory_limit", "4GB")
 )
 
+OSM_DEDUP_CFG = config.get(
+    "conflation", "osm_brand_dedup", fail_if_none = False,
+) or {}
+OSM_DEDUP_ENABLED = bool(OSM_DEDUP_CFG.get("enabled", True))
+OSM_DEDUP_RADIUS_M = float(OSM_DEDUP_CFG.get("radius_m", 50))
+OSM_DEDUP_MIN_NAME = float(OSM_DEDUP_CFG.get("min_name_score", 90))
+OSM_DEDUP_LABELS = OSM_DEDUP_CFG.get("labels") or None
+
 # Columns needed for matching (memory optimization). Every key in
 # ``FILTER_KEYS`` must be loaded: ``assign_osm_shared_label`` skips tag
 # columns that are absent, so omitting one silently strips the label
@@ -211,6 +221,11 @@ OSM_MERGE_COLS = [
     # Contact + hours + access
     "phone", "website", "opening_hours", "access",
 ]
+# ``airside`` (post-security airport POIs) entered the OSM extract on
+# 2026-11-23. Snapshots built before then lack it; the merge writes NULL for
+# them (``_col_or_null``), so the column is loaded only when present.
+if "airside" in pq.read_schema(OSM_PATH).names:
+    OSM_MERGE_COLS.append("airside")
 OVERTURE_MERGE_COLS = [
     "overture_id", "overture_name", "brand_name",
     "confidence", "geometry",
@@ -952,6 +967,31 @@ if __name__ == "__main__":
     print("\nSaving conflated dataset ...")
     n_total = save_conflated_from_parts(part_paths, OUTPUT_PATH)
     log_rss("after final parquet stream")
+
+    # -- OSM same-brand dedup (before assign_stable_ids.py) ---------
+    # Needs the merged rows: it keeps the row that carries the Overture
+    # match. See openpois.conflation.dedup_osm_brand.
+    osm_dedup_summary: dict | None = None
+    osm_dedup_audit = conflation_dir / (
+        "osm_brand_dedup_dropped_test.parquet" if args.test
+        else OSM_DEDUP_DROPPED_FILE
+    )
+    if OSM_DEDUP_ENABLED:
+        print(
+            f"\nOSM same-brand dedup (radius {OSM_DEDUP_RADIUS_M:g} m, "
+            f"name score >= {OSM_DEDUP_MIN_NAME:g}) ..."
+        )
+        osm_dedup_summary = dedup_osm_brand(
+            OUTPUT_PATH, osm_dedup_audit,
+            radius_m = OSM_DEDUP_RADIUS_M,
+            min_name_score = OSM_DEDUP_MIN_NAME,
+            labels = OSM_DEDUP_LABELS,
+        )
+        n_total -= osm_dedup_summary["n_absorbed"]
+        log_rss("after OSM same-brand dedup")
+    elif osm_dedup_audit.exists():
+        # A stale audit would feed id aliases for rows still present.
+        osm_dedup_audit.unlink()
     config.write_self("conflation")
 
     # Clear chunk checkpoints after a successful save.
@@ -994,5 +1034,10 @@ if __name__ == "__main__":
             f"  Overture internal dedup: "
             f"{dedup_summary['n_dropped']:,} dropped across "
             f"{dedup_summary['n_multi_clusters']:,} clusters"
+        )
+    if osm_dedup_summary is not None:
+        print(
+            f"  OSM same-brand dedup: "
+            f"{osm_dedup_summary['n_absorbed']:,} rows absorbed"
         )
     print(f"  Output: {OUTPUT_PATH}")

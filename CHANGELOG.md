@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **Same-brand OSM duplicates are merged.** OSM maps many places twice with valid
+  tags: a drugstore building (`shop=chemist`) and the pharmacy counter inside it
+  (`amenity=pharmacy`), two canopies of one fuel station, a church building and its
+  grounds. Each was released as its own POI. A new stage, `dedup_osm_brand.py`, runs on
+  the merged rows before the stable ids and folds an OSM-only row into a kept row of the
+  same label within 50 m whose brand matches (brand, else name, with generic words such
+  as "pharmacy" dropped; token_set_ratio >= 90). A row matched to Overture is always
+  kept, and Overture-only rows are never touched. It runs for 19 labels chosen by spot
+  check (Pharmacy, Gas Station, Fast Food, Hotel, Restaurant, Bank, Place of Worship,
+  Self-Storage, Car Dealer, Supermarket, Discount Store, Recreation, Car Wash, Real
+  Estate, Tire Store, Car Rental, Pet Store, Bar, Kindergarten); ATMs, charge points,
+  clinics and kids / sub-brand stores are left alone (table in
+  `scripts/conflation/README.md` section 8). On 2026-10-22 it absorbs 8,940 rows into
+  8,727 kept rows (Pharmacy 4,332, Gas Station 2,111, Fast Food 560, Hotel 380, ...).
+  The absorbed element's id is recorded as `merged_into` the kept row's id in
+  `id_changes.parquet`.
+- **New column `absorbed_osm_keys`** (list<string>, null when empty): the OSM elements
+  merged into the row, as `node/123` / `way/456` / `relation/789`, so a lookup by OSM
+  element still finds the place.
+- **A kept node takes the building's geometry.** When the kept row is an OSM node and a
+  building way or relation was merged into it, the row's geometry is the building's
+  (2,334 rows on 2026-10-22). `bbox` and `geohash` follow the new geometry;
+  `match_distance_m` still describes the OSM x Overture link.
 - **Unnamed playgrounds and pitches in public parks are kept.** The residential-landuse
   exclusion now exempts a point that also falls inside a public `leisure=park` /
   `leisure=recreation_ground` polygon (`access` not private). US residential blocks

@@ -15,7 +15,8 @@ the opaque id of the row it last belonged to.
 Each release, every conflated row looks up the ids of its source keys:
 
 1. **Edges.** OSM key -> registry id; Overture key -> registry id; and, for
-   an Overture dedup winner, each dropped loser's key -> registry id (an
+   an Overture dedup winner or a row that absorbed a same-brand OSM element
+   (``dedup_osm_brand``), each dropped loser's key -> registry id (an
    *alias* edge). An OSM edge whose name changed to a different business
    (``ghost_osm.names_match`` fails on both non-empty names) is a
    *replacement*: the row may not take that id by any edge.
@@ -197,9 +198,16 @@ def load_registry(
 def load_dedup_aliases(
     con: duckdb.DuckDBPyConnection,
     path: Path | str | None,
+    osm_path: Path | str | None = None,
 ) -> int:
-    """Load an ``overture_dedup_dropped.parquet`` audit into table ``aliases``
-    (``loser_key``, ``winner_key``); empty when the file is absent."""
+    """Load the dedup audits into table ``aliases`` (``loser_key``,
+    ``winner_key``); empty when the files are absent.
+
+    ``path`` is ``overture_dedup_dropped.parquet`` (Overture loser ->
+    Overture winner). ``osm_path`` is ``osm_brand_dedup_dropped.parquet``
+    from :mod:`openpois.conflation.dedup_osm_brand`: an absorbed OSM element
+    -> the kept row's OSM key, or its Overture key when it has none.
+    """
     con.execute("DROP TABLE IF EXISTS aliases")
     con.execute("CREATE TABLE aliases (loser_key VARCHAR, winner_key VARCHAR)")
     if path is not None and Path(path).exists():
@@ -208,6 +216,15 @@ def load_dedup_aliases(
             SELECT DISTINCT 'ovt:' || overture_id, 'ovt:' || winner_overture_id
             FROM read_parquet('{Path(path)}')
             WHERE overture_id IS NOT NULL AND winner_overture_id IS NOT NULL
+        """)
+    if osm_path is not None and Path(osm_path).exists():
+        con.execute(f"""
+            INSERT INTO aliases
+            SELECT DISTINCT loser_osm_key,
+                   coalesce(winner_osm_key, 'ovt:' || winner_overture_id)
+            FROM read_parquet('{Path(osm_path)}')
+            WHERE loser_osm_key IS NOT NULL
+              AND coalesce(winner_osm_key, winner_overture_id) IS NOT NULL
         """)
     return int(con.execute("SELECT count(*) FROM aliases").fetchone()[0])
 
@@ -241,10 +258,12 @@ def _build_edges(con: duckdb.DuckDBPyConnection) -> None:
             SELECT c.rid, r.unified_id, {_KIND_ALIAS}, r.stale, r.id_minted,
                    a.loser_key, NULL, NULL
             FROM aliases a
-            JOIN cur c ON c.ovt_key = a.winner_key
+            JOIN cur c ON c.ovt_key = a.winner_key OR c.osm_key = a.winner_key
             JOIN r ON r.source_key = a.loser_key
             WHERE a.loser_key NOT IN (
-                SELECT ovt_key FROM cur WHERE ovt_key IS NOT NULL)
+                SELECT ovt_key FROM cur WHERE ovt_key IS NOT NULL
+                UNION ALL
+                SELECT osm_key FROM cur WHERE osm_key IS NOT NULL)
         )
         SELECT * FROM raw
     """)
