@@ -153,6 +153,16 @@ download:
                   'common', 'batting_cage', 'practice_pitch', 'paddling_pool']
         amenity: ['fountain', 'shower', 'boat_storage', 'rv_storage']
         tourism: ['rv_pitch']
+      # A point that ALSO falls inside a public park polygon (leisure=park or
+      # recreation_ground, access not private/no, taken from the snapshot being
+      # filtered) is kept: US residential blocks often enclose city parks, and
+      # the rule was dropping their unnamed playgrounds and pitches (Canyon Rim
+      # Park, Millcreek UT, 2026-11). Takes effect from the next OSM pull, or a
+      # re-run of apply_residential_exclusion.py on a *.preresidential.parquet.
+      park_exemption:
+        enabled: true
+        leisure_values: ['park', 'recreation_ground']
+        excluded_access: ['private', 'no']
     extract_keys: [
       'addr:city','addr:country','addr:housename','addr:housenumber','addr:postcode',
       'addr:state','addr:street','addr:unit','access','airside','amenity','atm','bar',

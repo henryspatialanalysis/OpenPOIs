@@ -37,6 +37,14 @@ carries an *unmapped* value: such a row is scoped on that unmapped tag, finds
 it out of scope, and is kept. The exclusion therefore errs towards
 under-dropping, which is the right direction for a rule that deletes data.
 
+- **Public parks are exempt** (when ``park_exemption`` is configured). In the
+  US a ``landuse=residential`` block often encloses a city park, so an unnamed
+  playground or pitch inside a public park was dropped as if it were a backyard
+  (Canyon Rim Park, Millcreek UT: three playgrounds). A point that also falls
+  inside a ``leisure=park`` / ``leisure=recreation_ground`` polygon whose
+  ``access`` is not private is kept. The park polygons come from the POI
+  snapshot itself (:func:`load_park_polygons`), so no extra extract is needed.
+
 See the "Exclusion" section of .claude/docs/data-sources.md for the measured
 drop rate and the false-exclusion estimate.
 """
@@ -280,6 +288,74 @@ def load_residential_areas(
     return gdf
 
 
+def load_park_polygons(
+    snapshot_path: Path,
+    leisure_values: Sequence[str] = ("park", "recreation_ground"),
+    excluded_access: Sequence[str] = ("private", "no"),
+    batch_size: int = 500_000,
+    verbose: bool = True,
+) -> gpd.GeoDataFrame:
+    """Public park polygons from a POI snapshot, for the exemption.
+
+    Streams ``snapshot_path`` (only ``leisure``, ``access`` and ``geometry``),
+    keeping polygonal rows whose ``leisure`` is in ``leisure_values`` and whose
+    ``access`` is not in ``excluded_access``. Named or not: an unnamed public
+    park still marks public land.
+
+    Returns:
+        A ``GeoDataFrame`` with a single ``geometry`` column in EPSG:4326 (empty
+        when ``leisure_values`` is empty or the snapshot has no ``leisure``).
+    """
+    wanted = {str(v) for v in leisure_values if v}
+    blocked = {str(v) for v in (excluded_access or ()) if v}
+    source = pq.ParquetFile(snapshot_path)
+    names = source.schema_arrow.names
+    geoms = []
+    if wanted and "leisure" in names:
+        cols = ["leisure", "geometry"] + (["access"] if "access" in names else [])
+        for batch in source.iter_batches(batch_size = batch_size, columns = cols):
+            df = batch.to_pandas()
+            keep = np.array(
+                df["leisure"].isin(wanted).to_numpy(dtype = bool, na_value = False),
+            )
+            if "access" in df.columns and blocked:
+                keep = keep & ~df["access"].isin(blocked).to_numpy(
+                    dtype = bool, na_value = False,
+                )
+            if not keep.any():
+                continue
+            g = shapely.from_wkb(df.loc[keep, "geometry"].to_numpy())
+            types = shapely.get_type_id(g)
+            # 3 = Polygon, 6 = MultiPolygon
+            geoms.append(g[(types == 3) | (types == 6)])
+    arr = np.concatenate(geoms) if geoms else np.array([], dtype = object)
+    gdf = gpd.GeoDataFrame(geometry = arr, crs = "EPSG:4326")
+    if verbose:
+        print(f"Loaded {len(gdf):,} public park polygons from {snapshot_path}")
+    return gdf
+
+
+def park_exemption_from_config(
+    residential_cfg: Mapping | None,
+    snapshot_path: Path,
+    verbose: bool = True,
+) -> gpd.GeoDataFrame | None:
+    """Exempt polygons for ``download.osm.residential_exclusion.park_exemption``.
+
+    Returns ``None`` when the block is absent or ``enabled`` is false, else the
+    public park polygons of ``snapshot_path`` (the file being filtered).
+    """
+    block = (residential_cfg or {}).get("park_exemption") or {}
+    if not block.get("enabled", False):
+        return None
+    return load_park_polygons(
+        snapshot_path,
+        leisure_values = block.get("leisure_values") or ("park", "recreation_ground"),
+        excluded_access = block.get("excluded_access") or ("private", "no"),
+        verbose = verbose,
+    )
+
+
 def primary_tag(
     df: pd.DataFrame, filter_keys: Sequence[str],
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -440,12 +516,14 @@ def residential_drop_mask(
     scoped_tags: Mapping[str, Sequence[str]] | None,
     filter_keys: Sequence[str],
     geometry: np.ndarray | None = None,
+    exempt: gpd.GeoDataFrame | shapely.STRtree | None = None,
 ) -> np.ndarray:
-    """Rows to DROP: unnamed, in scope, and inside a residential polygon.
+    """Rows to DROP: unnamed, in scope, inside a residential polygon, and not
+    inside an exempt (public park) polygon.
 
-    All three conditions must hold, so a named feature is never dropped, an
-    out-of-scope tag is never dropped, and a POI outside every residential
-    polygon is never dropped.
+    All conditions must hold, so a named feature is never dropped, an
+    out-of-scope tag is never dropped, a POI outside every residential polygon
+    is never dropped, and a POI inside a public park is never dropped.
 
     Args:
         df: Frame with ``name`` and the ``filter_keys`` tag columns.
@@ -455,6 +533,8 @@ def residential_drop_mask(
         filter_keys: Keys in priority order.
         geometry: Shapely geometries aligned to ``df``. Defaults to
             ``df["geometry"]``.
+        exempt: Public park polygons (or a prebuilt tree); ``None`` or empty
+            disables the exemption.
 
     Returns:
         Null-free boolean array of length ``len(df)``.
@@ -465,7 +545,13 @@ def residential_drop_mask(
         return drop
     if geometry is None:
         geometry = df["geometry"].to_numpy()
-    drop[eligible] = points_within(np.asarray(geometry)[eligible], residential)
+    candidates = np.asarray(geometry)[eligible]
+    inside = points_within(candidates, residential)
+    if exempt is not None and inside.any():
+        in_park = np.zeros(len(candidates), dtype = bool)
+        in_park[inside] = points_within(candidates[inside], exempt)
+        inside &= ~in_park
+    drop[eligible] = inside
     return drop
 
 
@@ -514,6 +600,7 @@ def filter_parquet_by_residential(
     filter_keys: Sequence[str],
     batch_size: int = 250_000,
     verbose: bool = True,
+    exempt: gpd.GeoDataFrame | shapely.STRtree | None = None,
 ) -> tuple[int, pd.DataFrame]:
     """Stream a POI parquet through the residential exclusion.
 
@@ -533,6 +620,8 @@ def filter_parquet_by_residential(
         filter_keys: Keys in priority order.
         batch_size: Rows per pyarrow batch.
         verbose: Print per-batch progress.
+        exempt: Public park polygons (or a prebuilt tree) whose points are
+            never dropped; see :func:`load_park_polygons`. ``None`` disables.
 
     Returns:
         ``(rows_kept, dropped_by_tag)``. ``dropped_by_tag`` has columns
@@ -553,6 +642,7 @@ def filter_parquet_by_residential(
     # Built once: an STRtree over a national landuse layer is millions of
     # polygons, and rebuilding it per batch would dominate the runtime.
     tree = build_index(residential)
+    exempt_tree = build_index(exempt) if exempt is not None else None
 
     source = pq.ParquetFile(input_path)
     schema = source.schema_arrow
@@ -575,6 +665,7 @@ def filter_parquet_by_residential(
             geom = shapely.from_wkb(df["geometry"].to_numpy())
             drop = residential_drop_mask(
                 df, tree, scoped_tags, filter_keys, geometry = geom,
+                exempt = exempt_tree,
             )
             if drop.any():
                 _accumulate_drops(

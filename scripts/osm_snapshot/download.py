@@ -46,6 +46,7 @@ from openpois.osm.residential import (
     build_residential_layer,
     filter_parquet_by_residential,
     load_residential_areas,
+    park_exemption_from_config,
 )
 
 # -----------------------------------------------------------------------------
@@ -188,6 +189,7 @@ if __name__ == "__main__":
             scoped_tags = RESIDENTIAL_SCOPED_TAGS,
             filter_keys = FILTER_KEYS,
             verbose = VERBOSE,
+            exempt = park_exemption_from_config(RESIDENTIAL, OUTPUT_PATH),
         )
         prefilter_path = OUTPUT_PATH.with_suffix(".preresidential.parquet")
         OUTPUT_PATH.rename(prefilter_path)

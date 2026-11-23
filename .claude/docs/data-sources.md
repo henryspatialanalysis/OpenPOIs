@@ -188,6 +188,24 @@ actually *eligible* — unnamed and in scope — the rule removed 6, **all of th
 right, but note the small denominator: with only 2 eligible `exists` POIs this
 establishes no useful upper bound on the false-exclusion rate.
 
+**Public-park exemption (2026-11-23).** US `landuse=residential` blocks often enclose a
+city park, so the rule also dropped unnamed playgrounds and pitches inside public parks
+(reported: Canyon Rim Park, Millcreek UT — three `leisure=playground` ways inside
+`landuse=residential` way/941663800, which also contains the park way/419782095). A point
+that also falls inside a `leisure=park` / `leisure=recreation_ground` polygon whose
+`access` is not `private` / `no` is now kept
+(`download.osm.residential_exclusion.park_exemption`). The park polygons are read from the
+snapshot being filtered (`load_park_polygons`); parks are never in scope, so they are
+always present. Measured on the 2026-11-21 Geofabrik US extract with the current rule:
+264,091 unnamed POIs dropped, of which the exemption restores **31,710** (12%) —
+Recreation 15,573 (pitches 15,506), Playground 12,985, Swimming Pool 1,583, Park 1,029,
+Other Amenity 537, Self-Storage 3. By tag, the share restored is 41% of dropped
+playgrounds and 22% of pitches against 1.2% of swimming pools, which is what the
+backyard-pool hypothesis predicts: the rule keeps doing its job on private land. All three
+Canyon Rim playgrounds are restored. It takes effect from the next OSM pull (or a re-run of
+`apply_residential_exclusion.py` against a `*.preresidential.parquet`); re-running it on an
+already-filtered snapshot cannot bring rows back.
+
 **Do not use `conf_mean` to sanity-check this exclusion.** Dropped rows skew
 *high* (93,943 in the 0.8–1.0 band against 568 below 0.2), because the turnover
 model scores name-change stability and an unnamed POI has no name to change. The

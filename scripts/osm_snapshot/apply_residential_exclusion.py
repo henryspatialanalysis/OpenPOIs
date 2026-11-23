@@ -50,6 +50,7 @@ from config_versioned import Config
 from openpois.osm.residential import (
     filter_parquet_by_residential,
     load_residential_areas,
+    park_exemption_from_config,
 )
 
 config = Config("~/repos/openpois/config.yaml")
@@ -116,6 +117,9 @@ def main() -> None:
         raise SystemExit("scoped_tags is empty; nothing would be dropped.")
 
     areas = load_residential_areas(AREAS_PATH, LANDUSE_VALUES)
+    # Public parks come from the file being filtered (parks are never in scope,
+    # so they survive every pass and the pre-exclusion copy has them too).
+    exempt = park_exemption_from_config(RESIDENTIAL, target_path)
     print(f"Reading  {target_path}")
 
     if args.report_only:
@@ -126,6 +130,7 @@ def main() -> None:
             scoped_tags = scoped,
             filter_keys = FILTER_KEYS,
             verbose = False,
+            exempt = exempt,
         )
         _print_report(target_path, n_out, report)
         return
@@ -140,6 +145,7 @@ def main() -> None:
             scoped_tags = scoped,
             filter_keys = FILTER_KEYS,
             verbose = True,
+            exempt = exempt,
         )
     except Exception:
         # Restore the original so a failed run leaves nothing half-written.

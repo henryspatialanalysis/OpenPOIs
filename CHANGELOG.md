@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Unnamed playgrounds and pitches in public parks are kept.** The residential-landuse
+  exclusion now exempts a point that also falls inside a public `leisure=park` /
+  `leisure=recreation_ground` polygon (`access` not private). US residential blocks
+  often enclose city parks, and the rule was dropping their unnamed playgrounds and
+  pitches (Canyon Rim Park, Millcreek UT). Measured on the 2026-11-21 US extract it
+  restores 31,710 of the 264,091 rows the rule drops (Recreation 15,573, Playground
+  12,985, Swimming Pool 1,583, Park 1,029, Other Amenity 537). Applies from the next
+  OSM pull.
 - **New column `airside`**: the OSM `airside` tag, carried like `access` (null for
   Overture-only rows). `yes` marks a place past airport security, which a traveller
   outside the airport cannot reach. The OSM extract gains the key from the next
