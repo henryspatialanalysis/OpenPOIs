@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **New column `airside`**: the OSM `airside` tag, carried like `access` (null for
+  Overture-only rows). `yes` marks a place past airport security, which a traveller
+  outside the airport cannot reach. The OSM extract gains the key from the next
+  snapshot; releases built from older snapshots carry it as all null.
+
 ## Stable ids (v1 re-issue of every release, 2026-10-26)
 
 Every release from 2026-04-23 to 2026-10-22 was re-issued as `<date>-v1`. The

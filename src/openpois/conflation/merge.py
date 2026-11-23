@@ -235,6 +235,7 @@ def _build_matched_gdf(
     # OSM-only fields
     opening_hours = _col_or_null(osm_gdf, "opening_hours", oi)
     access = _col_or_null(osm_gdf, "access", oi)
+    airside = _col_or_null(osm_gdf, "airside", oi)
 
     # Overture-only LIST<STRING> fields — preserved as-is.
     overture_socials = _col_or_null(
@@ -297,6 +298,7 @@ def _build_matched_gdf(
             "website": website,
             "opening_hours": opening_hours,
             "access": access,
+            "airside": airside,
             "overture_socials": overture_socials,
             "overture_categories_alternate":
                 overture_categories_alternate,
@@ -361,6 +363,7 @@ def _build_unmatched_osm_gdf(
     osm_website = _col_or_null(osm_gdf, "website", idx)
     opening_hours = _col_or_null(osm_gdf, "opening_hours", idx)
     access = _col_or_null(osm_gdf, "access", idx)
+    airside = _col_or_null(osm_gdf, "airside", idx)
 
     nulls = lambda: np.full(n, None, dtype = object)
 
@@ -394,6 +397,7 @@ def _build_unmatched_osm_gdf(
             "website": osm_website,
             "opening_hours": opening_hours,
             "access": access,
+            "airside": airside,
             "overture_socials": nulls(),
             "overture_categories_alternate": nulls(),
             "osm_name": names,
@@ -501,6 +505,7 @@ def _build_unmatched_overture_gdf(
             "website": website_primary,
             "opening_hours": nulls(),
             "access": nulls(),
+            "airside": nulls(),
             "overture_socials": ov_socials,
             "overture_categories_alternate": ov_categories_alt,
             "osm_name": nulls(),

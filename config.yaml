@@ -155,7 +155,8 @@ download:
         tourism: ['rv_pitch']
     extract_keys: [
       'addr:city','addr:country','addr:housename','addr:housenumber','addr:postcode',
-      'addr:state','addr:street','addr:unit','access','amenity','atm','bar','bicycle',
+      'addr:state','addr:street','addr:unit','access','airside','amenity','atm','bar',
+      'bicycle',
       'bicycle_parking','brand','brand:wikidata','building','check_date',
       'check_date:opening_hours','craft','cuisine','description','education','email',
       'emergency','fountain','geometry','healthcare','healthcare:speciality','historic',
