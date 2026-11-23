@@ -50,6 +50,13 @@ did not apply (no refit), items 5–7 followed. Items 8–9 added from that run.
    `make conflate_reuse PRIOR=<v>` target.
 9. **`type_affinity.csv` needs `git add -f`** (gitignored directory, tracked file); the
    copy-back-and-commit steps are in the conflate-snapshots skill, step 4b.
+10. **Verify the four stages added 2026-11-23 for Close.City location reports** (CHANGELOG
+    "Unreleased"). (a) `osm_brand_dedup`: absorbed count near 8,940 over the 19 accepted
+    labels (2026-10-22 dry run), `osm_brand_dedup_dropped.parquet` written, `merged_into`
+    rows in `id_changes`, and `absorbed_osm_keys` populated on the kept rows. (b) The
+    residential-exclusion park exemption restored about 31,700 unnamed POIs (needs a fresh
+    OSM pull). (c) `airside` is populated on OSM rows and null on Overture-only rows.
+    (d) Tell Close: its loader drops `airside=yes` rows once the column exists.
 
 ## 2026-10-22 run: outcome (2026-10-23)
 
