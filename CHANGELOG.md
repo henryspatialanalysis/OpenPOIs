@@ -11,6 +11,9 @@
   `department_store` (Ross, TJ Maxx, Marshalls, Burlington) and Overture's Walmart rows in
   that category are included; `superstore` stays *Supermarket*. Until the next refit the
   turnover model rates both new labels from its average across labels.
+- **Type scores for new labels.** `build_type_affinity.py` relabels the prior run's
+  confirmed pairs for labels added since, and an OSM-only label inherits its prior from
+  `conflation.type_affinity_prior_parents`.
 - **`make conflate_reuse PRIOR=<v>`** runs a month that reuses the prior calibration curves
   instead of refitting. `reuse_calibration.py` copies them into the new version's
   `calibration/` with a provenance note, and refuses when the Overture drift gate breached

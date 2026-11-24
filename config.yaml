@@ -530,6 +530,12 @@ conflation:
   # docs/type-affinity-metric.md. Rebuild the table after changing this:
   #   python scripts/conflation/build_type_affinity.py
   type_affinity_k: 100
+  # OSM-only labels (no Overture category) take another label's hierarchy prior;
+  # without one their type score is 0 against every Overture label. Small Grocery
+  # (2026-11) covers OSM greengrocer, grocery and food, which Overture files mainly
+  # under grocery_store (Supermarket).
+  type_affinity_prior_parents:
+    Small Grocery: Supermarket
   # Drop conflated points that never received a shared_label (uncategorized
   # POIs) from the canonical conflated.parquet. Applied in the change-detection
   # step; conflated_baseline.parquet keeps the full unfiltered set.
