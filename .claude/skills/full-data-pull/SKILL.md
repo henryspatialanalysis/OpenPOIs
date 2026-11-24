@@ -50,7 +50,7 @@ waits on Nat.
      osm_data: "YYYYMMDD"     # bumps each month — history is refreshed for ghosts
      ghost_osm: "YYYYMMDD"    # pinned to osm_data; bumps in lockstep
    ```
-   **Before bumping `osm_data`, set `download.osm.incremental_history.base_version` to the current `osm_data` value** (last month's run). The monthly history build rolls that run forward with Geofabrik's daily diffs (`download.osm.history_mode: incremental`, the default since 2026-09-26) instead of re-downloading the ~23 GB full history. A refit month uses `history_mode: full` instead; see [skills/model-history-pipeline](../model-history-pipeline/SKILL.md).
+   **Before bumping `osm_data`, set `download.osm.incremental_history.base_version` to the current `osm_data` value** (last month's run), and set `versions.id_registry` to the current `versions.conflation`; see "Two settings name last month's outputs" in [docs/data-versioning.md](../../docs/data-versioning.md). The monthly history build rolls that run forward with Geofabrik's daily diffs (`download.osm.history_mode: incremental`, the default since 2026-09-26) instead of re-downloading the ~23 GB full history. A refit month uses `history_mode: full` instead; see [skills/model-history-pipeline](../model-history-pipeline/SKILL.md).
 
    `model_output` does **not** bump unless you're re-fitting λ from scratch (see [skills/model-history-pipeline](../model-history-pipeline/SKILL.md)). See [docs/data-versioning.md](../../docs/data-versioning.md).
 

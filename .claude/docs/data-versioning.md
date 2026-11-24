@@ -20,6 +20,15 @@ Each key corresponds to a `directories.<key>` entry in `config.yaml` with `versi
 
 `osm_data` directories record how they were built in `history_coverage.json`: `mode` (`full` or `incremental`), `coverage_end`, the per-feed replication `last_sequence`, `chain_length` and the ingest `filter_exprs`. An incremental run reads another `osm_data` version as its base, named by `download.osm.incremental_history.base_version` (not a `versions:` key) and resolved with `get_dir_path("osm_data", custom_version = ...)`. Each month, set it to the previous month's `osm_data` version.
 
+**Two settings name last month's outputs, and both are set every month (standing rule, Nat 2026-11-24).** Read the values from the config *before* bumping anything:
+
+| Setting | Set to | Why |
+|---|---|---|
+| `download.osm.incremental_history.base_version` | the current `versions.osm_data` | The history to roll forward. An older base still works but re-fetches diffs. |
+| `versions.id_registry` | the current `versions.conflation` | The registry that carries each place's `unified_id` forward. |
+
+For the 2026-11-24 run both are `20261022`; `id_registry` already held that value from the stable-id re-issue, so its line did not change. If `id_registry.parquet` is absent from `conflation/<id_registry>/` on openpois-01, restore it from the published `<source_coop>/ids/id_registry.parquet` of the same release. Never pass `--bootstrap` on a national run: it mints every id and breaks the references held downstream (Close.City, manual overrides).
+
 `calibration` is unusual in two ways: its `directories.calibration` root lives **inside the repo tree** (`~/repos/openpois/data/calibration`) rather than under `~/data/openpois`, and that tree is **gitignored** — the validation labels are the moat. The data is produced by openpois-validator's `scripts/08_export_handoff.py`, so bumping this key means re-exporting there first. Curves are release-specific: bump it whenever `snapshot_overture` or the turnover model moves, and refit.
 
 ## Path resolution
