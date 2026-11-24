@@ -44,10 +44,8 @@ did not apply (no refit), items 5–7 followed. Items 8–9 added from that run.
    then re-uploads the archives into `latest/` (the proxy cannot server-side copy over
    5 GB); on 2026-10-03 each pass took about 2 minutes from openpois-01. Run the
    verify-pipeline-run tile-completeness check before publishing.
-8. **A curve-reuse month has no make target.** `apply_calibration.py --curves-dir`
-   reads the prior curves without copying them; the copy-then-apply sequence the
-   2026-10-22 run used is now in the conflate-snapshots skill (step 4). Worth a
-   `make conflate_reuse PRIOR=<v>` target.
+8. **Done 2026-11-24: `make conflate_reuse PRIOR=<v>`** runs a curve-reuse month; the copy
+   step is `scripts/conflation/reuse_calibration.py` (refuses a drift breach).
 9. **`type_affinity.csv` needs `git add -f`** (gitignored directory, tracked file); the
    copy-back-and-commit steps are in the conflate-snapshots skill, step 4b.
 10. **Verify the four stages added 2026-11-23 for Close.City location reports** (CHANGELOG

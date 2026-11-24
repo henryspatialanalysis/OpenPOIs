@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **`make conflate_reuse PRIOR=<v>`** runs a month that reuses the prior calibration curves
+  instead of refitting. `reuse_calibration.py` copies them into the new version's
+  `calibration/` with a provenance note, and refuses when the Overture drift gate breached
+  or was not run.
 - **Same-brand OSM duplicates are merged.** OSM maps many places twice with valid
   tags: a drugstore building (`shop=chemist`) and the pharmacy counter inside it
   (`amenity=pharmacy`), two canopies of one fuel station, a church building and its

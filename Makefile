@@ -99,6 +99,10 @@ site_preview:
 #     ... validation round, handoff ...
 #     make calibrate apply_manual_overrides
 #
+# In a curve-reuse month (drift gate passed, calibration method unchanged, no new
+# validation round) no fit runs; the prior version's curves are copied and applied:
+#     make conflate_reuse PRIOR=<prior conflation version>
+#
 # Sub-targets (build_ghosts / conflate_baseline / apply_cd / fit_calibration
 # / export_calibration / apply_calibration / calibrate /
 # apply_manual_overrides) are exposed for partial re-runs when one stage
@@ -111,7 +115,7 @@ LOG_TS := $(shell date +%Y%m%d_%H%M%S)
 
 .PHONY: download_history check_history rate conflate conflate_to_cd build_ghosts \
 	conflate_baseline apply_cd fit_calibration export_calibration apply_calibration \
-	calibrate apply_manual_overrides
+	calibrate reuse_calibration conflate_reuse apply_manual_overrides
 
 # Build versions.osm_data: the full-history download (history_mode: full) or a
 # roll-forward of download.osm.incremental_history.base_version with Geofabrik's
@@ -175,8 +179,8 @@ apply_cd:
 # deployable, if any segment fails the acceptance rule. The v4
 # fit_calibration.py is retired. pipefail makes a failing step stop make
 # despite the tee.
-fit_calibration export_calibration apply_calibration calibrate: SHELL := /bin/bash
-fit_calibration export_calibration apply_calibration calibrate: .SHELLFLAGS := -o pipefail -c
+fit_calibration export_calibration apply_calibration calibrate reuse_calibration conflate_reuse: SHELL := /bin/bash
+fit_calibration export_calibration apply_calibration calibrate reuse_calibration conflate_reuse: .SHELLFLAGS := -o pipefail -c
 
 fit_calibration:
 	@mkdir -p $(LOG_DIR)
@@ -208,6 +212,16 @@ calibrate: fit_calibration export_calibration apply_calibration
 	@$(CONDA_PYTHON) -u scripts/conflation/ht_review.py \
 		2>&1 | tee $(LOG_DIR)/ht_review_$(LOG_TS).log
 
+# Curve-reuse month: copy PRIOR's curves into this version's calibration/ instead of
+# fitting. reuse_calibration.py refuses a drift-gate breach; run
+# scripts/overture/compare_confidence.py first.
+reuse_calibration:
+	@test -n "$(PRIOR)" || { echo "Pass PRIOR=<prior conflation version>" >&2; exit 2; }
+	@mkdir -p $(LOG_DIR)
+	@$(CONDA_PYTHON) -u scripts/conflation/reuse_calibration.py --prior $(PRIOR) \
+		$(if $(OVERWRITE),--overwrite,) \
+		2>&1 | tee $(LOG_DIR)/reuse_calibration_$(LOG_TS).log
+
 # Manual exclude/include pins from the Close triage CSV. Must run AFTER
 # calibrate: it rewrites conflated.parquet in place and a forced conf_mean
 # of 0 / 1 must not be re-scaled by the curves. A missing CSV is a no-op.
@@ -224,6 +238,21 @@ conflate_to_cd: build_ghosts conflate_baseline apply_cd
 	@echo "Conflation through change detection complete."
 	@echo "  Output: ~/data/openpois/conflation/<version>/conflated_cd.parquet"
 	@echo "  Next, after the validation handoff: make calibrate apply_manual_overrides"
+
+# A curve-reuse month, start to finish. reuse_calibration runs FIRST so that a drift
+# breach or a bad PRIOR stops the run before the hours-long conflation. The steps are
+# separate sub-makes so their order holds under -j.
+conflate_reuse:
+	@$(MAKE) reuse_calibration PRIOR=$(PRIOR) OVERWRITE=$(OVERWRITE)
+	@$(MAKE) conflate_to_cd
+	@$(MAKE) apply_calibration
+	@$(CONDA_PYTHON) -u scripts/conflation/plot_calibration.py \
+		2>&1 | tee $(LOG_DIR)/plot_calibration_$(LOG_TS).log
+	@$(CONDA_PYTHON) -u scripts/conflation/ht_review.py \
+		2>&1 | tee $(LOG_DIR)/ht_review_$(LOG_TS).log
+	@$(MAKE) apply_manual_overrides
+	@$(CONDA_PYTHON) -u scripts/conflation/summarize.py \
+		2>&1 | tee $(LOG_DIR)/summarize_$(LOG_TS).log
 
 conflate: build_ghosts conflate_baseline apply_cd calibrate apply_manual_overrides
 	@echo
