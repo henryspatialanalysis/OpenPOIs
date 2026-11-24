@@ -1,31 +1,31 @@
 # Versioned directories (used with config.get_dir_path())
 versions:
-  osm_data: "20261022"
+  osm_data: "20261124"
   model_output: "20260727_by_shared_label"
-  snapshot_osm: "20261022"
-  # 2026-10-21.0 release. The prior month's snapshot (20260923, release
-  # 2026-09-23.1) stays on openpois-01 as the baseline for
+  snapshot_osm: "20261124"
+  # 2026-11-18.0 release. The prior month's snapshot (20261021, release
+  # 2026-10-21.0) stays on openpois-01 as the baseline for
   # scripts/overture/compare_confidence.py. The July 20260722* dirs stay on
   # the laptop as the method-paper basis.
-  snapshot_overture: "20261021"
+  snapshot_overture: "20261118"
   # 20260730 (kept, July release) added the two private-property / non-POI
   # exclusions: the residential-landuse spatial rule (250,905 unnamed POIs)
   # and the wildcard -> inclusion-set taxonomy change (61,764 unlabeled
   # rows). 20260902 is the first run with min_shadow_match_score 0.70 and
   # the August Overture taxonomy fixes (beauty_service rename,
   # food_delivery_service move).
-  conflation: "20261022"
+  conflation: "20261124"
   # Validation round whose condensed handoff drives the confidence
   # calibration (see .claude/docs/confidence-calibration.md). Produced by
   # openpois-validator's scripts/08_export_handoff.py; the curves are
   # release-specific and do not transport across Overture releases.
   calibration: "20261001"
-  source_coop: "2026-10-22-v1"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
+  source_coop: "2026-11-24-v0"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
   # Ghost POI dataset reconstructed from OSM history (one row per
   # detected previous-state event). Pinned to the same value as
   # ``osm_data`` since it is derived from the same history parquets,
   # and regenerated together with the monthly snapshot refresh.
-  ghost_osm: "20261022"
+  ghost_osm: "20261124"
   # Hand-curated exclude/include pins applied after calibration (see
   # conflation.manual_overrides). Rows are appended by the Close triage
   # lane; bump the version when the file is re-baselined, not per row.
@@ -52,7 +52,7 @@ download:
       coastline_buffer_m: 100
   osm:
     start_date: 2016-01-01
-    end_date: 2026-10-21
+    end_date: 2026-11-25
     # Snapshot extracts. Geofabrik publishes a dedicated PBF for PR and USVI
     # under north-america/us/, but the western-Pacific inhabited territories
     # (Guam, Northern Mariana Islands, American Samoa) have no per-territory
@@ -89,7 +89,7 @@ download:
     history_mode: "incremental"
     incremental_history:
       # osm_data version to roll forward (the previous month's run).
-      base_version: "20261001"
+      base_version: "20261022"
       # Warn once this many incremental runs are chained without a full build.
       max_chain_months: 12
       # Keep the downloaded .osc.gz files under osm_data/<v>/diffs/.
@@ -177,7 +177,7 @@ download:
       'website','wikidata','wikipedia'
     ]
   overture:
-    release_date: "2026-10-21.0"  # pin for determinism; null = auto-detect latest
+    release_date: "2026-11-18.0"  # pin for determinism; null = auto-detect latest
     s3_bucket: "overturemaps-us-west-2"
     s3_region: "us-west-2"
     # DuckDB resource caps for the per-part S3 scans and the final polygon
@@ -795,8 +795,8 @@ publish:
   # Values surfaced in the per-version README. Set each round until the
   # pipeline captures them automatically — see .claude/TODO.md.
   version_metadata:
-    osm_snapshot_date: "2026-10-21"   # YYYY-MM-DD Geofabrik extract date
-    overture_release: "2026-10-21.0"  # Overture Maps release ID, https://docs.overturemaps.org/release-calendar/
+    osm_snapshot_date: "2026-11-24"   # YYYY-MM-DD Geofabrik extract date
+    overture_release: "2026-11-18.0"  # Overture Maps release ID, https://docs.overturemaps.org/release-calendar/
     model_commit: null                # null → use current git HEAD; set a short SHA to pin
   # PMTiles generation — multi-zoom archives for OSM, conflated and Overture.
   # Site's View.minZoom is 10 (full-metro view). Zooms up to the archive's
