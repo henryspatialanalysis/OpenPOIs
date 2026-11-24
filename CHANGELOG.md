@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **New label: Small Grocery.** OSM `shop=grocery`, `greengrocer`, `food`, `produce`,
+  `specialty_grocer` and `organic` (about 2,450 features, previously *Other Shop*). It has
+  no Overture category of its own: Overture files small grocers under `grocery_store`,
+  which stays *Supermarket*, and a matched place takes its OSM label.
+- **New label: Department Store.** OSM `shop=department_store` (about 12,200) and Overture
+  `department_store` (about 30,500) move out of *Clothing Store*. Off-price chains tagged
+  `department_store` (Ross, TJ Maxx, Marshalls, Burlington) and Overture's Walmart rows in
+  that category are included; `superstore` stays *Supermarket*. Until the next refit the
+  turnover model rates both new labels from its average across labels.
 - **`make conflate_reuse PRIOR=<v>`** runs a month that reuses the prior calibration curves
   instead of refitting. `reuse_calibration.py` copies them into the new version's
   `calibration/` with a provenance note, and refuses when the Overture drift gate breached

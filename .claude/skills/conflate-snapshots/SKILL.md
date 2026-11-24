@@ -203,7 +203,7 @@ Publishing from the remote: after Nat's local `source-coop login`, run
    per-label table: matched / OSM-only / Overture-only / total / match %). Stdout
    calls out every **single-source label** — a zero in any column means that label
    can never match, which is almost always a crosswalk gap rather than a real
-   property of the data. Only `Car Rental` is expected to be single-source
+   property of the data. Only `Car Rental` and `Small Grocery` (no Overture side; `overture_only` 0) are expected to be single-source
    (Overture has no car-rental category).
 
 6. **Partition for web** — geohash-4 partition, geohash-6 sort:
