@@ -75,6 +75,7 @@ def test_assign_holdout_folds_leak_free_and_balanced():
     assert counts.min() > 0
 
 
+@pytest.mark.model
 def test_in_sample_metrics_sane():
     model, fitter = _fit(_frame())
     m = metrics.in_sample_metrics(model, fitter)
@@ -85,6 +86,7 @@ def test_in_sample_metrics_sane():
     assert np.isfinite(m["waic"])
 
 
+@pytest.mark.model
 def test_subgroup_lppd_reconciles_to_total():
     model, fitter = _fit(_frame())
     total = metrics.in_sample_metrics(model, fitter)["lppd"]
@@ -101,6 +103,7 @@ def total_rows(model):
     return len(model.raw_data)
 
 
+@pytest.mark.model
 def test_cross_validate_structure():
     df = _frame().reset_index(drop = True)
     out = metrics.cross_validate(

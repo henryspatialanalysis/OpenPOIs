@@ -16,7 +16,8 @@ Python executable: `$CONDA_PREFIX/bin/python` after `conda activate openpois`.
 ## Common commands
 
 ```bash
-pytest               # Run tests
+pytest               # Run tests (model fits skipped)
+pytest --model       # Also run the MCMC model-fit tests; only when model-fitting code changes
 make export_env      # Export conda env to environment.yml after adding deps
 ```
 

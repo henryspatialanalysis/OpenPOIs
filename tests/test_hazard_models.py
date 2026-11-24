@@ -21,6 +21,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pandas as pd
+import pytest
 
 from openpois.models.model_fitter import ModelFitter
 from openpois.models.osm_models import (
@@ -126,6 +127,7 @@ def _fit(model, seed = 0):
     return fitter
 
 
+@pytest.mark.model
 def test_weibull_recovers_decreasing_shape():
     df = _sim("weibull", lam = 0.2, par = 0.45, seed = 1)
     model = WeibullModel(dataset = df, metadata = {"dt_col": "tag_years"})
@@ -141,6 +143,7 @@ def test_weibull_recovers_decreasing_shape():
     assert probs.min() > 0.0 and probs.max() < 1.0
 
 
+@pytest.mark.model
 def test_lomax_recovers_positive_frailty():
     df = _sim("lomax", lam = 0.2, par = 2.5, seed = 2)
     model = LomaxModel(dataset = df, metadata = {"dt_col": "tag_years"})

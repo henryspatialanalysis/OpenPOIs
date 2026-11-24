@@ -21,6 +21,7 @@ from __future__ import annotations
 import jax
 import numpy as np
 import pandas as pd
+import pytest
 
 from openpois.models import dispersion
 from openpois.models.model_fitter import ModelFitter
@@ -115,6 +116,7 @@ def _fit_random_effects(df, seed = 0):
     return model, fitter
 
 
+@pytest.mark.model
 def test_report_structure_constant():
     model, fitter = _fit_constant(_simulate(seed = 1))
     out = dispersion.dispersion_report(
@@ -133,6 +135,7 @@ def test_report_structure_constant():
     assert out["meta"]["n_poi_multi"] > 0
 
 
+@pytest.mark.model
 def test_report_structure_random_effects():
     """The production model path goes through ``build_row_data``."""
     model, fitter = _fit_random_effects(_simulate(seed = 2))
@@ -141,6 +144,7 @@ def test_report_structure_random_effects():
     assert np.isfinite(out["summary"]["phi_hat"]).all()
 
 
+@pytest.mark.model
 def test_frailty_is_detected_relative_to_null():
     """Injected per-POI frailty inflates the POI φ̂ and shrinks its ppp."""
     null_model, null_fitter = _fit_constant(
@@ -171,6 +175,7 @@ def test_frailty_is_detected_relative_to_null():
     assert fr_ppp <= null_ppp
 
 
+@pytest.mark.model
 def test_null_poi_statistic_not_flagged():
     """Under the homogeneous null the POI φ̂ sits near 1 and ppp is non-extreme."""
     model, fitter = _fit_constant(_simulate(seed = 20, tau = 0.0), seed = 20)

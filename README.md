@@ -116,7 +116,7 @@ every push to `main` that touches `site/`, `src/`, `docs/`, or `scripts/`.
 ### Development
 
 ```bash
-pytest               # run the test suite
+pytest               # run the test suite (model fits skipped; add --model for them)
 make lint            # flake8 + pylint
 make export_env      # rewrite environment.yml after adding deps
 ```

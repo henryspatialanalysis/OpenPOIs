@@ -17,6 +17,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pandas as pd
+import pytest
 
 from openpois.models import reconstruct
 from openpois.models.model_fitter import ModelFitter
@@ -105,6 +106,7 @@ def _fit(df):
     return model, fitter
 
 
+@pytest.mark.model
 def test_reconstruct_matches_predict_on_observed_cells():
     model, fitter = _fit(_frame())
     draws = _flatten(fitter.get_parameter_draws())
@@ -130,6 +132,7 @@ def test_reconstruct_matches_predict_on_observed_cells():
     assert np.allclose(out["p_cond_lower"], cond_lo, atol = 1e-4)
 
 
+@pytest.mark.model
 def test_reconstruct_unseen_main_effect_is_drawn_and_deterministic():
     """An unseen amenity/MSA draws its effect from N(0, σ): the result is finite,
     deterministic (hash-seeded), and has a WIDER credible interval than the
@@ -160,6 +163,7 @@ def test_reconstruct_unseen_main_effect_is_drawn_and_deterministic():
     assert w_unseen[-1] > w0[-1]
 
 
+@pytest.mark.model
 def test_reconstruct_interaction_unseen_contributes_zero():
     """A seen amenity + seen MSA whose interaction cell wasn't kept gets no
     interaction term — λ matches the main-effects-only reconstruction."""
