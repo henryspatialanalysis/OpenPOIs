@@ -265,10 +265,18 @@ def _build_edges(con: duckdb.DuckDBPyConnection) -> None:
                    c.ovt_key, NULL, NULL
             FROM cur c JOIN r ON c.ovt_key = r.source_key
             UNION ALL
-            SELECT c.rid, r.unified_id, {_KIND_ALIAS}, r.stale, r.id_minted,
+            SELECT a.rid, r.unified_id, {_KIND_ALIAS}, r.stale, r.id_minted,
                    a.loser_key, NULL, NULL
-            FROM aliases a
-            JOIN cur c ON c.ovt_key = a.winner_key OR c.osm_key = a.winner_key
+            FROM (
+                -- Two equi-joins, not one join ON ... OR ...: DuckDB cannot hash an OR,
+                -- and the nested loop (1.2M aliases x 17M rows) runs for hours. Keys
+                -- carry their source prefix, so no alias matches both sides.
+                SELECT a.loser_key, c.rid
+                FROM aliases a JOIN cur c ON c.ovt_key = a.winner_key
+                UNION ALL
+                SELECT a.loser_key, c.rid
+                FROM aliases a JOIN cur c ON c.osm_key = a.winner_key
+            ) a
             JOIN r ON r.source_key = a.loser_key
             WHERE a.loser_key NOT IN (
                 SELECT ovt_key FROM cur WHERE ovt_key IS NOT NULL
