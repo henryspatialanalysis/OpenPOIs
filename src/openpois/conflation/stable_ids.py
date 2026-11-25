@@ -121,8 +121,18 @@ def mint_id(key: str, salt: int = 0, prefix: str = ID_PREFIX) -> str:
 # -----------------------------------------------------------------
 
 
-def connect(memory_limit: str = "8GB") -> duckdb.DuckDBPyConnection:
+def connect(
+    memory_limit: str = "8GB", temp_directory: Path | str | None = None,
+) -> duckdb.DuckDBPyConnection:
+    """In-memory DuckDB connection for the reconcile.
+
+    ``temp_directory`` should be on local disk: DuckDB otherwise spills to ``.tmp`` in
+    the working directory, which on openpois-01 is EFS, where a spill can hang for hours.
+    """
     con = duckdb.connect()
+    if temp_directory is not None:
+        Path(temp_directory).mkdir(parents = True, exist_ok = True)
+        con.execute(f"SET temp_directory = '{temp_directory}'")
     con.execute(f"SET memory_limit = '{memory_limit}'")
     con.execute("SET preserve_insertion_order = true")
     return con

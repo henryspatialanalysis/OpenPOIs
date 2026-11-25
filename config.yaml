@@ -692,6 +692,9 @@ conflation:
   stable_ids:
     guard_threshold: 70
     id_prefix: "opoi_"
+    # For assign_stable_ids.py on openpois-01 (64 GB); a national run spills below
+    # this. Lower it before running that stage on a 24 GB laptop.
+    duckdb_memory_limit: "28GB"
   # Existence-confidence calibration (see
   # .claude/docs/confidence-calibration.md). From October 2026 production is
   # three Bayesian monotone-spline fits with the fixed-rate mixture label layer
