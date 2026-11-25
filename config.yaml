@@ -62,7 +62,7 @@ download:
     # POIs and are accepted as bonus coverage.
     pbf_url: "https://download.geofabrik.de/north-america/us-latest.osm.pbf"
     pr_pbf_url: "https://download.geofabrik.de/north-america/us/puerto-rico-latest.osm.pbf"
-    usvi_pbf_url: "https://download.geofabrik.de/north-america/us/us-virgin-islands-latest.osm.pbf"
+    usvi_pbf_url: "https://download.geofabrik.de/north-america/us/us-virgin-islands/us-virgin-islands-latest.osm.pbf"
     american_oceania_pbf_url: "https://download.geofabrik.de/australia-oceania/american-oceania-latest.osm.pbf"
     # Full-history PBFs live on Geofabrik's OAuth-protected internal server.
     # Any OSM account grants access; generate a Netscape-format cookie jar by
