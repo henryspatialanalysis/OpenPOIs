@@ -473,6 +473,11 @@ if __name__ == "__main__":
         else DEDUP_POST_FILTER_FILE
     )
     post_dedup_resume_path = conflation_dir / dedup_spill_name
+    # The audit feeds assign_stable_ids.py (Overture loser -> winner), so a --test run
+    # must not overwrite the full run's.
+    dedup_audit_path = conflation_dir / (
+        "overture_dedup_dropped_test.parquet" if args.test else DEDUP_DROPPED_FILE
+    )
     if DEDUP_ENABLED and post_dedup_resume_path.exists():
         print(
             f"\nReusing post-dedup Overture from "
@@ -490,6 +495,19 @@ if __name__ == "__main__":
                 f"Post-dedup spill {post_dedup_resume_path} is "
                 f"missing columns {stale} — it was written by an "
                 f"older run. Delete it and re-run to regenerate."
+            )
+        # The spill is what the dedup kept, so the audit must hold the rest.
+        n_kept = pq.ParquetFile(post_dedup_resume_path).metadata.num_rows
+        n_dropped = len(overture_gdf) - n_kept
+        n_audit = (
+            pq.ParquetFile(dedup_audit_path).metadata.num_rows
+            if dedup_audit_path.exists() else 0
+        )
+        if n_audit != n_dropped:
+            raise ValueError(
+                f"{dedup_audit_path} has {n_audit:,} rows but the spill implies "
+                f"{n_dropped:,} dropped. Delete {post_dedup_resume_path} and "
+                f"re-run the dedup so the two agree."
             )
         del overture_source_rows
         overture_gdf = _load_gdf(
@@ -510,8 +528,9 @@ if __name__ == "__main__":
         overture_merge_needs_test_bbox = False
         log_rss("after Overture post-dedup reload")
     elif DEDUP_ENABLED:
-        dedup_checkpoint_dir = (
-            conflation_dir / DEDUP_CHECKPOINT_SUBDIR
+        dedup_checkpoint_dir = conflation_dir / (
+            f"{DEDUP_CHECKPOINT_SUBDIR}_test" if args.test
+            else DEDUP_CHECKPOINT_SUBDIR
         )
         (
             no_conflate,
@@ -535,14 +554,13 @@ if __name__ == "__main__":
         )
 
         if no_conflate.any():
-            audit_path = conflation_dir / DEDUP_DROPPED_FILE
             _write_dedup_audit(
                 overture_gdf, no_conflate,
-                dedup_components, audit_path,
+                dedup_components, dedup_audit_path,
             )
             print(
                 f"  Wrote {dedup_summary['n_dropped']:,} dropped "
-                f"rows to {audit_path}"
+                f"rows to {dedup_audit_path}"
             )
 
         # Filter overture rows + parallel arrays. A boolean-mask
