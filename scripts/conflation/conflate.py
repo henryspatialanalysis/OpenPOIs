@@ -822,7 +822,9 @@ if __name__ == "__main__":
             gc.collect()
     else:
         # -- Chunked driver (default) ------------------------------
-        checkpoint_dir = conflation_dir / CHECKPOINT_SUBDIR
+        checkpoint_dir = conflation_dir / (
+            f"{CHECKPOINT_SUBDIR}_test" if args.test else CHECKPOINT_SUBDIR
+        )
         print(
             f"\nRunning chunked matching "
             f"(target ~{CHUNK_TARGET_POIS:,} POIs/chunk, "
