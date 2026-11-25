@@ -692,6 +692,14 @@ if __name__ == "__main__":
             "comparability falls back to websites only; re-pull to enable)"
         )
 
+    # Source-id order breaks exact score/distance ties, so a tie resolves
+    # the same way whatever the snapshot row order. Computed before the drop
+    # below, which removes osm_type.
+    osm_order = source_id_order(
+        osm_gdf["osm_type"].astype(str) + "/" + osm_gdf["osm_id"].astype(str)
+    )
+    overture_order = source_id_order(overture_gdf["overture_id"])
+
     # Drop columns only needed for taxonomy assignment
     for col in [
         *FILTER_KEYS,
@@ -707,12 +715,6 @@ if __name__ == "__main__":
     log_rss("after taxonomy assignment + tag-col drop")
 
     # -- Matching --------------------------------------------------
-    # Source-id order breaks exact score/distance ties, so a tie resolves
-    # the same way whatever the snapshot row order.
-    osm_order = source_id_order(
-        osm_gdf["osm_type"].astype(str) + "/" + osm_gdf["osm_id"].astype(str)
-    )
-    overture_order = source_id_order(overture_gdf["overture_id"])
     # Prepare name/brand arrays once (used by both code paths).
     osm_names = osm_gdf["name"].to_numpy()
     osm_brands = (
