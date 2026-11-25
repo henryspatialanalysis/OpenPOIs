@@ -117,6 +117,15 @@ LOG_TS := $(shell date +%Y%m%d_%H%M%S)
 	conflate_baseline apply_cd fit_calibration export_calibration apply_calibration \
 	calibrate reuse_calibration conflate_reuse apply_manual_overrides
 
+# Every target that tees a log: pipefail makes a failing step stop make instead of
+# taking tee's exit code (a crashed check_history reported success on 2026-11-25, and a
+# failed conflate.py must not hand a stale baseline to assign_stable_ids.py).
+LOGGED_TARGETS := download_history check_history rate build_ghosts conflate_baseline \
+	apply_cd fit_calibration export_calibration apply_calibration calibrate \
+	reuse_calibration conflate_reuse apply_manual_overrides
+$(LOGGED_TARGETS): SHELL := /bin/bash
+$(LOGGED_TARGETS): .SHELLFLAGS := -o pipefail -c
+
 # Build versions.osm_data: the full-history download (history_mode: full) or a
 # roll-forward of download.osm.incremental_history.base_version with Geofabrik's
 # daily diffs (history_mode: incremental). PLAN=1 prints the diff sequences an
@@ -148,10 +157,6 @@ build_ghosts:
 	@$(CONDA_PYTHON) -u scripts/conflation/build_ghosts.py \
 		2>&1 | tee $(LOG_DIR)/build_ghosts_$(LOG_TS).log
 
-# pipefail: a failed conflate.py must not hand a stale baseline to
-# assign_stable_ids.py.
-conflate_baseline: SHELL := /bin/bash
-conflate_baseline: .SHELLFLAGS := -o pipefail -c
 conflate_baseline:
 	@mkdir -p $(LOG_DIR)
 	@$(CONDA_PYTHON) -u scripts/conflation/conflate.py \
@@ -177,11 +182,7 @@ apply_cd:
 # turns their draws into grid curves in
 # conflation/<version>/calibration/ and exits non-zero, writing nothing
 # deployable, if any segment fails the acceptance rule. The v4
-# fit_calibration.py is retired. pipefail makes a failing step stop make
-# despite the tee.
-fit_calibration export_calibration apply_calibration calibrate reuse_calibration conflate_reuse: SHELL := /bin/bash
-fit_calibration export_calibration apply_calibration calibrate reuse_calibration conflate_reuse: .SHELLFLAGS := -o pipefail -c
-
+# fit_calibration.py is retired.
 fit_calibration:
 	@mkdir -p $(LOG_DIR)
 ifeq ($(TEST),)
