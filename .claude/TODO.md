@@ -7,6 +7,8 @@ Short running list of in-progress / upcoming work. Edit freely; trim older compl
 Added 2026-10-02 from the October run. List these to Nat before any step runs.
 Carried through the 2026-10-22 run (Nat, 2026-10-22): items 0–3 deferred again, item 4
 did not apply (no refit), items 5–7 followed. Items 8–9 added from that run.
+**2026-11-24 run (Nat, 2026-11-24): items 0, 2, 3, 4 deferred again; 1, 5–12 done** (see
+"2026-11-24 run: outcome" below). Carry 0, 2, 3, 4 into December.
 
 0. **Pooling drift checks were skipped in October; one fails.** The pooling plan
    (`.claude/plans/bayesian-monotone-calibration.md` ~l.1210) requires two checks before
@@ -107,6 +109,26 @@ Added 2026-11-25 from the 2026-11-24 run.
    resume; `compare_taxonomy.py` needs `--prior-snapshot` after the config bump, or the
    month-over-month diff is skipped. `make apply_cd TEST=1` reads `conflated_baseline.parquet`
    while `conflate.py --test` writes `conflated_baseline_test.parquet`.
+
+## 2026-11-24 run: outcome (2026-11-26)
+
+Released as `2026-11-24-v0` (Overture `2026-11-18.0`, Geofabrik 2026-11-24, history through
+US seq 2453) from `run/2026-11-24` on openpois-01; no refit, no validation round. Drift gate
+pass (RMSE 0.022, bias +0.0003, 0.70% moving > 0.1), so the 20261001 curves were reused via
+the new `make conflate_reuse`. 17,222,801 rows (+2.1%); two new labels (Small Grocery,
+Department Store). The three Close ghost nodes demoted their Overture rows (0.69 -> ~0.11);
+the Academy Ave Dunkin' was not demoted. Change-detection gate (item 1) passed: 90/120
+gone (75%). Brand dedup absorbed 8,936; park exemption restored 32,381. Known regressions
+(December items 3-4): ~700 Aldi pairs unmatched after Overture's URL change; up to 349
+supermarket x department_store pairs lost with the label split.
+
+Run problems, each fixed and committed on the branch: Geofabrik dropped connections on the
+US PBF; the USVI extract moved (`d30dba2`); `make` targets hid failures behind `tee`
+(`23010d1`); the tie-break used `osm_type` after dropping it (`ead9b0a`); a `--test`
+conflation overwrote the production dedup audit (`5ca6273`, `72ea21b`; the polluted run was
+discarded); the stable-id alias join used `OR` and ran for hours (`6a279d8`, `7b4a754`);
+Source Coop's proxy rejects bulk deletes in the `latest/` mirror (`8ac215d`). Publishing
+removed `latest/ids/id_migration_v0_v1.parquet` (it lives on in `2026-10-22-v1/ids/`).
 
 ## 2026-10-22 run: outcome (2026-10-23)
 

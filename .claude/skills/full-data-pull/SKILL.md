@@ -149,19 +149,22 @@ identifier scoring loses the Wikidata clause.
 Conflated output for reference: `20260730` = 14,613,331 rows (matched 1,787,072 /
 OSM-only 2,678,337 / Overture-only 10,147,922).
 
-**Latest baselines (2026-10-22 run; compare the next run against these):**
+**Latest baselines (2026-11-24 run; compare the next run against these):**
 
-| dataset | 20261001 | 20261022 | change |
+| dataset | 20261022 | 20261124 | change |
 |---|--:|--:|--:|
-| OSM snapshot = rated (Geofabrik extract date) | 4,535,124 (09-29) | 4,552,550 (10-21) | +0.4% |
-| Overture snapshot (release) | 15,003,463 (`2026-09-23.1`) | 15,360,783 (`2026-10-21.0`) | +2.4% |
-| Overture removed by conflation-time dedup | 1,066,183 | 1,143,160 | |
-| Conflated total | 16,591,754 | 16,873,428 | +1.7% |
-| matched / OSM-only / Overture-only | 1.856M / 2.674M / 12.062M | 1.871M / 2.676M / 12.326M | |
-| shadow-matched (CD) | 25,412 | 26,012 | |
+| OSM snapshot = rated (Geofabrik extract date) | 4,552,550 (10-21) | 4,612,368 (11-24) | +1.3% |
+| Overture snapshot (release) | 15,360,783 (`2026-10-21.0`) | 15,692,722 (`2026-11-18.0`) | +2.2% |
+| Overture removed by conflation-time dedup | 1,143,160 | 1,159,395 | |
+| Conflated total | 16,873,428 | 17,222,801 | +2.1% |
+| matched / OSM-only / Overture-only | 1.871M / 2.676M / 12.326M | 1.889M / 2.709M / 12.625M | |
+| shadow-matched (CD) | 26,012 | 27,414 | |
 
-`check_history` matched 99.907% of snapshot node timestamps on 20261022
-(99.906% on 20261001).
+The 20261124 OSM count includes 32,381 rows restored by the residential-exclusion park
+exemption (first month); without it the growth is about +0.6%.
+
+`check_history` matched 99.907% of snapshot node timestamps on 20261124
+(99.907% on 20261022).
 
 **First territory-inclusive run (≥ 2026-05-21)**: expect ~20–50K additional POIs combined across the 4 new territories (GU/VI/MP/AS). The first such run has no per-territory baseline yet — record actuals in the verify-pipeline-run output so future runs have a comparison point.
 
