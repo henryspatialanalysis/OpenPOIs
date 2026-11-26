@@ -300,6 +300,11 @@ def main() -> None:
             f"  copied {summary['copied']} object(s), "
             f"deleted {summary['deleted']} stale object(s)."
         )
+        if summary.get("not_deleted"):
+            print(
+                f"  WARNING: {len(summary['not_deleted'])} stale object(s) left "
+                f"under latest/: {summary['not_deleted']}"
+            )
 
     # -------------------------------------------------------------------------
     # Top-level CHANGELOG.md (per-release deltas, updated every run by default)
