@@ -1,6 +1,56 @@
 # Changelog
 
-## Unreleased
+## 2026-11-24-v0
+
+### Snapshot inputs
+
+| Source                 | Value                                       |
+| ---------------------- | ------------------------------------------- |
+| OSM snapshot date      | 2026-11-24                                  |
+| Overture release       | `2026-11-18.0` (pinned)                     |
+| OSM snapshot rows      | 4,612,368                                   |
+| Overture snapshot rows | 15,692,722                                  |
+| Boundary footprint     | US + all territories (PR, USVI, GU, MP, AS) |
+
+### Conflated output
+
+| Metric                       | This run    | Prior        | Δ                       |
+| ---------------------------- | ----------- | ------------ | ----------------------- |
+| Total rows                   | 17,222,801  | 16,873,428   | +349,373 (+2.07%)       |
+| Matched OSM × Overture       | 1,888,519   | 1,871,280    | +17,239 (+0.92%)        |
+| OSM-only                     | 2,709,362   | 2,675,717    | +33,645 (+1.26%)        |
+| Overture-only                | 12,624,920  | 12,326,431   | +298,489 (+2.42%)       |
+| Shadow-matched (CD penalty)  | 27,414      | 26,012       | +1,402 (+5.39%)         |
+| Shared labels                | 104         | 102          | +2                      |
+
+Growth follows the upstream Overture release (+2.2% rows month-over-month, of which
+1,159,395 were removed by internal dedup) and, on the OSM side, the park exemption
+below. Two labels are new (Small Grocery, Department Store).
+
+Confidence moves against 2026-10-22-v0 (unflagged rows): Overture-only mean
+`conf_mean` 0.640 → 0.637, OSM-only 0.817 → 0.816, matched 0.901 → 0.899.
+
+The calibration curves are the 2026-10-01-v0 curves, reused verbatim: Overture's
+confidence scores did not drift between releases 2026-10-21.0 and 2026-11-18.0 (on
+15,092,680 shared GERS ids: RMSE 0.022, mean difference +0.0003, 0.70% of POIs moving
+by more than 0.1), which is within the reuse rule.
+
+**Change-detection release gate: passed.** In a random sample of 120 demoted
+(`shadow_cd`) POIs, checked against web evidence, 90 (75%) were really closed,
+replaced or moved, against a bar of 70%; 12 were still open and 18 could not be
+settled. Renames and `disused:`-style closures were reliable; most wrong demotions
+were schools whose OSM node was redrawn as a campus area.
+
+**Known issues.** About 700 Aldi stores are listed twice (once from OSM, once from
+Overture): Overture changed Aldi's store URLs in 2026-11-18.0, so the two no longer
+agree and the pair scores below the match threshold. Up to 349 supermarkets (mostly
+Walmart) that matched an Overture department-store record in 2026-10-22-v0 are
+unmatched for a related reason: their type score fell when Department Store was split
+out of Clothing Store. Both are on the list for the next release.
+
+No manual overrides were applied in this release.
+
+### Methods changes vs. prior release
 
 - **New label: Small Grocery.** OSM `shop=grocery`, `greengrocer`, `food`, `produce`,
   `specialty_grocer` and `organic` (about 2,450 features, previously *Other Shop*). It has
@@ -40,19 +90,20 @@
 - **A kept node takes the building's geometry.** When the kept row is an OSM node and a
   building way or relation was merged into it, the row's geometry is the building's
   (2,334 rows on 2026-10-22). `bbox` and `geohash` follow the new geometry;
-  `match_distance_m` still describes the OSM x Overture link.
+  `match_distance_m` still describes the OSM x Overture link. In this release the
+  stage absorbs 8,936 elements into 8,722 kept rows.
 - **Unnamed playgrounds and pitches in public parks are kept.** The residential-landuse
   exclusion now exempts a point that also falls inside a public `leisure=park` /
   `leisure=recreation_ground` polygon (`access` not private). US residential blocks
   often enclose city parks, and the rule was dropping their unnamed playgrounds and
   pitches (Canyon Rim Park, Millcreek UT). Measured on the 2026-11-21 US extract it
   restores 31,710 of the 264,091 rows the rule drops (Recreation 15,573, Playground
-  12,985, Swimming Pool 1,583, Park 1,029, Other Amenity 537). Applies from the next
-  OSM pull.
+  12,985, Swimming Pool 1,583, Park 1,029, Other Amenity 537). On the 2026-11-24
+  extract it restores 32,381.
 - **New column `airside`**: the OSM `airside` tag, carried like `access` (null for
   Overture-only rows). `yes` marks a place past airport security, which a traveller
-  outside the airport cannot reach. The OSM extract gains the key from the next
-  snapshot; releases built from older snapshots carry it as all null.
+  outside the airport cannot reach (318 rows in this release). Releases before
+  2026-11-24-v0 carry it as all null.
 
 ## Stable ids (v1 re-issue of every release, 2026-10-26)
 
