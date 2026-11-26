@@ -7,6 +7,8 @@ Short running list of in-progress / upcoming work. Edit freely; trim older compl
 Added 2026-10-02 from the October run. List these to Nat before any step runs.
 Carried through the 2026-10-22 run (Nat, 2026-10-22): items 0–3 deferred again, item 4
 did not apply (no refit), items 5–7 followed. Items 8–9 added from that run.
+**2026-11-24 run (Nat, 2026-11-24): items 0, 2, 3, 4 deferred again; 1, 5–12 done** (see
+"2026-11-24 run: outcome" below). Carry 0, 2, 3, 4 into December.
 
 0. **Pooling drift checks were skipped in October; one fails.** The pooling plan
    (`.claude/plans/bayesian-monotone-calibration.md` ~l.1210) requires two checks before
@@ -44,12 +46,89 @@ did not apply (no refit), items 5–7 followed. Items 8–9 added from that run.
    then re-uploads the archives into `latest/` (the proxy cannot server-side copy over
    5 GB); on 2026-10-03 each pass took about 2 minutes from openpois-01. Run the
    verify-pipeline-run tile-completeness check before publishing.
-8. **A curve-reuse month has no make target.** `apply_calibration.py --curves-dir`
-   reads the prior curves without copying them; the copy-then-apply sequence the
-   2026-10-22 run used is now in the conflate-snapshots skill (step 4). Worth a
-   `make conflate_reuse PRIOR=<v>` target.
+8. **Done 2026-11-24: `make conflate_reuse PRIOR=<v>`** runs a curve-reuse month; the copy
+   step is `scripts/conflation/reuse_calibration.py` (refuses a drift breach).
 9. **`type_affinity.csv` needs `git add -f`** (gitignored directory, tracked file); the
    copy-back-and-commit steps are in the conflate-snapshots skill, step 4b.
+10. **Verify the four stages added 2026-11-23 for Close.City location reports** (CHANGELOG
+    "Unreleased"). (a) `osm_brand_dedup`: absorbed count near 8,940 over the 19 accepted
+    labels (2026-10-22 dry run), `osm_brand_dedup_dropped.parquet` written, `merged_into`
+    rows in `id_changes`, and `absorbed_osm_keys` populated on the kept rows. (b) The
+    residential-exclusion park exemption restored about 31,700 unnamed POIs (needs a fresh
+    OSM pull). (c) `airside` is populated on OSM rows and null on Overture-only rows.
+    (d) Tell Close: its loader drops `airside=yes` rows once the column exists.
+
+11. **First-in-November checks for Close.City** (wtm.ingest plans and to-dos, reviewed
+    2026-11-24). After the snapshot and history: the three ghost nodes are deletions in the
+    new history (14408507147 Bosta Kitchen, 14408528601 Dunkin' Chalkstone, 14408564687
+    Public Espresso); Canyon Rim playgrounds restored; `airside=yes` on node/9435604703; the
+    2026-11-22/23 OSM edits of `location_report_osm_todo.md` present (node/14408627476 new).
+    After conflation: the three ghosts demoted their Overture rows; Dunkin' on Academy Ave
+    (93 m away, Providence) was NOT demoted; CVS and Walgreens in Shepherdsville KY one row
+    each; `id_changes` counts plausible (first real bump on stable ids).
+12. **New labels Small Grocery and Department Store** (2026-11-24): the type-affinity
+    rebuild must log the relabelled elements; `summarize.py` shows Small Grocery with no
+    Overture-only rows; compare match rates and match counts of the two labels and
+    *Clothing Store*, *Other Shop* with October. Close must add both labels to its
+    crosswalk and `PROMOTABLE_LABELS` before its next bump, or most department stores
+    leave its map.
+
+## Next monthly run: December 2026 checklist (raise every item before starting)
+
+Added 2026-11-25 from the 2026-11-24 run.
+
+1. **Change detection: schools.** In the 120-row `shadow_cd` precision sample (gate passed,
+   90/120 = 75%, `conflation/20261124/cd_sample/shadow_cd_vetting_20261124.xlsx`), 6 of 11
+   School/University rows were still open: mappers delete or strip a school node when they
+   redraw the campus as an area, and the area's centroid can sit outside the 150 m
+   same-name survivor filter. Exclude School/University ghosts, or measure the survivor
+   filter to the polygon outline instead of its centroid.
+2. **Change detection: structural edits.** Most other wrong demotions are hard deletes or
+   tag deletions whose changeset comment names a structural edit ("Merge POI with
+   Building", retag, school grounds revised, spam removal, DWG revert). Renames (29/31)
+   and lifecycle prefixes (15/17) were reliable; hard deletes and tag deletions 64%. Fetch
+   changeset comments for ghost events and drop the structural ones; re-measure.
+3. **Identifier disagreement that isn't evidence (Aldi).** Overture moved Aldi's URLs from
+   `stores.aldi.us/...` to `www.aldi.us/store/...` in 2026-11-18.0, and about 700 Aldi
+   OSM x Overture pairs fell below 0.70. Overture's Aldi phone is one corporate number
+   (855-955-2534), so the phone also "disagrees". Treat a website pair that shares a
+   registrable domain but differs in host/path as not comparable, and a phone shared by
+   many Overture POIs as not comparable (the inverse-frequency item below); then the pair
+   scores without identifier weights. Precision-by-band check before adopting.
+4. **Department Store type score.** Splitting Department Store out of Clothing Store
+   dropped Supermarket x Department Store from 0.419 to 0.316, and up to 349 of 1,628
+   October Supermarket x department_store matches (mostly Walmart) were lost. Decide
+   whether a label split out of another inherits the parent's column as a floor for one
+   release, or whether the empirical term should stop being row-max normalised for such
+   cells.
+5. **Silent stalls.** `openpois-remote.sh watch` reports only at the end of a stage, so the
+   stable-id OR-join ran 4.5 h unnoticed. Add a no-progress branch (log unchanged for N
+   minutes while the runner is alive).
+6. **Docs from this run.** full-data-pull: the snapshot re-parses finished extracts (only
+   download and filter are skipped), and `overwrite_download: true` re-downloads 12 GB on a
+   resume; `compare_taxonomy.py` needs `--prior-snapshot` after the config bump, or the
+   month-over-month diff is skipped. `make apply_cd TEST=1` reads `conflated_baseline.parquet`
+   while `conflate.py --test` writes `conflated_baseline_test.parquet`.
+
+## 2026-11-24 run: outcome (2026-11-26)
+
+Released as `2026-11-24-v0` (Overture `2026-11-18.0`, Geofabrik 2026-11-24, history through
+US seq 2453) from `run/2026-11-24` on openpois-01; no refit, no validation round. Drift gate
+pass (RMSE 0.022, bias +0.0003, 0.70% moving > 0.1), so the 20261001 curves were reused via
+the new `make conflate_reuse`. 17,222,801 rows (+2.1%); two new labels (Small Grocery,
+Department Store). The three Close ghost nodes demoted their Overture rows (0.69 -> ~0.11);
+the Academy Ave Dunkin' was not demoted. Change-detection gate (item 1) passed: 90/120
+gone (75%). Brand dedup absorbed 8,936; park exemption restored 32,381. Known regressions
+(December items 3-4): ~700 Aldi pairs unmatched after Overture's URL change; up to 349
+supermarket x department_store pairs lost with the label split.
+
+Run problems, each fixed and committed on the branch: Geofabrik dropped connections on the
+US PBF; the USVI extract moved (`d30dba2`); `make` targets hid failures behind `tee`
+(`23010d1`); the tie-break used `osm_type` after dropping it (`ead9b0a`); a `--test`
+conflation overwrote the production dedup audit (`5ca6273`, `72ea21b`; the polluted run was
+discarded); the stable-id alias join used `OR` and ran for hours (`6a279d8`, `7b4a754`);
+Source Coop's proxy rejects bulk deletes in the `latest/` mirror (`8ac215d`). Publishing
+removed `latest/ids/id_migration_v0_v1.parquet` (it lives on in `2026-10-22-v1/ids/`).
 
 ## 2026-10-22 run: outcome (2026-10-23)
 
@@ -160,7 +239,7 @@ re-uploaded). Details in CHANGELOG and the items below.
 - [ ] **Widen `craft` ingest on the next OSM pull.** Added 2026-07-27. `craft` is value-scoped in the ingest filter, so adding values requires re-downloading the history + snapshot PBFs (none are on disk). Queue for the next monthly refresh: `distillery` (623) → Bar, `signmaker` (~1,244) → Print and Copy Shop, `floorer` (490) + `locksmith` (152) → Home Service, `pottery` (404) → Specialty Store. Same for a `social_facility=*` subtag column in `download.osm.extract_keys`, which would split `amenity=social_facility` (19,360, currently all → Community Center) into nursing/assisted-living vs shelters and food banks — the prerequisite for a **Senior Living** shared_label, which was deferred for lack of an OSM side (Overture has `senior_living_facility`, 71k).
 - [ ] **Mirror the Overture crosswalk-liveness check on the OSM side.** Added 2026-07-27. `compare_taxonomy.py` §6 now flags crosswalk rows naming Overture values that no longer exist. Nothing does the equivalent for `taxonomy_crosswalk_openstreetmap.csv` against the tag values actually present in the snapshot, so a deprecated or retagged OSM value would rot silently. Also worth reporting unmapped-but-common values under the value-scoped keys (`historic`, `craft`, `landuse`), since those now go unlabeled rather than falling to a wildcard.
 - [ ] **Walmart Supercenter duplicates reported by Close users (big-box conflation).** Added 2026-09-25. Two Close location reports flag one real Walmart appearing twice, one OSM object plus a second record: Ithaca, NY (OSM way/107643102; Close dest_ids 9574710 and 3746065, both "Walmart Supercenter", 0 m apart; reported 2025-01-16, report `a7830b6a-b95b-4ea1-b981-4bf66724a631`) and Huntsville, AL (OSM way/728262122; reported in the June 2026 batch, report `9b12a0ec-904a-4dc6-b1a9-98c199851d0f`; the reviewer found only one OSM Walmart there, so the second row came from conflation, not OSM). **Neither reproduces in 2026-09-02-v0**: Ithaca now has one Walmart Supercenter (the OSM way; 3746065 is gone) and Huntsville one matched OSM+Overture Walmart (conf 0.986), so the July match-scoring rework most likely merged them; both Close reports were closed as fixed upstream on 2026-09-25. Open work: confirm the mechanism, then guard it. Big-box stores are mapped as large OSM building ways whose Overture point can sit far from the way's centroid, so the same store can fall outside `max_radius_m`, and department listings ("Walmart Pharmacy", "Walmart Auto Care Center") are legitimate separate rows that a naive fix would wrongly merge. Candidate guard: distance to the OSM way outline (or point-in-polygon) rather than to its centroid for building-way matches, plus a QA count of same-brand, same-name pairs within 100 m per release. Stopgap if one resurfaces: an `apply_manual_overrides` exclude on the Overture unified_id, carrying the report id.
-- [ ] **Map `shop=grocery` and `shop=greengrocer` out of the `shop,*` catch-all.** Added 2026-10-21. `taxonomy_crosswalk_openstreetmap.csv` has no row for either value, so both fall to `shop,*` → *Other Shop*, a label Close does not load. Found through 8 Close location reports (June 2026 additions mapped by njhenry) that the wtm.ingest audit could not find in Close: in `2026-10-01-v0` they are present at conf 0.87–0.96, but as *Other Shop*: Bavyas Indian Grocery (node/13963507959), Desi Brothers (13963507963), Mi Ranchito Market (13963337806), Riverwards Produce Market (13963505850), A&N House of Produce (13963505847), SÜPRMARKT (13963337812). The OSM wiki discourages `shop=grocery` (`supermarket` or `convenience` by size), but it is still in use on real food stores; `greengrocer` is a fruit-and-vegetable store. Decide the label for each (*Supermarket*, *Convenience Store*, or a new produce/grocery label with an Overture-side mapping), then run the `sync-taxonomy` pass. Count how many US features carry each value before choosing. wtm.ingest tracks the Close side in `.claude/docs/unresolved_todos.md` §27.
+- [x] **Done 2026-11-24: the Small Grocery label.** **Map `shop=grocery` and `shop=greengrocer` out of the `shop,*` catch-all.** Added 2026-10-21. `taxonomy_crosswalk_openstreetmap.csv` has no row for either value, so both fall to `shop,*` → *Other Shop*, a label Close does not load. Found through 8 Close location reports (June 2026 additions mapped by njhenry) that the wtm.ingest audit could not find in Close: in `2026-10-01-v0` they are present at conf 0.87–0.96, but as *Other Shop*: Bavyas Indian Grocery (node/13963507959), Desi Brothers (13963507963), Mi Ranchito Market (13963337806), Riverwards Produce Market (13963505850), A&N House of Produce (13963505847), SÜPRMARKT (13963337812). The OSM wiki discourages `shop=grocery` (`supermarket` or `convenience` by size), but it is still in use on real food stores; `greengrocer` is a fruit-and-vegetable store. Decide the label for each (*Supermarket*, *Convenience Store*, or a new produce/grocery label with an Overture-side mapping), then run the `sync-taxonomy` pass. Count how many US features carry each value before choosing. wtm.ingest tracks the Close side in `.claude/docs/unresolved_todos.md` §27.
 - [ ] **Ways (and relations) as ghost sources.** Added 2026-09-24. `build_ghosts.py` emits nodes only because the per-version parquets carry node `lat`/`lon` as pseudo-tags but no way geometry, so a deleted / `disused:`-retagged / renamed building way never produces a ghost even though named ways are now first-class survivors on the other side of the rule (the 150 m full-snapshot survivor filter). The same-entity rule made named lifecycle ghosts admissible (F2b), which makes the gap visible: a shop mapped as a building way that gets `disused:shop=*` is invisible to change detection. Needs a position source for prior way versions — either replay node refs from the history PBF at ghost-build time (osmium `--with-history` keeps them) or persist a per-(way, version) centroid during `osm_history_pbf` ingestion. Measure the share of `disused:*` / deleted POI ways in the history first to size the payoff.
 - [ ] **HT review: add gold-only z per bin.** Added 2026-10-02. The corrected rate gives
   every silver row one q per (segment, verdict), flat across score, while the true

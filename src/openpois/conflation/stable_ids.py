@@ -15,7 +15,8 @@ the opaque id of the row it last belonged to.
 Each release, every conflated row looks up the ids of its source keys:
 
 1. **Edges.** OSM key -> registry id; Overture key -> registry id; and, for
-   an Overture dedup winner, each dropped loser's key -> registry id (an
+   an Overture dedup winner or a row that absorbed a same-brand OSM element
+   (``dedup_osm_brand``), each dropped loser's key -> registry id (an
    *alias* edge). An OSM edge whose name changed to a different business
    (``ghost_osm.names_match`` fails on both non-empty names) is a
    *replacement*: the row may not take that id by any edge.
@@ -120,8 +121,18 @@ def mint_id(key: str, salt: int = 0, prefix: str = ID_PREFIX) -> str:
 # -----------------------------------------------------------------
 
 
-def connect(memory_limit: str = "8GB") -> duckdb.DuckDBPyConnection:
+def connect(
+    memory_limit: str = "8GB", temp_directory: Path | str | None = None,
+) -> duckdb.DuckDBPyConnection:
+    """In-memory DuckDB connection for the reconcile.
+
+    ``temp_directory`` should be on local disk: DuckDB otherwise spills to ``.tmp`` in
+    the working directory, which on openpois-01 is EFS, where a spill can hang for hours.
+    """
     con = duckdb.connect()
+    if temp_directory is not None:
+        Path(temp_directory).mkdir(parents = True, exist_ok = True)
+        con.execute(f"SET temp_directory = '{temp_directory}'")
     con.execute(f"SET memory_limit = '{memory_limit}'")
     con.execute("SET preserve_insertion_order = true")
     return con
@@ -197,9 +208,16 @@ def load_registry(
 def load_dedup_aliases(
     con: duckdb.DuckDBPyConnection,
     path: Path | str | None,
+    osm_path: Path | str | None = None,
 ) -> int:
-    """Load an ``overture_dedup_dropped.parquet`` audit into table ``aliases``
-    (``loser_key``, ``winner_key``); empty when the file is absent."""
+    """Load the dedup audits into table ``aliases`` (``loser_key``,
+    ``winner_key``); empty when the files are absent.
+
+    ``path`` is ``overture_dedup_dropped.parquet`` (Overture loser ->
+    Overture winner). ``osm_path`` is ``osm_brand_dedup_dropped.parquet``
+    from :mod:`openpois.conflation.dedup_osm_brand`: an absorbed OSM element
+    -> the kept row's OSM key, or its Overture key when it has none.
+    """
     con.execute("DROP TABLE IF EXISTS aliases")
     con.execute("CREATE TABLE aliases (loser_key VARCHAR, winner_key VARCHAR)")
     if path is not None and Path(path).exists():
@@ -208,6 +226,15 @@ def load_dedup_aliases(
             SELECT DISTINCT 'ovt:' || overture_id, 'ovt:' || winner_overture_id
             FROM read_parquet('{Path(path)}')
             WHERE overture_id IS NOT NULL AND winner_overture_id IS NOT NULL
+        """)
+    if osm_path is not None and Path(osm_path).exists():
+        con.execute(f"""
+            INSERT INTO aliases
+            SELECT DISTINCT loser_osm_key,
+                   coalesce(winner_osm_key, 'ovt:' || winner_overture_id)
+            FROM read_parquet('{Path(osm_path)}')
+            WHERE loser_osm_key IS NOT NULL
+              AND coalesce(winner_osm_key, winner_overture_id) IS NOT NULL
         """)
     return int(con.execute("SELECT count(*) FROM aliases").fetchone()[0])
 
@@ -238,13 +265,23 @@ def _build_edges(con: duckdb.DuckDBPyConnection) -> None:
                    c.ovt_key, NULL, NULL
             FROM cur c JOIN r ON c.ovt_key = r.source_key
             UNION ALL
-            SELECT c.rid, r.unified_id, {_KIND_ALIAS}, r.stale, r.id_minted,
+            SELECT a.rid, r.unified_id, {_KIND_ALIAS}, r.stale, r.id_minted,
                    a.loser_key, NULL, NULL
-            FROM aliases a
-            JOIN cur c ON c.ovt_key = a.winner_key
+            FROM (
+                -- Two equi-joins, not one join ON ... OR ...: DuckDB cannot hash an OR,
+                -- and the nested loop (1.2M aliases x 17M rows) runs for hours. Keys
+                -- carry their source prefix, so no alias matches both sides.
+                SELECT a.loser_key, c.rid
+                FROM aliases a JOIN cur c ON c.ovt_key = a.winner_key
+                UNION ALL
+                SELECT a.loser_key, c.rid
+                FROM aliases a JOIN cur c ON c.osm_key = a.winner_key
+            ) a
             JOIN r ON r.source_key = a.loser_key
             WHERE a.loser_key NOT IN (
-                SELECT ovt_key FROM cur WHERE ovt_key IS NOT NULL)
+                SELECT ovt_key FROM cur WHERE ovt_key IS NOT NULL
+                UNION ALL
+                SELECT osm_key FROM cur WHERE osm_key IS NOT NULL)
         )
         SELECT * FROM raw
     """)

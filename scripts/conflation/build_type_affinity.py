@@ -33,7 +33,13 @@ website/phone agreement, which the type score plays no part in.
 Config keys used (config.yaml):
     snapshot_overture.snapshot  — category frequencies for the prior
     conflation.conflated        — source of identifier-confirmed pairs
+    snapshot_osm.snapshot       — OSM tags, to relabel pairs under labels new since
+                                  the prior run (they have no confirmed pairs yet)
+    download.osm.filter_keys    — label-assignment priority
     conflation.type_affinity_k  — shrinkage constant
+    conflation.type_affinity_prior_parents — OSM-only label -> the label whose
+        hierarchy prior it inherits (an OSM-only label has no Overture category,
+        so without this its type score is 0 against every Overture label)
 
 Output:
     src/openpois/conflation/data/type_affinity.csv
@@ -56,14 +62,17 @@ from config_versioned import Config
 
 from openpois.conflation.taxonomy import (
     EXCLUDE_LABEL,
+    assign_osm_shared_label,
     assign_overture_shared_label,
     load_match_radii,
+    load_osm_crosswalk,
     load_overture_crosswalk,
 )
 
 config = Config("~/repos/openpois/config.yaml")
 OVERTURE_PATH = config.get_file_path("snapshot_overture", "snapshot")
 CONFLATED_PATH = config.get_file_path("conflation", "conflated")
+OSM_SNAPSHOT_PATH = config.get_file_path("snapshot_osm", "snapshot")
 OUT_PATH = (
     Path(__file__).resolve().parents[2]
     / "src" / "openpois" / "conflation" / "data" / "type_affinity.csv"
@@ -143,10 +152,71 @@ def _build_prior(tup: pd.DataFrame) -> dict[tuple[str, str], float]:
     return out
 
 
+def inherit_prior(
+    prior: dict[tuple[str, str], float], parents: dict[str, str],
+) -> dict[tuple[str, str], float]:
+    """Give each OSM-only label its parent's row of the hierarchy prior.
+
+    A label with no Overture category has no prior of its own. The parent's whole row
+    is copied to the OSM side only, so the child scores against Overture labels exactly
+    as its parent does. A child that Overture does carry, or an unknown parent, is an
+    error: the config entry would be wrong.
+    """
+    out = dict(prior)
+    overture_labels = {b for _, b in prior}
+    for child, parent in parents.items():
+        if child in overture_labels:
+            raise ValueError(f"{child!r} has Overture categories; remove its parent")
+        if parent not in overture_labels:
+            raise ValueError(f"{child!r}: parent {parent!r} has no Overture category")
+        for (a, b), value in prior.items():
+            if a == parent:
+                out[(child, b)] = value
+    return out
+
+
+def relabel_new(
+    con: duckdb.DuckDBPyConnection, snapshot_path: Path, filter_keys: list[str],
+    crosswalk: pd.DataFrame, radii: pd.DataFrame, known_labels: set[str],
+) -> pd.DataFrame:
+    """``osm_id, osm_type, label`` for OSM elements now under a label new to the prior run.
+
+    The prior run's pairs carry the labels of its own taxonomy, so a label added since
+    would have no confirmed pairs in its first month. Only elements whose label is not in
+    ``known_labels`` are returned; everything else keeps the label it was released with.
+    """
+    new_rows = crosswalk[
+        ~crosswalk["shared_label"].isin(known_labels | {EXCLUDE_LABEL})
+        & (crosswalk["osm_value"] != "*")
+    ]
+    empty = pd.DataFrame(columns = ["osm_id", "osm_type", "label"])
+    if new_rows.empty:
+        return empty
+    where = " OR ".join(
+        "{k} IN ({v})".format(
+            k = f'"{key}"',
+            v = ", ".join("'" + x.replace("'", "''") + "'" for x in grp["osm_value"]),
+        )
+        for key, grp in new_rows.groupby("osm_key")
+    )
+    cols = ", ".join(f'"{k}"' for k in filter_keys)
+    frame = con.execute(
+        f"SELECT osm_id, osm_type, {cols} FROM '{snapshot_path}' WHERE {where}"
+    ).fetch_df().astype(object)
+    labels, _ = assign_osm_shared_label(frame, crosswalk, radii, filter_keys)
+    out = frame[["osm_id", "osm_type"]].assign(label = labels)
+    return out[out["label"].isin(set(new_rows["shared_label"]))].reset_index(drop = True)
+
+
 def _build_empirical(
     con: duckdb.DuckDBPyConnection, tup: pd.DataFrame, conflated_path,
+    relabel: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Confusion counts over identifier-confirmed matched pairs."""
+    """Confusion counts over identifier-confirmed matched pairs.
+
+    ``relabel`` overrides the released label of the elements it lists (see
+    ``relabel_new``).
+    """
     # DuckDB 1.4.1 cannot register pandas' StringDtype columns (which
     # ``fetch_df`` now returns under pandas 3) — it raises "Data type 'str'
     # not recognized". Cast back to object first.
@@ -154,9 +224,15 @@ def _build_empirical(
         "tuplab",
         tup[["l0", "l1", "l2", "l3", "label"]].astype(object),
     )
+    con.register("relabel_raw", relabel.astype(object))
     return con.execute(f"""
-        WITH pairs AS (
-          SELECT cf.shared_label AS osm_label, t.label AS overture_label,
+        WITH relabel AS (
+          SELECT CAST(osm_id AS BIGINT) AS osm_id, CAST(osm_type AS VARCHAR) AS osm_type,
+            any_value(CAST(label AS VARCHAR)) AS label
+          FROM relabel_raw GROUP BY 1, 2
+        ), pairs AS (
+          SELECT coalesce(rl.label, cf.shared_label) AS osm_label,
+            t.label AS overture_label,
             lower(regexp_replace(coalesce(cf.osm_website,''),
                   '^https?://(www\\.)?|/$', '', 'g')) AS w_osm,
             lower(regexp_replace(
@@ -172,6 +248,8 @@ def _build_empirical(
            AND coalesce(ov.taxonomy_l1,'') = t.l1
            AND coalesce(ov.taxonomy_l2,'') = t.l2
            AND coalesce(ov.taxonomy_l3,'') = t.l3
+          LEFT JOIN relabel rl
+            ON CAST(cf.osm_id AS BIGINT) = rl.osm_id AND cf.osm_type = rl.osm_type
           WHERE cf.source = 'matched'
         )
         SELECT osm_label, overture_label, count(*) AS n
@@ -220,10 +298,28 @@ def main() -> None:
 
     print("Building hierarchy prior (Lin similarity over information content) ...")
     prior = _build_prior(tup)
+    parents = config.get(
+        "conflation", "type_affinity_prior_parents", fail_if_none = False,
+    ) or {}
+    prior = inherit_prior(prior, parents)
+    for child, parent in parents.items():
+        print(f"  {child} (OSM-only) takes the prior of {parent}")
     print(f"  {len(prior):,} label pairs with non-zero similarity")
 
     print(f"Reading identifier-confirmed pairs from {conflated_path} ...")
-    emp = _build_empirical(con, tup, conflated_path)
+    known = {
+        r[0] for r in con.execute(
+            f"SELECT DISTINCT shared_label FROM '{conflated_path}'"
+        ).fetchall() if r[0]
+    }
+    relabel = relabel_new(
+        con, OSM_SNAPSHOT_PATH, config.get("download", "osm", "filter_keys"),
+        load_osm_crosswalk(), load_match_radii(), known,
+    )
+    if len(relabel):
+        print(f"  relabelling {len(relabel):,} OSM elements under new labels: "
+              + ", ".join(sorted(relabel['label'].unique())))
+    emp = _build_empirical(con, tup, conflated_path, relabel)
     n_conf = int(emp.n.sum())
     print(f"  {n_conf:,} confirmed pairs over {len(emp):,} label combinations")
 

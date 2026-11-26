@@ -221,6 +221,15 @@ re-swept and diffed cheaply.
 
 ### Calibration loop
 
+A label added since the previous run has no confirmed pairs, so
+`build_type_affinity.py` relabels the previous run's pairs from this run's OSM tags
+(only labels that run did not have). An OSM-only label (Small Grocery) has no hierarchy
+prior either; it inherits the OSM-side row of a parent label from
+`conflation.type_affinity_prior_parents`. Measured on the July snapshot against October
+matches, without these two steps Small Grocery would lose about two thirds of its 1,252
+matches, and Department Store 886-1,342 of 8,458; with them, 83-116 of 1,223 and
+405-647 of 8,458 (the rest are mostly department-store x clothing or eye-care pairs).
+
 The empirical term is estimated from a *previous* conflation's output, so run N
 calibrates the table used by run N+1. This is not circular: the confirmed pairs
 are selected by website/phone agreement, which the type score plays no part in.

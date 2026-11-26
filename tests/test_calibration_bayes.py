@@ -344,6 +344,7 @@ def test_segment_logits_match_direct_tensor_product(rows):
                                rtol = 1e-4, atol = 1e-4)
 
 
+@pytest.mark.model
 @pytest.mark.parametrize("arm", ["A", "C"])
 def test_short_fit_recovers_known_curve(arm):
     rows = _synthetic_rows(n_per_segment = 500, seed = 11)
@@ -359,6 +360,7 @@ def test_short_fit_recovers_known_curve(arm):
     assert band["lower"][0] - 0.03 <= truth <= band["upper"][0] + 0.03
 
 
+@pytest.mark.model
 def test_jax_core_default_path_unchanged():
     """nuts_sample without adaptation_kwargs equals a direct BlackJAX run."""
     import blackjax
@@ -788,6 +790,7 @@ def test_matched_only_spec_uses_the_matched_tau_scale(rows):
     np.testing.assert_allclose(median_tau, 2.0 * halfnorm.median(), rtol = 0.1)
 
 
+@pytest.mark.model
 def test_short_single_segment_fit_runs():
     rows = _synthetic_rows(n_per_segment = 300, seed = 61)
     spec = cb.ModelSpec(arm = "C", label_noise = "fixed_mixture",

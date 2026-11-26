@@ -1,31 +1,31 @@
 # Versioned directories (used with config.get_dir_path())
 versions:
-  osm_data: "20261022"
+  osm_data: "20261124"
   model_output: "20260727_by_shared_label"
-  snapshot_osm: "20261022"
-  # 2026-10-21.0 release. The prior month's snapshot (20260923, release
-  # 2026-09-23.1) stays on openpois-01 as the baseline for
+  snapshot_osm: "20261124"
+  # 2026-11-18.0 release. The prior month's snapshot (20261021, release
+  # 2026-10-21.0) stays on openpois-01 as the baseline for
   # scripts/overture/compare_confidence.py. The July 20260722* dirs stay on
   # the laptop as the method-paper basis.
-  snapshot_overture: "20261021"
+  snapshot_overture: "20261118"
   # 20260730 (kept, July release) added the two private-property / non-POI
   # exclusions: the residential-landuse spatial rule (250,905 unnamed POIs)
   # and the wildcard -> inclusion-set taxonomy change (61,764 unlabeled
   # rows). 20260902 is the first run with min_shadow_match_score 0.70 and
   # the August Overture taxonomy fixes (beauty_service rename,
   # food_delivery_service move).
-  conflation: "20261022"
+  conflation: "20261124"
   # Validation round whose condensed handoff drives the confidence
   # calibration (see .claude/docs/confidence-calibration.md). Produced by
   # openpois-validator's scripts/08_export_handoff.py; the curves are
   # release-specific and do not transport across Overture releases.
   calibration: "20261001"
-  source_coop: "2026-10-22-v1"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
+  source_coop: "2026-11-24-v0"   # Source Cooperative upload folder (YYYY-MM-DD-v<IDX>); bump v<IDX> only for same-day re-uploads
   # Ghost POI dataset reconstructed from OSM history (one row per
   # detected previous-state event). Pinned to the same value as
   # ``osm_data`` since it is derived from the same history parquets,
   # and regenerated together with the monthly snapshot refresh.
-  ghost_osm: "20261022"
+  ghost_osm: "20261124"
   # Hand-curated exclude/include pins applied after calibration (see
   # conflation.manual_overrides). Rows are appended by the Close triage
   # lane; bump the version when the file is re-baselined, not per row.
@@ -52,7 +52,7 @@ download:
       coastline_buffer_m: 100
   osm:
     start_date: 2016-01-01
-    end_date: 2026-10-21
+    end_date: 2026-11-25
     # Snapshot extracts. Geofabrik publishes a dedicated PBF for PR and USVI
     # under north-america/us/, but the western-Pacific inhabited territories
     # (Guam, Northern Mariana Islands, American Samoa) have no per-territory
@@ -62,7 +62,7 @@ download:
     # POIs and are accepted as bonus coverage.
     pbf_url: "https://download.geofabrik.de/north-america/us-latest.osm.pbf"
     pr_pbf_url: "https://download.geofabrik.de/north-america/us/puerto-rico-latest.osm.pbf"
-    usvi_pbf_url: "https://download.geofabrik.de/north-america/us/us-virgin-islands-latest.osm.pbf"
+    usvi_pbf_url: "https://download.geofabrik.de/north-america/us/us-virgin-islands/us-virgin-islands-latest.osm.pbf"
     american_oceania_pbf_url: "https://download.geofabrik.de/australia-oceania/american-oceania-latest.osm.pbf"
     # Full-history PBFs live on Geofabrik's OAuth-protected internal server.
     # Any OSM account grants access; generate a Netscape-format cookie jar by
@@ -89,7 +89,7 @@ download:
     history_mode: "incremental"
     incremental_history:
       # osm_data version to roll forward (the previous month's run).
-      base_version: "20261001"
+      base_version: "20261022"
       # Warn once this many incremental runs are chained without a full build.
       max_chain_months: 12
       # Keep the downloaded .osc.gz files under osm_data/<v>/diffs/.
@@ -153,9 +153,20 @@ download:
                   'common', 'batting_cage', 'practice_pitch', 'paddling_pool']
         amenity: ['fountain', 'shower', 'boat_storage', 'rv_storage']
         tourism: ['rv_pitch']
+      # A point that ALSO falls inside a public park polygon (leisure=park or
+      # recreation_ground, access not private/no, taken from the snapshot being
+      # filtered) is kept: US residential blocks often enclose city parks, and
+      # the rule was dropping their unnamed playgrounds and pitches (Canyon Rim
+      # Park, Millcreek UT, 2026-11). Takes effect from the next OSM pull, or a
+      # re-run of apply_residential_exclusion.py on a *.preresidential.parquet.
+      park_exemption:
+        enabled: true
+        leisure_values: ['park', 'recreation_ground']
+        excluded_access: ['private', 'no']
     extract_keys: [
       'addr:city','addr:country','addr:housename','addr:housenumber','addr:postcode',
-      'addr:state','addr:street','addr:unit','access','amenity','atm','bar','bicycle',
+      'addr:state','addr:street','addr:unit','access','airside','amenity','atm','bar',
+      'bicycle',
       'bicycle_parking','brand','brand:wikidata','building','check_date',
       'check_date:opening_hours','craft','cuisine','description','education','email',
       'emergency','fountain','geometry','healthcare','healthcare:speciality','historic',
@@ -166,7 +177,7 @@ download:
       'website','wikidata','wikipedia'
     ]
   overture:
-    release_date: "2026-10-21.0"  # pin for determinism; null = auto-detect latest
+    release_date: "2026-11-18.0"  # pin for determinism; null = auto-detect latest
     s3_bucket: "overturemaps-us-west-2"
     s3_region: "us-west-2"
     # DuckDB resource caps for the per-part S3 scans and the final polygon
@@ -519,6 +530,12 @@ conflation:
   # docs/type-affinity-metric.md. Rebuild the table after changing this:
   #   python scripts/conflation/build_type_affinity.py
   type_affinity_k: 100
+  # OSM-only labels (no Overture category) take another label's hierarchy prior;
+  # without one their type score is 0 against every Overture label. Small Grocery
+  # (2026-11) covers OSM greengrocer, grocery and food, which Overture files mainly
+  # under grocery_store (Supermarket).
+  type_affinity_prior_parents:
+    Small Grocery: Supermarket
   # Drop conflated points that never received a shared_label (uncategorized
   # POIs) from the canonical conflated.parquet. Applied in the change-detection
   # step; conflated_baseline.parquet keeps the full unfiltered set.
@@ -555,6 +572,29 @@ conflation:
     max_radius_m: 100
     chunk_target_pois: 200_000
     duckdb_memory_limit: "4GB"
+  # OSM-internal same-brand dedup (dedup_osm_brand.py), run on the merged rows
+  # before assign_stable_ids.py. Absorbs an OSM-only row into a kept row of the
+  # same shared_label within radius_m whose brand key (brand else name, generic
+  # tokens such as "pharmacy" dropped) reaches min_name_score; a matched row
+  # (OSM + Overture) is always kept. Built for the drugstore building +
+  # in-store pharmacy node pairs (4,427 Pharmacy pairs in 2026-10-22-v1).
+  # labels limits it (null = every label). The accepted list is the labels whose
+  # sampled pairs were the same place at >= 14/15 (8/8 for labels with < 50
+  # pairs) on 2026-10-22, judged from live OSM tags: one destination per place
+  # a person travels to. Rejected: ATM and Charging Station (separate machines
+  # and charge points), Clothing/Shoe/Cell Phone (kids or sub-brand stores next
+  # door), Clinic and Public Safety (separate departments, police vs fire), and
+  # every label under the bar. Table: scripts/conflation/README.md section 8.
+  osm_brand_dedup:
+    enabled: true
+    radius_m: 50
+    min_name_score: 90
+    labels: [
+      "Pharmacy", "Gas Station", "Fast Food", "Hotel", "Restaurant", "Bank",
+      "Place of Worship", "Self-Storage", "Car Dealer", "Supermarket",
+      "Discount Store", "Recreation", "Car Wash", "Real Estate", "Tire Store",
+      "Car Rental", "Pet Store", "Bar", "Kindergarten",
+    ]
   test_bbox:
     xmin: -122.45
     ymin: 47.50
@@ -652,6 +692,9 @@ conflation:
   stable_ids:
     guard_threshold: 70
     id_prefix: "opoi_"
+    # For assign_stable_ids.py on openpois-01 (64 GB); a national run spills below
+    # this. Lower it before running that stage on a 24 GB laptop.
+    duckdb_memory_limit: "28GB"
   # Existence-confidence calibration (see
   # .claude/docs/confidence-calibration.md). From October 2026 production is
   # three Bayesian monotone-spline fits with the fixed-rate mixture label layer
@@ -761,8 +804,8 @@ publish:
   # Values surfaced in the per-version README. Set each round until the
   # pipeline captures them automatically — see .claude/TODO.md.
   version_metadata:
-    osm_snapshot_date: "2026-10-21"   # YYYY-MM-DD Geofabrik extract date
-    overture_release: "2026-10-21.0"  # Overture Maps release ID, https://docs.overturemaps.org/release-calendar/
+    osm_snapshot_date: "2026-11-24"   # YYYY-MM-DD Geofabrik extract date
+    overture_release: "2026-11-18.0"  # Overture Maps release ID, https://docs.overturemaps.org/release-calendar/
     model_commit: null                # null → use current git HEAD; set a short SHA to pin
   # PMTiles generation — multi-zoom archives for OSM, conflated and Overture.
   # Site's View.minZoom is 10 (full-metro view). Zooms up to the archive's

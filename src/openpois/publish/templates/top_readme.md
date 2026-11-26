@@ -50,6 +50,9 @@ Overture Maps places. Key columns:
 | `calibration_flag` | Null for the ordinary case; otherwise why this row was handled specially (see Confidence) |
 | `match_score`, `match_distance_m` | Diagnostics for the OSM × Overture link |
 | `osm_conf_mean`, `overture_confidence` | The two raw per-source inputs to the calibration |
+| `access` | OSM `access` tag, when the row has an OSM element |
+| `airside` | OSM `airside` tag: `yes` marks a place past airport security, which travellers outside the airport cannot reach |
+| `absorbed_osm_keys` | OSM elements merged into this row because they mapped the same branded place twice (for example a drugstore building and the pharmacy counter inside it), as `node/123` / `way/456`; null when none |
 | `bbox` | GeoParquet 1.1 covering struct, for spatial row-group pruning |
 | `geohash` | Within-partition sort key (precision 6) |
 | `geometry` | WKB point (EPSG:4326) |

@@ -37,6 +37,7 @@ def osm_gdf():
             "website": ["https://osm-shop.example", None, None],
             "opening_hours": ["Mo-Fr 09:00-17:00", None, None],
             "access": ["yes", None, "private"],
+            "airside": ["yes", None, "no"],
         },
         geometry = [
             Point(-122.335, 47.608),
@@ -262,7 +263,7 @@ class TestMergeMatchedPois:
             "addr_city", "addr_state", "addr_postcode",
             "addr_country",
             "phone", "website",
-            "opening_hours", "access",
+            "opening_hours", "access", "airside",
             "overture_socials", "overture_categories_alternate",
             "osm_name", "overture_name",
             "osm_brand", "overture_brand",
@@ -549,6 +550,32 @@ class TestMetadataPullThrough:
         # Unmatched-Overture rows have no access tag.
         ov_only = result[result["source"] == "overture"]
         assert ov_only["access"].isna().all()
+
+    def test_airside_osm_only_field(
+        self, osm_gdf, overture_gdf, matches,
+    ):
+        """``airside`` flows from OSM like ``access``; null on
+        unmatched-Overture rows and when the OSM frame lacks the column.
+        """
+        osm_labels = np.array(["Cafe", "Supermarket", "Park"])
+        ov_labels = np.array(["Cafe", "Supermarket", "Park"])
+        result = merge_matched_pois(
+            osm_gdf, overture_gdf, matches,
+            osm_labels, ov_labels,
+        )
+        matched = result[result["source"] == "matched"].iloc[0]
+        assert matched["airside"] == "yes"
+        osm_rel = result[
+            (result["source"] == "osm") & (result["osm_id"] == 300)
+        ].iloc[0]
+        assert osm_rel["airside"] == "no"
+        assert result[result["source"] == "overture"]["airside"].isna().all()
+        # A snapshot built before 2026-11-23 has no airside column.
+        older = merge_matched_pois(
+            osm_gdf.drop(columns = "airside"), overture_gdf, matches,
+            osm_labels, ov_labels,
+        )
+        assert older["airside"].isna().all()
 
     def test_brand_backfill_osm_higher_with_null_osm_brand(self):
         """Regression: with OSM having strictly higher confidence

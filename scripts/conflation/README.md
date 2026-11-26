@@ -150,6 +150,76 @@ For name and brand, the source with higher confidence for that specific POI
 determines the value. Both original values are preserved with source-prefixed
 columns (`osm_name`, `overture_name`, `osm_brand`, `overture_brand`).
 
+### 8. OSM Same-Brand Dedup
+
+OSM often maps one branded business as two valid objects: a drugstore's building
+(`shop=chemist`) and the pharmacy counter inside it (`amenity=pharmacy`), or two canopies
+of one fuel station. Both get the same `shared_label`, and the matcher pairs at most one
+with the Overture listing, so the merge emits two POIs for one place.
+`dedup_osm_brand.py` runs on the merged rows, after the save and before
+`assign_stable_ids.py`, and absorbs an OSM-only row into a kept row when they share a
+`shared_label`, sit within `radius_m` (50 m), and their brand keys agree (brand, else
+name, normalised, with generic tokens such as "pharmacy" dropped; `token_set_ratio >=
+90`; at least one side carries a brand). A matched row is always kept and an
+Overture-only row is never absorbed.
+
+The kept row keeps its id, source and attributes. It lists every absorbed element in
+`absorbed_osm_keys` (`node/123`, `way/456`), and when it is a node and a building way or
+relation was absorbed into it, it takes that building's geometry. `match_distance_m` still
+describes the OSM x Overture link as matched. `bbox` and `geohash` are computed from
+`geometry` at publish, so they follow. Each absorbed element is also written to
+`osm_brand_dedup_dropped.parquet`, which `assign_stable_ids.py` reads as alias edges, so
+its prior id is recorded as `merged_into` the kept row's id.
+
+It runs only for the labels in `conflation.osm_brand_dedup.labels`. Across all labels the
+rule would absorb 11,336 rows on 2026-10-22. Each label's pairs were spot-checked against
+live OSM tags (2026-11-23) and judged by one question: is this one place a person travels
+to? A label is merged when at least 14 of 15 sampled pairs (8 of 8 for labels with fewer
+than 50 pairs) were the same place. With the accepted labels the stage absorbs 8,940 rows
+into 8,727 kept rows, 2,334 of which take a building's geometry.
+
+| Label | Pairs | Sampled | Same place | Verdict | What the pairs were |
+|---|---:|---:|---:|---|---|
+| Pharmacy | 4,332 | 35 | 35 | **merged** | store building + in-store pharmacy node |
+| Gas Station | 2,111 | 15 | 15 | **merged** | canopies / station node of one station |
+| Fast Food | 560 | 15 | 15 | **merged** | building + node of one outlet |
+| Hotel | 380 | 15 | 14 | **merged** | building + node; 1 pair was two towers of one hotel complex |
+| Charging Station | 350 | 15 | 0 | left alone | separate charge points in one lot |
+| ATM | 332 | 15 | 0 | left alone | separate machines |
+| Convenience Store | 298 | 15 | 13 | left alone | two airport newsstands; a live store paired with a vacant one |
+| Restaurant | 277 | 15 | 14 | **merged** | 1 pair was two restaurants of one brand next door |
+| Bank | 274 | 15 | 14 | **merged** | branch + drive-through |
+| Clothing Store | 250 | 15 | 7 | left alone | Gap / babyGap, men's / women's: separate stores |
+| Place of Worship | 242 | 15 | 15 | **merged** | church building + grounds |
+| Self-Storage | 158 | 15 | 15 | **merged** | buildings of one facility |
+| Car Dealer | 154 | 15 | 14 | **merged** | lot / showroom of one dealer; 1 auto mall |
+| Supermarket | 141 | 15 | 15 | **merged** | building + node |
+| Other Shop | 132 | 15 | 13 | left alone | airport newsstands |
+| Car Repair | 117 | 15 | 12 | left alone | parts store vs another shop |
+| Cafe | 101 | 15 | 13 | left alone | several Starbucks in one airport or campus |
+| Shoe Store | 84 | 15 | 5 | left alone | Foot Locker / Kids Foot Locker |
+| Other Financial | 65 | 15 | 12 | left alone | separate agents' offices |
+| Cell Phone Store | 63 | 15 | 9 | left alone | T-Mobile / Metro by T-Mobile |
+| Discount Store | 58 | 15 | 15 | **merged** | building + node |
+| Recreation | 51 | 15 | 15 | **merged** | facility + feature inside it (rink, ride) |
+| School | 48 | 8 | 7 | left alone | two schools on one site |
+| Clinic | 48 | 8 | 2 | left alone | separate departments |
+| Public Safety | 48 | 8 | 3 | left alone | police vs fire |
+| Fitness Center | 46 | 8 | 7 | left alone | one club, two addresses (unclear) |
+| Specialty Store | 44 | 8 | 7 | left alone | two Coach stores (unclear) |
+| Car Wash | 41 | 8 | 8 | **merged** | tunnels / vacuums of one wash |
+| Real Estate | 35 | 8 | 8 | **merged** | agents in one office |
+| Furniture Store | 31 | 8 | 6 | left alone | kids / sub-brand stores |
+| Dessert Shop | 29 | 8 | 7 | left alone | two mall kiosks |
+| Tire Store | 28 | 8 | 8 | **merged** | building + node |
+| Car Rental | 27 | 8 | 8 | **merged** | counter + lot |
+| Pet Store | 27 | 8 | 8 | **merged** | store + grooming inside it |
+| Dog Park | 26 | 8 | 0 | left alone | unnamed enclosures; no basis to judge |
+| Hair and Beauty | 24 | 8 | 5 | left alone | different salons in one suite |
+| Bar | 23 | 8 | 8 | **merged** | brewery building + taproom |
+| Kindergarten | 21 | 8 | 8 | **merged** | building + grounds |
+| 47 labels under 20 pairs | 260 | 20 | 16 | left alone | mixed |
+
 ## Output Schema
 
 | Column | Type | Description |
@@ -172,6 +242,9 @@ columns (`osm_name`, `overture_name`, `osm_brand`, `overture_brand`).
 | `osm_brand` | str, nullable | Original OSM brand |
 | `overture_brand` | str, nullable | Original Overture brand name |
 | `osm_conf_mean` | float64, nullable | Original OSM confidence |
+| `access` | str, nullable | OSM `access` tag (NULL for Overture-only rows) |
+| `airside` | str, nullable | OSM `airside` tag: `yes` for POIs past airport security (NULL for Overture-only rows and snapshots before 2026-11-23) |
+| `absorbed_osm_keys` | list<str>, nullable | OSM elements folded into this row by the same-brand dedup (`node/123`, `way/456`); NULL when none |
 | `overture_confidence` | float64, nullable | Original Overture confidence |
 | `geometry` | Point/Polygon/MultiPolygon | EPSG:4326 |
 
@@ -190,6 +263,11 @@ conflation:
   type_weight: 0.25                 # Weight for type taxonomy score component
   identifier_weight: 0.20           # Weight for identifier score component
   chunk_size: 500_000               # OSM rows per BallTree query batch
+  osm_brand_dedup:                  # Section 8; on the merged rows
+    enabled: true
+    radius_m: 50
+    min_name_score: 90
+    labels: ["Pharmacy", "Gas Station", ...]  # 19 labels; null = every label
   test_bbox:                        # Geographic filter for --test mode
     xmin: -122.45
     ymin: 47.50
@@ -242,6 +320,7 @@ src/openpois/conflation/
     match.py                        # Spatial search, scoring, match selection
     merge.py                        # Confidence blending and output assembly
     spill.py                        # Row-filtered streaming spill (post-dedup Overture)
+    dedup_osm_brand.py              # Same-brand OSM dedup on the merged rows
 
 scripts/conflation/
     conflate.py                     # Driver script (loads config, calls library)

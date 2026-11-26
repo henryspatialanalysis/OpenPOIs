@@ -82,7 +82,7 @@ Two consequences of removing a wildcard, both accepted:
 1. `scripts/osm_data/download_history.py` builds `TAG_FILTER_EXPRS` from the *same* function, so the next history pull narrows too and ghosts stop being reconstructed for omitted values. Consistent — those POIs are not published — but ghost counts will move.
 2. A newly-popular `amenity=` value is now invisible until someone adds it, and backfilling needs a re-download.
 
-Adding a value here that maps to a **new** `shared_label` is a bigger change: it needs a `match_radii.csv` radius, an entry in `taxonomy_crosswalk_overture_maps.csv` (without one the label is OSM-only and can never match an Overture POI), possibly a `top_level_matches.csv` `(overture_l0, osm_key)` pair — `test_two_sided_labels_have_top_level_matches` enforces this — a `build_type_affinity.py` rebuild, and a full [sync-taxonomy](../skills/sync-taxonomy/SKILL.md) pass.
+Adding a value here that maps to a **new** `shared_label` is a bigger change: it needs a `match_radii.csv` radius, an entry in `taxonomy_crosswalk_overture_maps.csv` (without one the label is OSM-only and can never match an Overture POI), possibly a `top_level_matches.csv` `(overture_l0, osm_key)` pair — `test_two_sided_labels_have_top_level_matches` enforces this — a `build_type_affinity.py` rebuild (an OSM-only label also needs `conflation.type_affinity_prior_parents`, or it scores 0 on type against everything; `build_type_affinity.py` relabels the prior run's confirmed pairs for labels new since then), and a full [sync-taxonomy](../skills/sync-taxonomy/SKILL.md) pass.
 
 ## Regenerating the site's taxonomy artifacts
 

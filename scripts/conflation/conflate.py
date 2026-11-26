@@ -48,6 +48,7 @@ from config_versioned import Config
 from shapely.geometry import box
 
 from openpois.conflation.chunking import extract_centroids_lonlat
+from openpois.conflation.dedup_osm_brand import dedup_osm_brand
 from openpois.conflation.dedup_overture import mark_no_conflate
 from openpois.conflation.match import (
     compute_match_scores,
@@ -82,6 +83,7 @@ CHECKPOINT_SUBDIR = "chunk_matches"
 DEDUP_CHECKPOINT_SUBDIR = "chunk_selfdedup"
 DEDUP_DROPPED_FILE = "overture_dedup_dropped.parquet"
 DEDUP_POST_FILTER_FILE = "overture_post_dedup.parquet"
+OSM_DEDUP_DROPPED_FILE = "osm_brand_dedup_dropped.parquet"
 
 
 # -----------------------------------------------------------------
@@ -175,6 +177,14 @@ DEDUP_DUCKDB_MEM = str(
     DEDUP_CFG.get("duckdb_memory_limit", "4GB")
 )
 
+OSM_DEDUP_CFG = config.get(
+    "conflation", "osm_brand_dedup", fail_if_none = False,
+) or {}
+OSM_DEDUP_ENABLED = bool(OSM_DEDUP_CFG.get("enabled", True))
+OSM_DEDUP_RADIUS_M = float(OSM_DEDUP_CFG.get("radius_m", 50))
+OSM_DEDUP_MIN_NAME = float(OSM_DEDUP_CFG.get("min_name_score", 90))
+OSM_DEDUP_LABELS = OSM_DEDUP_CFG.get("labels") or None
+
 # Columns needed for matching (memory optimization). Every key in
 # ``FILTER_KEYS`` must be loaded: ``assign_osm_shared_label`` skips tag
 # columns that are absent, so omitting one silently strips the label
@@ -211,6 +221,11 @@ OSM_MERGE_COLS = [
     # Contact + hours + access
     "phone", "website", "opening_hours", "access",
 ]
+# ``airside`` (post-security airport POIs) entered the OSM extract on
+# 2026-11-23. Snapshots built before then lack it; the merge writes NULL for
+# them (``_col_or_null``), so the column is loaded only when present.
+if "airside" in pq.read_schema(OSM_PATH).names:
+    OSM_MERGE_COLS.append("airside")
 OVERTURE_MERGE_COLS = [
     "overture_id", "overture_name", "brand_name",
     "confidence", "geometry",
@@ -458,6 +473,11 @@ if __name__ == "__main__":
         else DEDUP_POST_FILTER_FILE
     )
     post_dedup_resume_path = conflation_dir / dedup_spill_name
+    # The audit feeds assign_stable_ids.py (Overture loser -> winner), so a --test run
+    # must not overwrite the full run's.
+    dedup_audit_path = conflation_dir / (
+        "overture_dedup_dropped_test.parquet" if args.test else DEDUP_DROPPED_FILE
+    )
     if DEDUP_ENABLED and post_dedup_resume_path.exists():
         print(
             f"\nReusing post-dedup Overture from "
@@ -475,6 +495,19 @@ if __name__ == "__main__":
                 f"Post-dedup spill {post_dedup_resume_path} is "
                 f"missing columns {stale} — it was written by an "
                 f"older run. Delete it and re-run to regenerate."
+            )
+        # The spill is what the dedup kept, so the audit must hold the rest.
+        n_kept = pq.ParquetFile(post_dedup_resume_path).metadata.num_rows
+        n_dropped = len(overture_gdf) - n_kept
+        n_audit = (
+            pq.ParquetFile(dedup_audit_path).metadata.num_rows
+            if dedup_audit_path.exists() else 0
+        )
+        if n_audit != n_dropped:
+            raise ValueError(
+                f"{dedup_audit_path} has {n_audit:,} rows but the spill implies "
+                f"{n_dropped:,} dropped. Delete {post_dedup_resume_path} and "
+                f"re-run the dedup so the two agree."
             )
         del overture_source_rows
         overture_gdf = _load_gdf(
@@ -495,8 +528,9 @@ if __name__ == "__main__":
         overture_merge_needs_test_bbox = False
         log_rss("after Overture post-dedup reload")
     elif DEDUP_ENABLED:
-        dedup_checkpoint_dir = (
-            conflation_dir / DEDUP_CHECKPOINT_SUBDIR
+        dedup_checkpoint_dir = conflation_dir / (
+            f"{DEDUP_CHECKPOINT_SUBDIR}_test" if args.test
+            else DEDUP_CHECKPOINT_SUBDIR
         )
         (
             no_conflate,
@@ -520,14 +554,13 @@ if __name__ == "__main__":
         )
 
         if no_conflate.any():
-            audit_path = conflation_dir / DEDUP_DROPPED_FILE
             _write_dedup_audit(
                 overture_gdf, no_conflate,
-                dedup_components, audit_path,
+                dedup_components, dedup_audit_path,
             )
             print(
                 f"  Wrote {dedup_summary['n_dropped']:,} dropped "
-                f"rows to {audit_path}"
+                f"rows to {dedup_audit_path}"
             )
 
         # Filter overture rows + parallel arrays. A boolean-mask
@@ -677,6 +710,14 @@ if __name__ == "__main__":
             "comparability falls back to websites only; re-pull to enable)"
         )
 
+    # Source-id order breaks exact score/distance ties, so a tie resolves
+    # the same way whatever the snapshot row order. Computed before the drop
+    # below, which removes osm_type.
+    osm_order = source_id_order(
+        osm_gdf["osm_type"].astype(str) + "/" + osm_gdf["osm_id"].astype(str)
+    )
+    overture_order = source_id_order(overture_gdf["overture_id"])
+
     # Drop columns only needed for taxonomy assignment
     for col in [
         *FILTER_KEYS,
@@ -692,12 +733,6 @@ if __name__ == "__main__":
     log_rss("after taxonomy assignment + tag-col drop")
 
     # -- Matching --------------------------------------------------
-    # Source-id order breaks exact score/distance ties, so a tie resolves
-    # the same way whatever the snapshot row order.
-    osm_order = source_id_order(
-        osm_gdf["osm_type"].astype(str) + "/" + osm_gdf["osm_id"].astype(str)
-    )
-    overture_order = source_id_order(overture_gdf["overture_id"])
     # Prepare name/brand arrays once (used by both code paths).
     osm_names = osm_gdf["name"].to_numpy()
     osm_brands = (
@@ -787,7 +822,9 @@ if __name__ == "__main__":
             gc.collect()
     else:
         # -- Chunked driver (default) ------------------------------
-        checkpoint_dir = conflation_dir / CHECKPOINT_SUBDIR
+        checkpoint_dir = conflation_dir / (
+            f"{CHECKPOINT_SUBDIR}_test" if args.test else CHECKPOINT_SUBDIR
+        )
         print(
             f"\nRunning chunked matching "
             f"(target ~{CHUNK_TARGET_POIS:,} POIs/chunk, "
@@ -952,6 +989,31 @@ if __name__ == "__main__":
     print("\nSaving conflated dataset ...")
     n_total = save_conflated_from_parts(part_paths, OUTPUT_PATH)
     log_rss("after final parquet stream")
+
+    # -- OSM same-brand dedup (before assign_stable_ids.py) ---------
+    # Needs the merged rows: it keeps the row that carries the Overture
+    # match. See openpois.conflation.dedup_osm_brand.
+    osm_dedup_summary: dict | None = None
+    osm_dedup_audit = conflation_dir / (
+        "osm_brand_dedup_dropped_test.parquet" if args.test
+        else OSM_DEDUP_DROPPED_FILE
+    )
+    if OSM_DEDUP_ENABLED:
+        print(
+            f"\nOSM same-brand dedup (radius {OSM_DEDUP_RADIUS_M:g} m, "
+            f"name score >= {OSM_DEDUP_MIN_NAME:g}) ..."
+        )
+        osm_dedup_summary = dedup_osm_brand(
+            OUTPUT_PATH, osm_dedup_audit,
+            radius_m = OSM_DEDUP_RADIUS_M,
+            min_name_score = OSM_DEDUP_MIN_NAME,
+            labels = OSM_DEDUP_LABELS,
+        )
+        n_total -= osm_dedup_summary["n_absorbed"]
+        log_rss("after OSM same-brand dedup")
+    elif osm_dedup_audit.exists():
+        # A stale audit would feed id aliases for rows still present.
+        osm_dedup_audit.unlink()
     config.write_self("conflation")
 
     # Clear chunk checkpoints after a successful save.
@@ -994,5 +1056,10 @@ if __name__ == "__main__":
             f"  Overture internal dedup: "
             f"{dedup_summary['n_dropped']:,} dropped across "
             f"{dedup_summary['n_multi_clusters']:,} clusters"
+        )
+    if osm_dedup_summary is not None:
+        print(
+            f"  OSM same-brand dedup: "
+            f"{osm_dedup_summary['n_absorbed']:,} rows absorbed"
         )
     print(f"  Output: {OUTPUT_PATH}")

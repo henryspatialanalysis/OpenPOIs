@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import time
 from pathlib import Path
 
@@ -35,6 +36,7 @@ from config_versioned import Config
 from openpois.conflation import stable_ids as si
 
 DEDUP_DROPPED_FILE = "overture_dedup_dropped.parquet"
+OSM_DEDUP_DROPPED_FILE = "osm_brand_dedup_dropped.parquet"
 
 
 def _suffixed(path: Path, suffix: str) -> Path:
@@ -79,16 +81,22 @@ def main() -> None:
                 )
             prior = None
     dedup = conflated.parent / DEDUP_DROPPED_FILE
+    osm_dedup = conflated.parent / OSM_DEDUP_DROPPED_FILE
 
     print(f"Release:  {release}")
     print(f"Target:   {target} (rewritten in place)")
     print(f"Registry: {prior or 'none (all ids minted)'}")
 
-    con = si.connect()
+    temp_dir = conflated.parent / "duckdb_tmp"
+    con = si.connect(
+        memory_limit = str(settings.get("duckdb_memory_limit", "8GB")),
+        temp_directory = temp_dir,
+    )
     n_rows = si.load_release(con, [target])
     si.load_registry(con, prior)
     n_alias = si.load_dedup_aliases(
         con, dedup if (dedup.exists() and not args.test) else None,
+        osm_dedup if (osm_dedup.exists() and not args.test) else None,
     )
     print(f"  {n_rows:,} rows, {n_alias:,} dedup alias pairs")
     stats = si.reconcile(con, release, guard_threshold = guard, prefix = prefix)
@@ -107,6 +115,7 @@ def main() -> None:
         stats_out.write_text(json.dumps(stats, indent = 2))
         print(f"  Wrote {registry_out.name}, {changes_out.name}, {stats_out.name}")
     con.close()
+    shutil.rmtree(temp_dir, ignore_errors = True)
     print(f"Done in {time.time() - started:.1f}s")
 
 

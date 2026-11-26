@@ -849,9 +849,11 @@ class TestCrosswalkIntegrity:
         # car_sharing, ~245 US POIs), so Car Rental is OSM-only by
         # necessity. Farmers Market has no OSM *tag*; its OSM side
         # comes from the amenity=marketplace name split, which the
-        # static crosswalk cannot express.
+        # static crosswalk cannot express. Small Grocery is OSM-only by choice
+        # (Overture files small grocers under grocery_store, which also holds
+        # supermarkets); its type score comes from type_affinity_prior_parents.
         osm_labels, overture_labels = _crosswalk_labels()
-        assert osm_labels - overture_labels == {"Car Rental"}
+        assert osm_labels - overture_labels == {"Car Rental", "Small Grocery"}
         assert overture_labels - osm_labels == {"Farmers Market"}
 
     def test_two_sided_labels_have_top_level_matches(self):

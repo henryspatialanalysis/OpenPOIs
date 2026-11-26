@@ -77,6 +77,8 @@ Publishing from the remote: after Nat's local `source-coop login`, run
 ## Steps
 
 1. **Bump `versions.conflation` and `versions.source_coop`** in `config.yaml`.
+   First set `versions.id_registry` to the current `versions.conflation`, the release being
+   replaced (see [docs/data-versioning.md](../../docs/data-versioning.md)).
    `versions.source_coop` is the remote folder name — `YYYY-MM-DD-vN`. Keep
    `vN` at `v0`; only bump `v1`, `v2`, … if you re-upload under the same
    calendar date.
@@ -113,6 +115,7 @@ Publishing from the remote: after Nat's local `source-coop login`, run
    make conflate_baseline   # matching + stable ids (writes conflated_baseline.parquet)
    make apply_cd            # CD pass only (reads baseline, writes conflated_cd.parquet)
    make conflate_to_cd      # stages 1-3 only: stop after change detection (validation months)
+   make conflate_reuse PRIOR=<v>     # whole run in a curve-reuse month (no fit)
    make calibrate           # fit + export + apply + plot + HT review (reads conflated_cd, writes conflated.parquet)
    make fit_calibration     # the three Bayesian fits only — touches no POI data
    make export_calibration  # acceptance gate + grid curves into conflation/<v>/calibration/
@@ -129,24 +132,19 @@ Publishing from the remote: after Nat's local `source-coop login`, run
    **Whether to fit at all is governed by the monthly confidence-drift gate**
    (`scripts/overture/compare_confidence.py`, run during the data pull; decision rule in
    [docs/confidence-calibration.md](../../docs/confidence-calibration.md)). On a
-   **pass** (the normal monthly case), do **not** refit — reuse the most recent fitted
-   curves verbatim. No make target covers this, and `apply_calibration.py
-   --curves-dir` only *reads* the prior curves: it does not copy them, so the new
-   version's `calibration/` would stay empty and `ht_review.py` would have nothing to
-   read. Copy them first, as the 2026-10-22 run did in one remote stage:
+   **pass** (the normal monthly case), do **not** refit: run
    ```bash
-   make conflate_to_cd
-   D=~/data/openpois/conflation; P=$D/<prior version>/calibration; C=$D/<version>/calibration
-   mkdir -p $C
-   for s in matched osm overture; do cp $P/${s}_curve.parquet $P/${s}_metadata.json $C/; done
-   cp $P/fit_report.md $C/fit_report_<prior version>.md
-   # write $C/PROVENANCE.md: source dir, round, and the drift-gate metrics that allowed reuse
-   python -u scripts/conflation/apply_calibration.py --input-suffix=cd --output-suffix=""
-   python -u scripts/conflation/plot_calibration.py
-   python -u scripts/conflation/ht_review.py
-   python -u scripts/conflation/apply_manual_overrides.py
-   python -u scripts/conflation/summarize.py
+   make conflate_reuse PRIOR=<prior conflation version>
    ```
+   instead of `make conflate`. It first runs `reuse_calibration.py`, which copies the prior
+   version's curves, metadata and fit report into this version's `calibration/` and writes
+   `PROVENANCE.md` with the drift metrics. It refuses a drift breach, a missing or unaccepted
+   curve, or a validation round other than `versions.calibration`, so a bad input stops
+   before the conflation. Then `conflate_to_cd`, `apply_calibration`, the plots, the HT
+   review, `apply_manual_overrides` and `summarize`. `compare_confidence.py` must have run on
+   this snapshot. `make reuse_calibration PRIOR=<v>` does the copy alone (`OVERWRITE=1`
+   replaces curves already there). It cannot detect a method change; that is the override
+   below.
    With the same curves and the same validation round, the HT review comes out
    byte-identical to the fit month's, so its flags are not news.
    **Method-change override:** if the calibration *method* changed since the curves
@@ -205,7 +203,7 @@ Publishing from the remote: after Nat's local `source-coop login`, run
    per-label table: matched / OSM-only / Overture-only / total / match %). Stdout
    calls out every **single-source label** — a zero in any column means that label
    can never match, which is almost always a crosswalk gap rather than a real
-   property of the data. Only `Car Rental` is expected to be single-source
+   property of the data. Only `Car Rental` and `Small Grocery` (no Overture side; `overture_only` 0) are expected to be single-source
    (Overture has no car-rental category).
 
 6. **Partition for web** — geohash-4 partition, geohash-6 sort:

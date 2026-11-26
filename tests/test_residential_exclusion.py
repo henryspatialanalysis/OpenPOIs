@@ -13,7 +13,9 @@ from shapely.geometry import Point, Polygon, box
 from openpois.osm.residential import (
     build_landuse_filter_exprs,
     filter_parquet_by_residential,
+    load_park_polygons,
     load_residential_areas,
+    park_exemption_from_config,
     primary_tag,
     residential_drop_mask,
     scope_mask,
@@ -336,3 +338,77 @@ class TestConfigConsistency:
         )["scoped_tags"]
         filter_keys = cfg.get("download", "osm", "filter_keys")
         assert set(scoped) <= set(filter_keys)
+
+
+# A public park inside the residential block: (0.1-0.4, 0.1-0.4).
+PARK = gpd.GeoDataFrame(geometry = [box(0.1, 0.1, 0.4, 0.4)], crs = "EPSG:4326")
+
+
+class TestParkExemption:
+    """Canyon Rim Park, Millcreek UT: unnamed playgrounds inside a public park
+    that sits inside a landuse=residential block must survive."""
+
+    def test_point_in_a_public_park_is_kept(self):
+        df = _df([
+            (None, "leisure", "pitch", Point(0.2, 0.2)),        # in park: keep
+            (None, "leisure", "pitch", Point(0.8, 0.8)),        # backyard: drop
+            (None, "leisure", "pitch", Point(5, 5)),            # outside: keep
+        ])
+        drop = residential_drop_mask(df, BLOCK, SCOPED, FILTER_KEYS, exempt = PARK)
+        assert drop.tolist() == [False, True, False]
+
+    def test_no_exempt_layer_keeps_the_old_rule(self):
+        df = _df([(None, "leisure", "pitch", Point(0.2, 0.2))])
+        assert residential_drop_mask(df, BLOCK, SCOPED, FILTER_KEYS).tolist() == [True]
+        empty = gpd.GeoDataFrame(geometry = [], crs = "EPSG:4326")
+        assert residential_drop_mask(
+            df, BLOCK, SCOPED, FILTER_KEYS, exempt = empty,
+        ).tolist() == [True]
+
+    @staticmethod
+    def _snapshot(path):
+        gdf = gpd.GeoDataFrame(
+            {
+                "name": [None, "Canyon Rim Park", "HOA Commons", None, None],
+                "leisure": ["pitch", "park", "park", "recreation_ground", "park"],
+                "access": [None, None, "private", None, None],
+            },
+            geometry = [
+                Point(0.2, 0.2),
+                box(0.1, 0.1, 0.4, 0.4),
+                box(0.6, 0.6, 0.9, 0.9),
+                box(2, 2, 3, 3),
+                Point(7, 7),                                   # a park node: no area
+            ],
+            crs = "EPSG:4326",
+        )
+        gdf.to_parquet(path)
+
+    def test_load_park_polygons_keeps_public_areas_only(self, tmp_path):
+        path = tmp_path / "snap.parquet"
+        self._snapshot(path)
+        parks = load_park_polygons(path, verbose = False)
+        assert len(parks) == 2                                 # park + recreation_ground
+        assert parks.crs.to_epsg() == 4326
+        assert not parks.geometry.intersects(box(0.7, 0.7, 0.8, 0.8)).any()
+
+    def test_config_gate(self, tmp_path):
+        path = tmp_path / "snap.parquet"
+        self._snapshot(path)
+        assert park_exemption_from_config({}, path) is None
+        off = {"park_exemption": {"enabled": False}}
+        assert park_exemption_from_config(off, path) is None
+        on = {"park_exemption": {"enabled": True, "leisure_values": ["park"]}}
+        assert len(park_exemption_from_config(on, path, verbose = False)) == 1
+
+    def test_streaming_filter_honours_the_exemption(self, tmp_path):
+        src, dst = tmp_path / "in.parquet", tmp_path / "out.parquet"
+        TestFilterParquetByResidential._write(src, [
+            (None, "leisure", "pitch", Point(0.2, 0.2)),        # park: keep
+            (None, "leisure", "swimming_pool", Point(0.8, 0.8)),  # yard: drop
+        ])
+        kept, report = filter_parquet_by_residential(
+            src, dst, BLOCK, SCOPED, FILTER_KEYS, verbose = False, exempt = PARK,
+        )
+        assert kept == 1
+        assert report["osm_value"].tolist() == ["swimming_pool"]

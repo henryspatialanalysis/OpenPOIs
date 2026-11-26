@@ -17,16 +17,19 @@ shop,clothes,Clothing Store
 shop,convenience,Convenience Store
 shop,copyshop,Print and Copy Shop
 shop,deli,Fast Food
-shop,department_store,Clothing Store
+shop,department_store,Department Store
 shop,doityourself,Specialty Store
 shop,dry_cleaning,Dry Cleaning
 shop,e-cigarette,Specialty Store
 shop,electronics,Specialty Store
 shop,florist,Florist
+shop,food,Small Grocery
 shop,funeral_directors,Funeral Services
 shop,furniture,Furniture Store
 shop,garden_centre,Garden Store
 shop,gift,Specialty Store
+shop,greengrocer,Small Grocery
+shop,grocery,Small Grocery
 shop,hairdresser,Hair and Beauty
 shop,hardware,Hardware
 shop,jewelry,Jewelry Store
@@ -39,11 +42,14 @@ shop,mobile_phone,Cell Phone Store
 shop,money_lender,Other Financial
 shop,motorcycle,Car Dealer
 shop,optician,Eye Care
+shop,organic,Small Grocery
 shop,pawnbroker,Thrift Store
 shop,pet,Pet Store
 shop,pet_grooming,Pet Store
+shop,produce,Small Grocery
 shop,second_hand,Thrift Store
 shop,shoes,Shoe Store
+shop,specialty_grocer,Small Grocery
 shop,sports,Sports Outlet
 shop,storage_rental,Self-Storage
 shop,supermarket,Supermarket

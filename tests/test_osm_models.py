@@ -107,6 +107,7 @@ def _run_fitter(model, key) -> ModelFitter:
     return fitter
 
 
+@pytest.mark.model
 def test_constant_model_recovery():
     """ConstantModel posterior should bracket the true log_lambda."""
     true_log_lambda = -1.2
@@ -141,6 +142,7 @@ def _build_random_by_type(df, reparam = None):
     return RandomByTypeModel(dataset = df, metadata = metadata)
 
 
+@pytest.mark.model
 @pytest.mark.parametrize("reparam", ["non_centered", "centered"])
 def test_random_by_type_recovery(reparam):
     """Recover per-group mean lambdas under both parameterisations."""
@@ -354,6 +356,7 @@ def test_random_by_type_reparam_likelihoods_agree():
     np.testing.assert_allclose(lp_c - lp_nc, -expected_gap, atol = 1e-4)
 
 
+@pytest.mark.model
 def test_predictions_schema_constant():
     """predict() output for ConstantModel has the expected columns + row count."""
     key = jax_rng()
@@ -376,6 +379,7 @@ def test_predictions_schema_constant():
     assert np.all(np.diff(pm) >= -1e-6)
 
 
+@pytest.mark.model
 def test_predictions_schema_random_by_type():
     """predict() output for RandomByTypeModel has one row per (group, time)."""
     group_names = ["aaa", "bbb"]
@@ -497,6 +501,7 @@ def test_breakpoint_integrated_hazard():
         )
 
 
+@pytest.mark.model
 def test_constant_breakpoint_recovery():
     """Posterior should bracket the true λ_1, λ_2, and t_B."""
     true_lambda_1, true_lambda_2, true_t_b = 0.8, 0.2, 1.0
@@ -554,6 +559,7 @@ def test_constant_breakpoint_reduces_to_constant():
         )
 
 
+@pytest.mark.model
 def test_predictions_schema_constant_breakpoint():
     """predict() output for ConstantBreakpointModel is well-formed + monotone."""
     key = jax_rng()
@@ -612,6 +618,7 @@ def test_prepare_data_emits_age_columns():
     assert (out.loc[~first, "age_start"] > 0).all()
 
 
+@pytest.mark.model
 def test_random_by_type_multichain_diagnostics():
     """Multi-chain NUTS produces per-chain draws plus R-hat / ESS diagnostics."""
     group_names = ["aaa", "bbb"]
@@ -665,6 +672,7 @@ def test_random_by_type_multichain_diagnostics():
     assert (diag["ess_bulk"] > 10.0).all()
 
 
+@pytest.mark.model
 def test_random_by_type_delta_recovery():
     """RandomByTypeModel recovers per-group δ when the truth varies by group."""
     group_names = ["aaa", "bbb", "ccc", "ddd"]
@@ -731,6 +739,7 @@ def test_random_by_type_delta_recovery():
     )
 
 
+@pytest.mark.model
 def test_random_by_type_tight_tau_prior_shrinks():
     """Under uniform true δ, the tight log_tau prior concentrates τ near zero."""
     group_names = ["aaa", "bbb", "ccc", "ddd"]

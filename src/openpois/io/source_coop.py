@@ -26,6 +26,7 @@ from typing import Iterable
 
 import boto3
 from botocore.config import Config as BotoConfig
+from botocore.exceptions import ClientError
 from tqdm import tqdm
 
 DEFAULT_BUCKET = "henryspatialanalysis"
@@ -238,22 +239,29 @@ def delete_keys(
     keys: list[str],
     dry_run: bool = False,
 ) -> None:
-    """Delete ``keys`` from ``bucket`` in batches of up to 1000 per request."""
+    """Delete ``keys`` from ``bucket`` one request per key.
+
+    Source Coop's proxy answers the bulk ``DeleteObjects`` call with
+    ``NoSuchBucket`` (2026-11-26), so each key is deleted on its own. A key the
+    proxy refuses to delete is reported and skipped, so a stale object can never
+    stop the ``latest/`` mirror; the caller lists the leftovers.
+    """
     if not keys:
-        return
+        return []
     prefix = "[dry-run] " if dry_run else ""
     print(f"{prefix}deleting {len(keys)} object(s) from s3://{bucket}/")
+    for k in keys:
+        print(f"  {prefix}- {k}")
     if dry_run:
-        return
-    for i in range(0, len(keys), 1000):
-        chunk = keys[i : i + 1000]
-        client.delete_objects(
-            Bucket = bucket,
-            Delete = {
-                "Objects": [{"Key": k} for k in chunk],
-                "Quiet": True,
-            },
-        )
+        return []
+    failed = []
+    for k in keys:
+        try:
+            client.delete_object(Bucket = bucket, Key = k)
+        except ClientError as exc:
+            failed.append(k)
+            print(f"  WARNING: could not delete {k}: {exc}")
+    return failed
 
 
 def mirror_prefix(
@@ -291,7 +299,7 @@ def mirror_prefix(
     src_relatives = {k[len(src_prefix) :] for k in src_keys}
     stale = [k for k in dst_keys if k[len(dst_prefix) :] not in src_relatives]
 
-    delete_keys(client, bucket, stale, dry_run = dry_run)
+    not_deleted = delete_keys(client, bucket, stale, dry_run = dry_run)
 
     iterator = (
         tqdm(src_keys, desc = f"↪ {dst_prefix}", unit = "obj")
@@ -332,6 +340,7 @@ def mirror_prefix(
     return {
         "src_prefix": src_prefix,
         "dst_prefix": dst_prefix,
+        "not_deleted": not_deleted,
         "copied": len(src_keys),
         "deleted": len(stale),
     }

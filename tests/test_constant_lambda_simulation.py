@@ -23,6 +23,7 @@ from __future__ import annotations
 import jax.random as jrd
 import numpy as np
 import pandas as pd
+import pytest
 
 from openpois.models.jax_core import jax_rng
 from openpois.models.model_fitter import ModelFitter
@@ -138,6 +139,7 @@ def _posterior_stats(
     }
 
 
+@pytest.mark.model
 def test_zie_recovery_lambda_and_delta():
     """Recover both λ and δ from a frame with a nontrivial δ-mass (≈5 %)."""
     true_log_lambda = np.log(0.05)
@@ -169,6 +171,7 @@ def test_zie_recovery_lambda_and_delta():
     assert abs(ld["mean"] - true_logit_delta) < 0.8
 
 
+@pytest.mark.model
 def test_zie_delta_zero_concentrates_near_zero():
     """With δ_true=0, the posterior upper 97.5 % on δ piles up near zero."""
     true_log_lambda = np.log(0.05)
@@ -191,6 +194,7 @@ def test_zie_delta_zero_concentrates_near_zero():
     )
 
 
+@pytest.mark.model
 def test_zie_lambda_not_inflated_by_delta():
     """δ absorbs instant-change mass rather than inflating λ."""
     true_log_lambda = np.log(0.05)
@@ -212,6 +216,7 @@ def test_zie_lambda_not_inflated_by_delta():
     assert abs(ll["mean"] - true_log_lambda) < 0.3
 
 
+@pytest.mark.model
 def test_zie_identifiability_under_varying_first_interval():
     """Varying Δ_1 across individuals produces a sharp posterior on logit_delta.
 
@@ -287,6 +292,7 @@ def _simulate_raw_observations(
     return pd.DataFrame(rows)
 
 
+@pytest.mark.model
 def test_multi_observation_individuals_recover_lambda():
     """Regression for the inter-observation-Δ data-prep bug (§1.2).
 
