@@ -71,6 +71,43 @@ did not apply (no refit), items 5–7 followed. Items 8–9 added from that run.
     crosswalk and `PROMOTABLE_LABELS` before its next bump, or most department stores
     leave its map.
 
+## Next monthly run: December 2026 checklist (raise every item before starting)
+
+Added 2026-11-25 from the 2026-11-24 run.
+
+1. **Change detection: schools.** In the 120-row `shadow_cd` precision sample (gate passed,
+   90/120 = 75%, `conflation/20261124/cd_sample/shadow_cd_vetting_20261124.xlsx`), 6 of 11
+   School/University rows were still open: mappers delete or strip a school node when they
+   redraw the campus as an area, and the area's centroid can sit outside the 150 m
+   same-name survivor filter. Exclude School/University ghosts, or measure the survivor
+   filter to the polygon outline instead of its centroid.
+2. **Change detection: structural edits.** Most other wrong demotions are hard deletes or
+   tag deletions whose changeset comment names a structural edit ("Merge POI with
+   Building", retag, school grounds revised, spam removal, DWG revert). Renames (29/31)
+   and lifecycle prefixes (15/17) were reliable; hard deletes and tag deletions 64%. Fetch
+   changeset comments for ghost events and drop the structural ones; re-measure.
+3. **Identifier disagreement that isn't evidence (Aldi).** Overture moved Aldi's URLs from
+   `stores.aldi.us/...` to `www.aldi.us/store/...` in 2026-11-18.0, and about 700 Aldi
+   OSM x Overture pairs fell below 0.70. Overture's Aldi phone is one corporate number
+   (855-955-2534), so the phone also "disagrees". Treat a website pair that shares a
+   registrable domain but differs in host/path as not comparable, and a phone shared by
+   many Overture POIs as not comparable (the inverse-frequency item below); then the pair
+   scores without identifier weights. Precision-by-band check before adopting.
+4. **Department Store type score.** Splitting Department Store out of Clothing Store
+   dropped Supermarket x Department Store from 0.419 to 0.316, and up to 349 of 1,628
+   October Supermarket x department_store matches (mostly Walmart) were lost. Decide
+   whether a label split out of another inherits the parent's column as a floor for one
+   release, or whether the empirical term should stop being row-max normalised for such
+   cells.
+5. **Silent stalls.** `openpois-remote.sh watch` reports only at the end of a stage, so the
+   stable-id OR-join ran 4.5 h unnoticed. Add a no-progress branch (log unchanged for N
+   minutes while the runner is alive).
+6. **Docs from this run.** full-data-pull: the snapshot re-parses finished extracts (only
+   download and filter are skipped), and `overwrite_download: true` re-downloads 12 GB on a
+   resume; `compare_taxonomy.py` needs `--prior-snapshot` after the config bump, or the
+   month-over-month diff is skipped. `make apply_cd TEST=1` reads `conflated_baseline.parquet`
+   while `conflate.py --test` writes `conflated_baseline_test.parquet`.
+
 ## 2026-10-22 run: outcome (2026-10-23)
 
 Released as `2026-10-22-v0` (Overture `2026-10-21.0`, Geofabrik 2026-10-21) from
