@@ -57,6 +57,8 @@ did not apply (no refit), items 5–7 followed. Items 8–9 added from that run.
     residential-exclusion park exemption restored about 31,700 unnamed POIs (needs a fresh
     OSM pull). (c) `airside` is populated on OSM rows and null on Overture-only rows.
     (d) Tell Close: its loader drops `airside=yes` rows once the column exists.
+    **Done 2026-11-27:** Close's loader dropped the `airside=yes` rows at its poi v694 load
+    (the Albany airport wine bar, node/9435604703, is off the map).
 
 11. **First-in-November checks for Close.City** (wtm.ingest plans and to-dos, reviewed
     2026-11-24). After the snapshot and history: the three ghost nodes are deletions in the
@@ -72,6 +74,11 @@ did not apply (no refit), items 5–7 followed. Items 8–9 added from that run.
     *Clothing Store*, *Other Shop* with October. Close must add both labels to its
     crosswalk and `PROMOTABLE_LABELS` before its next bump, or most department stores
     leave its map.
+    **Done 2026-11-27 (Close poi v694):** Department Store is Close type 373 (12,908 POIs, Targets
+    keep grocery through `PROMOTABLE_LABELS`); Small Grocery rides Close's supermarket
+    classifier. Note for upstream: in 2026-11-24-v0 Overture `addr_state` arrives as ISO 3166-2
+    (`US-CA`) where earlier releases had `CA`; Close now normalises it, but other consumers
+    that cut the field to two characters get "US".
 
 ## Next monthly run: December 2026 checklist (raise every item before starting)
 
